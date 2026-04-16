@@ -45,6 +45,13 @@ pip install -r requirements.txt
 uvicorn api.server:app --host 0.0.0.0 --port 8091
 ```
 
+Using uv
+```bash
+cd agents/verification
+uv venv 
+uv pip install -r requirements.txt
+uv run uvicorn api.server:app --host 0.0.0.0 --port 8091
+```
 
 ## 4. Run the Generation Agent on the Included Example
 
@@ -88,4 +95,46 @@ The filename stem becomes the generation problem id. In this example:
 - memory directory: `agents/generation/memory/my_problem/`
 - draft proof: `agents/generation/results/my_problem/blueprint.md`
 - verified proof: `agents/generation/results/my_problem/blueprint_verified.md`
+
+## 6. View Results in the Browser
+
+- `agents/generation/site`: Zola site for browsing results in the browser
+
+Results are markdown files with LaTeX math. To render them properly, a local [Zola](https://www.getzola.org/) site using the [MATbook](https://www.getzola.org/themes/matbook/) theme is included.
+
+### Prerequisites
+
+Install Zola.
+
+Zola can be easily installed using your package manager in terminal. For example, on Mac, you simply run
+
+```bash
+brew install zola
+```
+
+and on ArchLinux, run
+
+```bash
+sudo pacman -S zola
+```
+
+For other operating systems, please see [Zola installation](https://www.getzola.org/documentation/getting-started/installation/).
+
+### Serve
+
+From `agents/generation/`:
+
+```bash
+./site/serve.sh
+```
+
+On first run this automatically clones the [MATbook](https://www.getzola.org/themes/matbook/) theme. Then it syncs all results from `results/` into the site and starts a local server. Open http://localhost:3264 in your browser.
+
+### Update the MATbook Theme
+
+```bash
+./site/setup_theme.sh
+```
+
+This pulls the latest version from the [MATbook repository](https://github.com/srliu3264/MATbook).
 
