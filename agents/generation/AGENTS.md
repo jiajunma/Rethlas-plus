@@ -7,6 +7,7 @@ This agent solves research-level math problems by following a mathematician-styl
 Given the markdown filepath of a math problem, read that file and produce a verified markdown proof blueprint at:
 
 - working draft: `results/{problem_id}/blueprint.md`
+- section verification report: `results/{problem_id}/section_verification.json`
 - verified proof: `results/{problem_id}/blueprint_verified.md`
 
 Here `problem_id` is the markdown filename without the trailing `.md`.
@@ -53,6 +54,21 @@ Use append-only channels (except `meta.json`):
 - `verification_reports`
 - `branch_states`
 - `events`
+
+## Output Shape Rule
+
+The proof blueprint must follow a divide-and-conquer structure.
+
+- Break the argument into short top-level blocks such as
+  - `# lemma ...`
+  - `# proposition ...`
+  - `# theorem ...`
+- Each top-level block must have
+  - `## statement`
+  - `## proof`
+- Prefer proofs under 30 non-blank lines.
+- If a proof would exceed 30 non-blank lines, split it into additional lemmas or propositions first.
+- The main theorem should mostly assemble previously proved blocks, not carry the main technical burden by itself.
 
 ## Adaptive Control Loop
 
@@ -140,6 +156,20 @@ If an informal blueprint or candidate proof does not pass verification:
 4. After critical errors are addressed, resolve all remaining errors and gaps.
 5. Invoke the appropriate skills based on the current state before re-running verification.
 
+Before any full-proof verification attempt, first run section-level verification on `results/{problem_id}/blueprint.md`.
+
+Use:
+
+- `scripts/verify_sections.py results/{problem_id}/blueprint.md`
+
+The section-level verification report must pass before calling `verify_proof_service` on the full draft.
+
+Section-level verification means:
+
+1. check the global structure of the blueprint;
+2. verify top-level proof blocks sequentially in order;
+3. stop and repair local failures before attempting full verification.
+
 If the problem appears difficult, actively explore different directions and proof strategies instead of forcing one narrow path. In such cases, it is acceptable and encouraged to write long, detailed proof blueprints when they help organize the strategy and preserve partial progress.
 If the current problem appears to be an open conjecture or open problem, that is not a reason to stop. This agent is meant to tackle hard open problems. Keep trying serious approaches, keep refining decomposition plans, and preserve partial progress carefully instead of giving up.
 If extensive searching fails to uncover useful information, do not stall on further retrieval. Switch to deep self-driven exploration of the problem using the non-search skills, and continue trying to make progress without external support.
@@ -158,14 +188,16 @@ Stop only when the blueprint passes verification and the verified markdown proof
 4. Verification must pass before final output.
 5. Any verifier `wrong` verdict, any critical error, or any gap counts as verification failure.
 6. Supporting definitions, lemmas, and propositions should appear before later statements that rely on them, and the main theorem must appear last.
-7. External results used in proofs must be cited with their complete statement and source identifiers when available.
-8. The final markdown proof text must also include the complete statement, `paper_id`, `theorem_id`, and `arXiv id` when applicable for any cited external result.
-9. External paper results must not be used as black boxes without context-checking: expand the paper's local definitions, disambiguate terminology, and verify applicability before relying on the statement.
-10. Do not read anything outside the current working directory under any circumstance.
-11. For difficult problems, prefer broader exploration of multiple proof strategies and allow long proof blueprints when they help track the argument.
-12. For the final target theorem section, the `## statement` text must be the original complete informal statement from the input markdown problem file, not a shortened or paraphrased version.
-13. If the problem appears to be an open conjecture or open problem, do not treat that as a stopping condition. Keep trying to tackle it seriously, but never claim success unless the proof has actually passed verification.
-14. Extensive search is not enough by itself. The agent must also think deeply and explore the problem on its own, and if retrieval stops being useful, it must continue with the non-search skills rather than waiting for external support.
+7. The proof blueprint must be split into short top-level lemmas/propositions/theorems; long monolithic proofs are not acceptable.
+8. Section-level verification must pass before full verification is attempted.
+9. External results used in proofs must be cited with their complete statement and source identifiers when available.
+10. The final markdown proof text must also include the complete statement, `paper_id`, `theorem_id`, and `arXiv id` when applicable for any cited external result.
+11. External paper results must not be used as black boxes without context-checking: expand the paper's local definitions, disambiguate terminology, and verify applicability before relying on the statement.
+12. Do not read anything outside the current working directory under any circumstance.
+13. For difficult problems, prefer broader exploration of multiple proof strategies and allow long proof blueprints when they help track the argument, but the final published blueprint must still be divided into short verified blocks.
+14. For the final target theorem section, the `## statement` text must be the original complete informal statement from the input markdown problem file, not a shortened or paraphrased version.
+15. If the problem appears to be an open conjecture or open problem, do not treat that as a stopping condition. Keep trying to tackle it seriously, but never claim success unless the proof has actually passed verification.
+16. Extensive search is not enough by itself. The agent must also think deeply and explore the problem on its own, and if retrieval stops being useful, it must continue with the non-search skills rather than waiting for external support.
 
 
 
@@ -188,6 +220,7 @@ If extensive retrieval still does not yield useful support, stop relying on sear
 Use `verify_proof_service` for proof verification instead of relying on model-only checking.
 Only call `verify_proof_service` when a full proof of the whole problem has been assembled in `blueprint.md`. Do not call it on partial proofs, incomplete branches, isolated lemmas, or drafts that have made no real progress on the full theorem.
 When calling `verify_proof_service`, always use a large timeout of `3600` seconds.
+Before the full verification call, run `scripts/verify_sections.py` and repair any structure or section-level failures it reports.
 
 ## Output Contract
 
