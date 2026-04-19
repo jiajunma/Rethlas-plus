@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("blueprint", type=Path)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--verify-url", default=VERIFY_URL)
+    parser.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
+    parser.add_argument("--max-workers", type=int, default=2)
+    parser.add_argument("--max-consecutive-failures", type=int, default=3)
+    parser.add_argument("--passes-required", type=int, default=3)
     return parser.parse_args()
 
 
@@ -144,46 +149,128 @@ def main() -> int:
     results_dir = blueprint_path.parent
     output_path = results_dir / "section_verification.json"
 
-    section_reports: List[Dict[str, Any]] = []
-    overall_verdict = "correct"
+    def run_one_pass() -> Dict[str, Any]:
+        section_reports: List[Dict[str, Any]] = []
+        overall_verdict = "correct"
 
-    if structure["issues"]:
-        overall_verdict = "wrong"
-    else:
-        prefix_markdown: List[str] = []
-        for idx, block in enumerate(blocks, start=1):
-            prefix_markdown.append(block.markdown.rstrip() + "\n")
+        if structure["issues"]:
+            return {
+                "section_reports": section_reports,
+                "overall_verdict": "wrong",
+            }
+
+        prefix_markdowns: List[str] = []
+        current = []
+        for block in blocks:
+            current.append(block.markdown.rstrip() + "\n")
+            prefix_markdowns.append("\n".join(current).strip() + "\n")
+
+        def verify_one(idx: int, block: ProofBlock, proof_text: str) -> Dict[str, Any]:
             report: Dict[str, Any] = {
                 "index": idx,
                 "title": block.title,
                 "kind": block.kind,
                 "proof_nonblank_lines": block.proof_nonblank_lines,
             }
-            try:
-                verifier_payload = call_verifier(
-                    verify_url=args.verify_url,
-                    statement=block.statement,
-                    proof="\n".join(prefix_markdown).strip() + "\n",
-                    timeout_seconds=args.timeout_seconds,
-                )
-                report["verification"] = verifier_payload
-                report["verdict"] = verifier_payload.get("verdict", "wrong")
-            except Exception as exc:  # noqa: BLE001
-                report["verdict"] = "infrastructure_error"
-                report["error"] = str(exc)
-                overall_verdict = "infrastructure_error"
-                section_reports.append(report)
-                break
+            verifier_payload = call_verifier(
+                verify_url=args.verify_url,
+                statement=block.statement,
+                proof=proof_text,
+                timeout_seconds=args.timeout_seconds,
+            )
+            report["verification"] = verifier_payload
+            report["verdict"] = verifier_payload.get("verdict", "wrong")
+            return report
 
-            section_reports.append(report)
-            if report["verdict"] != "correct":
-                overall_verdict = "wrong"
-                break
+        if args.mode == "sequential":
+            consecutive_failures = 0
+            for idx, (block, proof_text) in enumerate(zip(blocks, prefix_markdowns), start=1):
+                try:
+                    report = verify_one(idx, block, proof_text)
+                except Exception as exc:  # noqa: BLE001
+                    report = {
+                        "index": idx,
+                        "title": block.title,
+                        "kind": block.kind,
+                        "proof_nonblank_lines": block.proof_nonblank_lines,
+                        "verdict": "infrastructure_error",
+                        "error": str(exc),
+                    }
+                    overall_verdict = "infrastructure_error"
+                    section_reports.append(report)
+                    break
+
+                section_reports.append(report)
+                if report["verdict"] != "correct":
+                    consecutive_failures += 1
+                    overall_verdict = "wrong"
+                    if consecutive_failures >= args.max_consecutive_failures:
+                        overall_verdict = "return_to_generator"
+                        break
+                else:
+                    consecutive_failures = 0
+        else:
+            futures = {}
+            max_workers = max(1, args.max_workers)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for idx, (block, proof_text) in enumerate(zip(blocks, prefix_markdowns), start=1):
+                    futures[executor.submit(verify_one, idx, block, proof_text)] = (idx, block)
+
+                parallel_reports: Dict[int, Dict[str, Any]] = {}
+                for future in as_completed(futures):
+                    idx, block = futures[future]
+                    try:
+                        parallel_reports[idx] = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        parallel_reports[idx] = {
+                            "index": idx,
+                            "title": block.title,
+                            "kind": block.kind,
+                            "proof_nonblank_lines": block.proof_nonblank_lines,
+                            "verdict": "infrastructure_error",
+                            "error": str(exc),
+                        }
+                        if overall_verdict == "correct":
+                            overall_verdict = "infrastructure_error"
+
+            for idx in range(1, len(blocks) + 1):
+                report = parallel_reports[idx]
+                section_reports.append(report)
+                if report.get("verdict") != "correct" and overall_verdict == "correct":
+                    overall_verdict = "wrong"
+
+        return {
+            "section_reports": section_reports,
+            "overall_verdict": overall_verdict,
+        }
+
+    pass_reports: List[Dict[str, Any]] = []
+    overall_verdict = "wrong"
+    consecutive_passes = 0
+
+    for pass_index in range(1, args.passes_required + 1):
+        pass_result = run_one_pass()
+        pass_result["pass_index"] = pass_index
+        pass_reports.append(pass_result)
+
+        if pass_result["overall_verdict"] == "correct":
+            consecutive_passes += 1
+        else:
+            overall_verdict = pass_result["overall_verdict"]
+            break
+
+    if consecutive_passes == args.passes_required:
+        overall_verdict = "correct"
 
     payload = {
         "blueprint_path": str(blueprint_path),
         "structure_report": structure,
-        "section_reports": section_reports,
+        "mode": args.mode,
+        "max_workers": args.max_workers,
+        "max_consecutive_failures": args.max_consecutive_failures,
+        "passes_required": args.passes_required,
+        "passes_completed": consecutive_passes,
+        "pass_reports": pass_reports,
         "overall_verdict": overall_verdict,
     }
     output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

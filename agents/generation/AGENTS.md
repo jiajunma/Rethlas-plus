@@ -162,13 +162,20 @@ Use:
 
 - `scripts/verify_sections.py results/{problem_id}/blueprint.md`
 
-The section-level verification report must pass before calling `verify_proof_service` on the full draft.
+The section-level verification report must pass three consecutive times before calling `verify_proof_service` on the full draft.
 
 Section-level verification means:
 
 1. check the global structure of the blueprint;
-2. verify top-level proof blocks sequentially in order;
-3. stop and repair local failures before attempting full verification.
+2. verify top-level proof blocks in order, sequentially by default;
+3. bounded parallel verification is allowed only as an optimization layer on top of the ordered block structure, using a small worker count;
+4. if section verification fails, repair locally and re-run;
+5. only after three consecutive section-verification passes may full verification begin.
+
+If bounded parallel verification is used:
+
+- keep the worker count small;
+- treat rate limits and infrastructure instability as reasons to fall back to sequential mode.
 
 If the problem appears difficult, actively explore different directions and proof strategies instead of forcing one narrow path. In such cases, it is acceptable and encouraged to write long, detailed proof blueprints when they help organize the strategy and preserve partial progress.
 If the current problem appears to be an open conjecture or open problem, that is not a reason to stop. This agent is meant to tackle hard open problems. Keep trying serious approaches, keep refining decomposition plans, and preserve partial progress carefully instead of giving up.
