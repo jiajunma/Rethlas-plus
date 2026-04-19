@@ -22,6 +22,7 @@ CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.4")
 CODEX_REASONING_EFFORT = os.getenv("CODEX_REASONING_EFFORT", "xhigh")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "0")) or None
 VERIFICATION_FILENAMES = ("verification.json", "verificationt.json")
+SUMMARY_SCRIPT = WORK_DIR / "scripts" / "build_verification_summary.py"
 
 
 class VerifyRequest(BaseModel):
@@ -67,6 +68,36 @@ def _verification_path(run_id: str) -> Optional[Path]:
     return None
 
 
+def _write_verification_payload(run_id: str, payload: Dict[str, Any]) -> Path:
+    results_dir = _results_dir(run_id)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    verification_path = results_dir / VERIFICATION_FILENAMES[0]
+    verification_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return verification_path
+
+
+def _build_summary(run_id: str, statement: str, verification_path: Path) -> None:
+    proof_path = _results_dir(run_id) / "proof.md"
+    if not proof_path.exists():
+        return
+    subprocess.run(
+        [
+            "python3",
+            str(SUMMARY_SCRIPT),
+            "--results-dir",
+            str(_results_dir(run_id)),
+            "--statement",
+            statement,
+            "--proof-file",
+            str(proof_path),
+            "--verification-file",
+            str(verification_path),
+        ],
+        cwd=WORK_DIR,
+        check=False,
+    )
+
+
 def build_prompt(run_id: str, statement: str, proof: str) -> str:
     return (
         f"Run_id: {run_id}. "
@@ -95,6 +126,8 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
     results_dir = _results_dir(run_id)
     results_dir.mkdir(parents=True, exist_ok=True)
     log_path = _log_path(run_id)
+    proof_path = results_dir / "proof.md"
+    proof_path.write_text(proof, encoding="utf-8")
     cmd = build_codex_command(run_id=run_id, statement=statement, proof=proof)
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -152,6 +185,9 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
             status_code=500,
             detail=f"verification output at {verification_path} must be a JSON object",
         )
+
+    written_verification_path = _write_verification_payload(run_id, payload)
+    _build_summary(run_id, statement, written_verification_path)
 
     return payload
 
