@@ -74,6 +74,31 @@ This script:
 - runs section-level verification and writes `agents/generation/results/example/section_verification.json`
 - writes the verified proof to `agents/generation/results/example/blueprint_verified.md` if verification succeeds
 
+## 4b. Run With Recovery
+
+For long-running problems, use the resumable runner:
+
+```bash
+cd agents/generation
+source .venv/bin/activate
+PROBLEM_FILE=data/my_problem.md ./tests/run_resumable.sh
+```
+
+This runner:
+
+- keeps the same `problem_id`;
+- reuses `memory/{problem_id}/` and `results/{problem_id}/`;
+- retries automatically after rate limits, timeouts, or verifier outages;
+- writes `results/{problem_id}/run_state.json`;
+- updates `results/{problem_id}/heartbeat.txt`.
+
+To inspect the current persisted state:
+
+```bash
+cd agents/generation
+python3 scripts/show_run_status.py my_problem
+```
+
 ## 5. Run Your Own Problem
 
 Put your problem in a markdown file under `agents/generation/data/`. Save that as:
