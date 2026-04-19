@@ -71,6 +71,7 @@ This script:
 - writes the run log to `agents/generation/logs/example/example.md`
 - writes memory artifacts to `agents/generation/memory/example/`
 - writes the draft proof to `agents/generation/results/example/blueprint.md`
+- runs section-level verification and writes `agents/generation/results/example/section_verification.json`
 - writes the verified proof to `agents/generation/results/example/blueprint_verified.md` if verification succeeds
 
 ## 5. Run Your Own Problem
@@ -94,6 +95,7 @@ The filename stem becomes the generation problem id. In this example:
 - problem id: `my_problem`
 - memory directory: `agents/generation/memory/my_problem/`
 - draft proof: `agents/generation/results/my_problem/blueprint.md`
+- section verification report: `agents/generation/results/my_problem/section_verification.json`
 - verified proof: `agents/generation/results/my_problem/blueprint_verified.md`
 
 ## 6. View Results in the Browser
@@ -137,4 +139,3 @@ On first run this automatically clones the [MATbook](https://www.getzola.org/the
 ```
 
 This pulls the latest version from the [MATbook repository](https://github.com/srliu3264/MATbook).
-

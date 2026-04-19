@@ -83,6 +83,21 @@ echo "Finished ${PROBLEM_FILE} -> $log_file"
 printf "Total time: %02d:%02d:%02d\n" \
   $((TOTAL/3600)) $(((TOTAL%3600)/60)) $((TOTAL%60))
 echo ""
+
+section_report="results/${problem_id}/section_verification.json"
+blueprint_path="results/${problem_id}/blueprint.md"
+if [[ -f "$ROOT_DIR/$blueprint_path" ]]; then
+  echo "Running section verification on $blueprint_path"
+  (
+    cd "$ROOT_DIR"
+    python3 scripts/verify_sections.py "$blueprint_path"
+  ) || echo "Section verification reported issues; see $ROOT_DIR/$section_report"
+  if [[ -f "$ROOT_DIR/$section_report" ]]; then
+    echo "Section verification report: $ROOT_DIR/$section_report"
+  fi
+  echo ""
+fi
+
 echo "To view results in the browser, run:"
 echo "  ./site/serve.sh"
 echo "Then open http://localhost:3264"
