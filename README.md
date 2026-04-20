@@ -53,6 +53,21 @@ uv pip install -r requirements.txt
 uv run uvicorn api.server:app --host 0.0.0.0 --port 8091
 ```
 
+The verification API now supports both:
+
+- synchronous verification: `POST /verify`
+- asynchronous single-flight verification:
+  - `POST /verify_async`
+  - `GET /verify_status/{run_id}`
+  - `GET /verify_result/{run_id}`
+
+Each verification run writes persistent state under:
+
+- `agents/verification/results/{run_id}/state.json`
+- `agents/verification/results/{run_id}/verification.json`
+- `agents/verification/results/{run_id}/summary.md`
+- `agents/verification/results/{run_id}/summary.pdf` when PDF generation succeeds
+
 ## 4. Run the Generation Agent on the Included Example
 
 
