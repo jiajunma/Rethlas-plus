@@ -17,6 +17,7 @@ VERIFY_URL = "http://127.0.0.1:8091"
 DEFAULT_TIMEOUT_SECONDS = 3600
 POLL_INTERVAL_SECONDS = 5
 PROOF_LINE_TARGET = 100
+LABEL_PATTERN = re.compile(r"(lem:[A-Za-z0-9_]+|prop:[A-Za-z0-9_]+|thm:[A-Za-z0-9_]+)")
 
 
 @dataclass
@@ -128,6 +129,37 @@ def structure_report(blocks: List[ProofBlock]) -> Dict[str, Any]:
     }
 
 
+def extract_label(title: str) -> Optional[str]:
+    match = LABEL_PATTERN.search(title)
+    return match.group(1) if match else None
+
+
+def build_dependency_data(blocks: List[ProofBlock]) -> Dict[str, Any]:
+    labels_by_index: Dict[int, str] = {}
+    indices_by_label: Dict[str, int] = {}
+    for idx, block in enumerate(blocks, start=1):
+        label = extract_label(block.title)
+        if label:
+            labels_by_index[idx] = label
+            indices_by_label[label] = idx
+
+    dependencies: Dict[int, List[int]] = {}
+    for idx, block in enumerate(blocks, start=1):
+        refs = set(LABEL_PATTERN.findall(block.proof))
+        deps: List[int] = []
+        for ref in sorted(refs):
+            dep_idx = indices_by_label.get(ref)
+            if dep_idx is not None and dep_idx != idx:
+                deps.append(dep_idx)
+        dependencies[idx] = sorted(set(deps))
+
+    return {
+        "labels_by_index": labels_by_index,
+        "indices_by_label": indices_by_label,
+        "dependencies": dependencies,
+    }
+
+
 def call_verifier(
     verify_url: str,
     statement: str,
@@ -187,7 +219,7 @@ def call_verifier(
                 return payload
         except requests.RequestException:
             pass
-        if status in {"failed", "timed_out"}:
+        if status in {"failed", "timed_out", "interrupted"}:
             raise RuntimeError(f"Verifier run {run_id} ended with status={status}")
         time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -201,6 +233,7 @@ def main() -> int:
 
     blocks = [extract_block_parts(block) for block in split_top_level_blocks(text)]
     structure = structure_report(blocks)
+    dependency_data = build_dependency_data(blocks)
 
     results_dir = blueprint_path.parent
     output_path = results_dir / "section_verification.json"
@@ -213,6 +246,7 @@ def main() -> int:
         payload = {
             "blueprint_path": str(blueprint_path),
             "structure_report": structure,
+            "dependency_data": dependency_data,
             "mode": args.mode,
             "max_workers": args.max_workers,
             "max_consecutive_failures": args.max_consecutive_failures,
@@ -277,6 +311,8 @@ def main() -> int:
             current.append(block.markdown.rstrip() + "\n")
             prefix_markdowns.append("\n".join(current).strip() + "\n")
 
+        dependencies: Dict[int, List[int]] = dependency_data["dependencies"]
+
         def verify_one(idx: int, block: ProofBlock, proof_text: str) -> Dict[str, Any]:
             report: Dict[str, Any] = {
                 "index": idx,
@@ -296,9 +332,23 @@ def main() -> int:
 
         if args.mode == "sequential":
             consecutive_failures = 0
-            for idx, (block, proof_text) in enumerate(zip(blocks, prefix_markdowns), start=1):
-                if idx in existing_indices or idx < args.start_index:
-                    continue
+            while True:
+                ready_indices = [
+                    idx
+                    for idx in range(args.start_index, len(blocks) + 1)
+                    if idx not in existing_indices
+                    and all(dep in existing_indices for dep in dependencies.get(idx, []))
+                ]
+                if not ready_indices:
+                    remaining_indices = [
+                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in existing_indices
+                    ]
+                    if remaining_indices:
+                        overall_verdict = "blocked_by_dependency"
+                    break
+                idx = min(ready_indices)
+                block = blocks[idx - 1]
+                proof_text = prefix_markdowns[idx - 1]
                 print(
                     f"[verify_sections] pass starting block {idx}/{len(blocks)}: {block.title}",
                     flush=True,
@@ -337,35 +387,58 @@ def main() -> int:
                         break
                 else:
                     consecutive_failures = 0
+                    existing_indices.add(idx)
         else:
-            futures = {}
             max_workers = max(1, args.max_workers)
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for idx, (block, proof_text) in enumerate(zip(blocks, prefix_markdowns), start=1):
-                    futures[executor.submit(verify_one, idx, block, proof_text)] = (idx, block)
+            while True:
+                ready_indices = [
+                    idx
+                    for idx in range(args.start_index, len(blocks) + 1)
+                    if idx not in existing_indices
+                    and all(dep in existing_indices for dep in dependencies.get(idx, []))
+                ]
+                if not ready_indices:
+                    remaining_indices = [
+                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in existing_indices
+                    ]
+                    if remaining_indices and overall_verdict == "correct":
+                        overall_verdict = "blocked_by_dependency"
+                    break
 
-                parallel_reports: Dict[int, Dict[str, Any]] = {}
-                for future in as_completed(futures):
-                    idx, block = futures[future]
-                    try:
-                        parallel_reports[idx] = future.result()
-                    except Exception as exc:  # noqa: BLE001
-                        parallel_reports[idx] = {
-                            "index": idx,
-                            "title": block.title,
-                            "kind": block.kind,
-                            "proof_nonblank_lines": block.proof_nonblank_lines,
-                            "verdict": "infrastructure_error",
-                            "error": str(exc),
-                        }
-                        if overall_verdict == "correct":
-                            overall_verdict = "infrastructure_error"
+                batch_indices = ready_indices[:max_workers]
+                futures = {}
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    for idx in batch_indices:
+                        block = blocks[idx - 1]
+                        proof_text = prefix_markdowns[idx - 1]
+                        futures[executor.submit(verify_one, idx, block, proof_text)] = (idx, block)
 
-            for idx in range(1, len(blocks) + 1):
-                report = parallel_reports[idx]
-                section_reports.append(report)
-                if report.get("verdict") != "correct" and overall_verdict == "correct":
-                    overall_verdict = "wrong"
+                    parallel_reports: Dict[int, Dict[str, Any]] = {}
+                    for future in as_completed(futures):
+                        idx, block = futures[future]
+                        try:
+                            parallel_reports[idx] = future.result()
+                        except Exception as exc:  # noqa: BLE001
+                            parallel_reports[idx] = {
+                                "index": idx,
+                                "title": block.title,
+                                "kind": block.kind,
+                                "proof_nonblank_lines": block.proof_nonblank_lines,
+                                "verdict": "infrastructure_error",
+                                "error": str(exc),
+                            }
+                            if overall_verdict == "correct":
+                                overall_verdict = "infrastructure_error"
+
+                for idx in sorted(parallel_reports):
+                    report = parallel_reports[idx]
+                    section_reports.append(report)
+                    if report.get("verdict") == "correct":
+                        existing_indices.add(idx)
+                    elif overall_verdict == "correct":
+                        overall_verdict = "wrong"
+                if overall_verdict not in {"correct"}:
+                    break
 
         return {
             "section_reports": section_reports,
