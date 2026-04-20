@@ -299,6 +299,9 @@ def run_attempt(
     attempt_num: int,
     log_file: Path,
     prompt: str,
+    heartbeat_path: Path,
+    state_path: Path,
+    state: Dict[str, Any],
 ) -> int:
     cmd = [
         "codex",
@@ -325,17 +328,23 @@ def run_attempt(
             stderr=subprocess.STDOUT,
             preexec_fn=os.setsid,
         )
-        try:
-            return proc.wait(timeout=args.attempt_timeout_seconds)
-        except subprocess.TimeoutExpired:
-            handle.write(f"\n[runner] attempt timed out after {args.attempt_timeout_seconds} seconds\n")
-            handle.flush()
-            os.killpg(proc.pid, signal.SIGINT)
+        start = time.monotonic()
+        while True:
+            heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+            state["updated_at_utc"] = utc_now()
+            write_json(state_path, state)
             try:
-                return proc.wait(timeout=10)
+                return proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                return proc.wait()
+                if time.monotonic() - start >= args.attempt_timeout_seconds:
+                    handle.write(f"\n[runner] attempt timed out after {args.attempt_timeout_seconds} seconds\n")
+                    handle.flush()
+                    os.killpg(proc.pid, signal.SIGINT)
+                    try:
+                        return proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        return proc.wait()
 
 
 def main() -> int:
@@ -417,7 +426,7 @@ def main() -> int:
                 pass
         prompt = build_prompt(args, problem_id, repair_brief_path, suspect_claims_path, base_extra_prompt)
         write_json(state_path, state)
-        exit_code = run_attempt(args, problem_id, attempt_num, log_file, prompt)
+        exit_code = run_attempt(args, problem_id, attempt_num, log_file, prompt, heartbeat_path, state_path, state)
         log_text = log_file.read_text(encoding="utf-8", errors="ignore")
         failure_type = classify_failure(log_text) if exit_code != 0 else ""
 
