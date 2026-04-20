@@ -173,6 +173,18 @@ def call_verifier(
             return payload
         if status in {"failed", "timed_out"}:
             raise RuntimeError(f"Verifier run {run_id} ended with status={status}")
+        # Some backend versions materialize the result before they flip the status
+        # away from "running". Probe the result endpoint so section verification
+        # can still make progress on those deployments.
+        try:
+            result_resp = requests.get(f"{verify_url}/verify_result/{run_id}", timeout=30)
+            if result_resp.status_code == 200:
+                payload = result_resp.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Verifier response must be a JSON object.")
+                return payload
+        except requests.RequestException:
+            pass
         time.sleep(POLL_INTERVAL_SECONDS)
 
     raise TimeoutError(f"Verifier run {run_id} did not finish within {timeout_seconds} seconds")
