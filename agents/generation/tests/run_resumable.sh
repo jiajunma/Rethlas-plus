@@ -17,7 +17,7 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
 fi
 
-"$PYTHON_BIN" scripts/run_with_recovery.py \
+exec "$PYTHON_BIN" scripts/run_with_recovery.py \
   --problem-file "$PROBLEM_FILE" \
   --model "$MODEL" \
   --reasoning-effort "$REASONING_EFFORT" \
