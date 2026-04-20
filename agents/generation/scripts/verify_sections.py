@@ -160,10 +160,14 @@ def call_verifier(
 
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        status_resp = requests.get(f"{verify_url}/verify_status/{run_id}", timeout=30)
-        status_resp.raise_for_status()
-        status_payload = status_resp.json()
-        status = status_payload.get("status")
+        status = None
+        try:
+            status_resp = requests.get(f"{verify_url}/verify_status/{run_id}", timeout=30)
+            if status_resp.ok:
+                status_payload = status_resp.json()
+                status = status_payload.get("status")
+        except requests.RequestException:
+            status = None
         if status == "succeeded":
             result_resp = requests.get(f"{verify_url}/verify_result/{run_id}", timeout=30)
             result_resp.raise_for_status()
@@ -171,8 +175,6 @@ def call_verifier(
             if not isinstance(payload, dict):
                 raise ValueError("Verifier response must be a JSON object.")
             return payload
-        if status in {"failed", "timed_out"}:
-            raise RuntimeError(f"Verifier run {run_id} ended with status={status}")
         # Some backend versions materialize the result before they flip the status
         # away from "running". Probe the result endpoint so section verification
         # can still make progress on those deployments.
@@ -185,6 +187,8 @@ def call_verifier(
                 return payload
         except requests.RequestException:
             pass
+        if status in {"failed", "timed_out"}:
+            raise RuntimeError(f"Verifier run {run_id} ended with status={status}")
         time.sleep(POLL_INTERVAL_SECONDS)
 
     raise TimeoutError(f"Verifier run {run_id} did not finish within {timeout_seconds} seconds")
@@ -237,12 +241,18 @@ def main() -> int:
         return []
 
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
-        section_reports: List[Dict[str, Any]] = load_existing_section_reports(pass_index)
+        section_reports: List[Dict[str, Any]] = [
+            report
+            for report in load_existing_section_reports(pass_index)
+            if isinstance(report, dict) and report.get("verdict") == "correct"
+        ]
         overall_verdict = "correct"
         existing_indices = {
             report.get("index")
             for report in section_reports
-            if isinstance(report, dict) and isinstance(report.get("index"), int)
+            if isinstance(report, dict)
+            and isinstance(report.get("index"), int)
+            and report.get("verdict") == "correct"
         }
 
         def write_in_progress() -> None:

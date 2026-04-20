@@ -410,6 +410,7 @@ def main() -> int:
     logs_dir = LOGS_ROOT / problem_rel
     state_path = results_dir / "run_state.json"
     lock_path = results_dir / "run_lock.json"
+    manual_pause_path = results_dir / "manual_pause_recovery"
     heartbeat_path = results_dir / "heartbeat.txt"
     verified_blueprint = results_dir / "blueprint_verified.md"
     blueprint = results_dir / "blueprint.md"
@@ -423,6 +424,9 @@ def main() -> int:
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
+    if manual_pause_path.exists():
+        print(f"Manual recovery pause requested via {manual_pause_path}")
+        return 0
     acquire_lock(lock_path)
 
     state = read_json(state_path)
