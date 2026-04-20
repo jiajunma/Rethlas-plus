@@ -116,6 +116,15 @@ def classify_failure(log_text: str) -> str:
     return "unknown"
 
 
+def pause_for_rate_limit(state: Dict[str, Any], state_path: Path, heartbeat_path: Path) -> int:
+    state["status"] = "paused_rate_limit"
+    state["updated_at_utc"] = utc_now()
+    write_json(state_path, state)
+    while True:
+        heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+        time.sleep(60)
+
+
 def run_attempt(args: argparse.Namespace, problem_id: str, attempt_num: int, log_file: Path) -> int:
     prompt = (
         f"Use AGENTS.md exactly to solve the math problem in {args.problem_file}. "
@@ -267,6 +276,9 @@ def main() -> int:
         state.pop("attempt_started_at_utc", None)
         write_json(state_path, state)
         heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+
+        if failure_type == "rate_limit":
+            return pause_for_rate_limit(state, state_path, heartbeat_path)
 
         attempt_num += 1
         time.sleep(args.backoff_seconds)
