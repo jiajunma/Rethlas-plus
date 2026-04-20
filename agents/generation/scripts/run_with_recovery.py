@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from common.codex_budget import acquire_slot, note_rate_limit, release_slot  # noqa: E402
+from common.codex_budget import acquire_slot, maybe_restore_default_limit, note_rate_limit, release_slot  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -327,7 +327,16 @@ def pause_for_rate_limit(state: Dict[str, Any], state_path: Path, heartbeat_path
     state["updated_at_utc"] = utc_now()
     write_json(state_path, state)
     while True:
+        budget = maybe_restore_default_limit()
         heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+        state["updated_at_utc"] = utc_now()
+        state["codex_budget"] = budget
+        write_json(state_path, state)
+        if str(budget.get("cooldown_until_utc") or "") == "":
+            state["status"] = "retrying"
+            state["updated_at_utc"] = utc_now()
+            write_json(state_path, state)
+            return 0
         time.sleep(60)
 
 

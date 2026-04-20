@@ -18,6 +18,7 @@ LOCK_FILE = COORD_DIR / "codex_budget.lock"
 
 DEFAULT_LIMIT = int(os.getenv("CODEX_DEFAULT_CONCURRENCY", "3"))
 RATE_LIMIT_LIMIT = int(os.getenv("CODEX_RATE_LIMIT_CONCURRENCY", "1"))
+RATE_LIMIT_COOLDOWN_SECONDS = int(os.getenv("CODEX_RATE_LIMIT_COOLDOWN_SECONDS", "900"))
 
 
 def utc_now() -> str:
@@ -67,6 +68,7 @@ def _read_budget() -> Dict[str, object]:
             "default_limit": DEFAULT_LIMIT,
             "current_limit": DEFAULT_LIMIT,
             "last_rate_limit_at": "",
+            "cooldown_until_utc": "",
             "updated_at_utc": utc_now(),
         }
         BUDGET_FILE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -101,6 +103,7 @@ def _active_slots() -> List[Path]:
 def get_budget_status() -> Dict[str, object]:
     with _file_lock():
         budget = _read_budget()
+        budget = maybe_restore_default_limit_locked(budget)
         slots = _active_slots()
         return {
             **budget,
@@ -114,8 +117,34 @@ def note_rate_limit() -> Dict[str, object]:
         budget = _read_budget()
         budget["current_limit"] = RATE_LIMIT_LIMIT
         budget["last_rate_limit_at"] = utc_now()
+        budget["cooldown_until_utc"] = datetime.fromtimestamp(
+            time.time() + RATE_LIMIT_COOLDOWN_SECONDS, tz=timezone.utc
+        ).isoformat()
         _write_budget(budget)
         return budget
+
+
+def maybe_restore_default_limit_locked(budget: Dict[str, object]) -> Dict[str, object]:
+    cooldown_until = str(budget.get("cooldown_until_utc") or "")
+    if not cooldown_until:
+        return budget
+    try:
+        cooldown_dt = datetime.fromisoformat(cooldown_until.replace("Z", "+00:00"))
+    except ValueError:
+        budget["cooldown_until_utc"] = ""
+        _write_budget(budget)
+        return budget
+    if datetime.now(timezone.utc) >= cooldown_dt:
+        budget["current_limit"] = int(budget.get("default_limit", DEFAULT_LIMIT))
+        budget["cooldown_until_utc"] = ""
+        _write_budget(budget)
+    return budget
+
+
+def maybe_restore_default_limit() -> Dict[str, object]:
+    with _file_lock():
+        budget = _read_budget()
+        return maybe_restore_default_limit_locked(budget)
 
 
 def acquire_slot(owner: str, timeout_seconds: int = 600) -> Path:
