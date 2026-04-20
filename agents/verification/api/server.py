@@ -36,7 +36,7 @@ ACTIVE_RUN_IDS: set[str] = set()
 VERIFY_QUEUE: Deque[Tuple[str, str, str]] = deque()
 QUEUE_CONDITION = threading.Condition()
 WORKER_STARTED = False
-VERIFIER_WORKERS = int(os.getenv("VERIFY_WORKERS", "2"))
+VERIFIER_WORKERS = int(os.getenv("VERIFY_WORKERS", "3"))
 
 
 class VerifyRequest(BaseModel):
