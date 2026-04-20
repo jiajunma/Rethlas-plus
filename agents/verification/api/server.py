@@ -109,6 +109,26 @@ def _write_verification_payload(run_id: str, payload: Dict[str, Any]) -> Path:
     return verification_path
 
 
+def _reconcile_stale_states() -> None:
+    RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
+    for run_dir in RESULTS_ROOT.iterdir():
+        if not run_dir.is_dir():
+            continue
+        state_path = run_dir / STATE_FILENAME
+        if not state_path.exists():
+            continue
+        try:
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        status = payload.get("status")
+        if status in {"queued", "running"}:
+            payload["status"] = "interrupted"
+            payload["error"] = "Verifier restarted before this run completed."
+            payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+            state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def _build_summary(run_id: str, statement: str, verification_path: Path) -> None:
     proof_path = _results_dir(run_id) / "proof.md"
     if not proof_path.exists():
@@ -333,6 +353,11 @@ def _enqueue_verification(run_id: str, statement: str, proof: str) -> None:
 
 
 app = FastAPI(title="Verification Agent API", version="0.1.0")
+
+
+@app.on_event("startup")
+def startup_reconcile_states() -> None:
+    _reconcile_stale_states()
 
 
 @app.get("/health")

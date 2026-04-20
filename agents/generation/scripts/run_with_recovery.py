@@ -180,6 +180,7 @@ def main() -> int:
     verified_blueprint = results_dir / "blueprint_verified.md"
     blueprint = results_dir / "blueprint.md"
     section_report = results_dir / "section_verification.json"
+    stale_section_report = results_dir / "section_verification.stale_preclean.json"
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -220,6 +221,11 @@ def main() -> int:
         log_file = logs_dir / f"{problem_id}-attempt{attempt_num:02d}.md"
         state["current_log"] = str(log_file)
         state["attempt_started_at_utc"] = utc_now()
+        if section_report.exists():
+            try:
+                section_report.replace(stale_section_report)
+            except Exception:  # noqa: BLE001
+                pass
         write_json(state_path, state)
         exit_code = run_attempt(args, problem_id, attempt_num, log_file)
         log_text = log_file.read_text(encoding="utf-8", errors="ignore")
