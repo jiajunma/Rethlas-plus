@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,8 +13,9 @@ from typing import Any, Dict, List, Optional
 import requests
 
 
-VERIFY_URL = "http://127.0.0.1:8091/verify"
+VERIFY_URL = "http://127.0.0.1:8091"
 DEFAULT_TIMEOUT_SECONDS = 3600
+POLL_INTERVAL_SECONDS = 5
 
 
 @dataclass
@@ -35,6 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-workers", type=int, default=2)
     parser.add_argument("--max-consecutive-failures", type=int, default=3)
     parser.add_argument("--passes-required", type=int, default=3)
+    parser.add_argument("--start-index", type=int, default=1)
+    parser.add_argument("--resume-existing", action="store_true")
     return parser.parse_args()
 
 
@@ -126,16 +130,48 @@ def call_verifier(
     proof: str,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
-    response = requests.post(
-        verify_url,
-        json={"statement": statement, "proof": proof},
-        timeout=timeout_seconds,
+    payload = {"statement": statement, "proof": proof}
+    submit = requests.post(
+        f"{verify_url}/verify_async",
+        json=payload,
+        timeout=30,
     )
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise ValueError("Verifier response must be a JSON object.")
-    return payload
+    if submit.status_code == 404:
+        sync_response = requests.post(
+            f"{verify_url}/verify",
+            json=payload,
+            timeout=timeout_seconds,
+        )
+        sync_response.raise_for_status()
+        sync_payload = sync_response.json()
+        if not isinstance(sync_payload, dict):
+            raise ValueError("Verifier response must be a JSON object.")
+        return sync_payload
+
+    submit.raise_for_status()
+    accepted = submit.json()
+    run_id = accepted.get("run_id")
+    if not run_id:
+        raise ValueError("Verifier did not return a run_id.")
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        status_resp = requests.get(f"{verify_url}/verify_status/{run_id}", timeout=30)
+        status_resp.raise_for_status()
+        status_payload = status_resp.json()
+        status = status_payload.get("status")
+        if status == "succeeded":
+            result_resp = requests.get(f"{verify_url}/verify_result/{run_id}", timeout=30)
+            result_resp.raise_for_status()
+            payload = result_resp.json()
+            if not isinstance(payload, dict):
+                raise ValueError("Verifier response must be a JSON object.")
+            return payload
+        if status in {"failed", "timed_out"}:
+            raise RuntimeError(f"Verifier run {run_id} ended with status={status}")
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    raise TimeoutError(f"Verifier run {run_id} did not finish within {timeout_seconds} seconds")
 
 
 def main() -> int:
@@ -149,9 +185,59 @@ def main() -> int:
     results_dir = blueprint_path.parent
     output_path = results_dir / "section_verification.json"
 
-    def run_one_pass() -> Dict[str, Any]:
-        section_reports: List[Dict[str, Any]] = []
+    def write_snapshot(
+        pass_reports: List[Dict[str, Any]],
+        overall_verdict: str,
+        consecutive_passes: int,
+    ) -> None:
+        payload = {
+            "blueprint_path": str(blueprint_path),
+            "structure_report": structure,
+            "mode": args.mode,
+            "max_workers": args.max_workers,
+            "max_consecutive_failures": args.max_consecutive_failures,
+            "passes_required": args.passes_required,
+            "passes_completed": consecutive_passes,
+            "pass_reports": pass_reports,
+            "overall_verdict": overall_verdict,
+        }
+        output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def load_existing_section_reports(pass_index: int) -> List[Dict[str, Any]]:
+        if not args.resume_existing or not output_path.exists():
+            return []
+        try:
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            return []
+        existing_passes = payload.get("pass_reports", [])
+        if not isinstance(existing_passes, list):
+            return []
+        for item in existing_passes:
+            if isinstance(item, dict) and item.get("pass_index") == pass_index:
+                reports = item.get("section_reports", [])
+                if isinstance(reports, list):
+                    return reports
+        return []
+
+    def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
+        section_reports: List[Dict[str, Any]] = load_existing_section_reports(pass_index)
         overall_verdict = "correct"
+        existing_indices = {
+            report.get("index")
+            for report in section_reports
+            if isinstance(report, dict) and isinstance(report.get("index"), int)
+        }
+
+        def write_in_progress() -> None:
+            partial_reports = pass_reports + [
+                {
+                    "section_reports": section_reports,
+                    "overall_verdict": overall_verdict,
+                    "pass_index": pass_index,
+                }
+            ]
+            write_snapshot(partial_reports, overall_verdict, completed_passes)
 
         if structure["issues"]:
             return {
@@ -185,6 +271,12 @@ def main() -> int:
         if args.mode == "sequential":
             consecutive_failures = 0
             for idx, (block, proof_text) in enumerate(zip(blocks, prefix_markdowns), start=1):
+                if idx in existing_indices or idx < args.start_index:
+                    continue
+                print(
+                    f"[verify_sections] pass starting block {idx}/{len(blocks)}: {block.title}",
+                    flush=True,
+                )
                 try:
                     report = verify_one(idx, block, proof_text)
                 except Exception as exc:  # noqa: BLE001
@@ -198,9 +290,19 @@ def main() -> int:
                     }
                     overall_verdict = "infrastructure_error"
                     section_reports.append(report)
+                    write_in_progress()
+                    print(
+                        f"[verify_sections] block {idx} infrastructure_error: {exc}",
+                        flush=True,
+                    )
                     break
 
                 section_reports.append(report)
+                write_in_progress()
+                print(
+                    f"[verify_sections] block {idx} verdict: {report['verdict']}",
+                    flush=True,
+                )
                 if report["verdict"] != "correct":
                     consecutive_failures += 1
                     overall_verdict = "wrong"
@@ -249,31 +351,21 @@ def main() -> int:
     consecutive_passes = 0
 
     for pass_index in range(1, args.passes_required + 1):
-        pass_result = run_one_pass()
+        pass_result = run_one_pass(pass_index, consecutive_passes)
         pass_result["pass_index"] = pass_index
         pass_reports.append(pass_result)
 
         if pass_result["overall_verdict"] == "correct":
             consecutive_passes += 1
+            write_snapshot(pass_reports, "correct", consecutive_passes)
         else:
             overall_verdict = pass_result["overall_verdict"]
+            write_snapshot(pass_reports, overall_verdict, consecutive_passes)
             break
 
     if consecutive_passes == args.passes_required:
         overall_verdict = "correct"
-
-    payload = {
-        "blueprint_path": str(blueprint_path),
-        "structure_report": structure,
-        "mode": args.mode,
-        "max_workers": args.max_workers,
-        "max_consecutive_failures": args.max_consecutive_failures,
-        "passes_required": args.passes_required,
-        "passes_completed": consecutive_passes,
-        "pass_reports": pass_reports,
-        "overall_verdict": overall_verdict,
-    }
-    output_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    write_snapshot(pass_reports, overall_verdict, consecutive_passes)
 
     return 0 if overall_verdict == "correct" else 1
 

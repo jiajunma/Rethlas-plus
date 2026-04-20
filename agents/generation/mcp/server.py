@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,7 +25,7 @@ THEOREM_SEARCH_TASK = (
     "lemmas, and definitions, that are useful for solving the given problem."
 )
 
-VERIFY_PROOF_URL = "http://127.0.0.1:8091/verify"
+VERIFY_PROOF_URL = "http://127.0.0.1:8091"
 
 CHANNEL_FILES: Dict[str, str] = {
     "immediate_conclusions": "immediate_conclusions.jsonl",
@@ -185,7 +186,7 @@ def verify_proof_service(
     statement: str,
     proof: str,
     endpoint: str = VERIFY_PROOF_URL,
-    timeout_seconds: int = 3600,
+    timeout_seconds: int = 14400,
 ) -> Dict[str, Any]:
     if not statement.strip():
         raise ValueError("statement must be non-empty")
@@ -194,21 +195,33 @@ def verify_proof_service(
     if not proof.strip():
         raise ValueError("proof markdown must be non-empty")
 
-    payload = {
-        "statement": statement,
-        "proof": proof,
-    }
+    payload = {"statement": statement, "proof": proof}
 
-    response = requests.post(endpoint, json=payload, timeout=timeout_seconds)
-    response.raise_for_status()
+    submit = requests.post(f"{endpoint}/verify_async", json=payload, timeout=30)
+    submit.raise_for_status()
+    accepted = submit.json()
+    run_id = accepted.get("run_id")
+    if not run_id:
+        raise ValueError("verification service did not return a run_id")
 
-    try:
-        body = response.json()
-    except ValueError as exc:
-        raise ValueError("verification service returned non-JSON response") from exc
-
-    if not isinstance(body, dict):
-        raise ValueError("verification service must return a JSON object")
+    deadline = datetime.now(timezone.utc).timestamp() + timeout_seconds
+    while datetime.now(timezone.utc).timestamp() < deadline:
+        status_resp = requests.get(f"{endpoint}/verify_status/{run_id}", timeout=30)
+        status_resp.raise_for_status()
+        status_payload = status_resp.json()
+        status = status_payload.get("status")
+        if status == "succeeded":
+            result_resp = requests.get(f"{endpoint}/verify_result/{run_id}", timeout=30)
+            result_resp.raise_for_status()
+            body = result_resp.json()
+            if not isinstance(body, dict):
+                raise ValueError("verification service must return a JSON object")
+            break
+        if status in {"failed", "timed_out"}:
+            raise ValueError(f"verification service run failed with status={status}")
+        time.sleep(5)
+    else:
+        raise ValueError(f"verification service timed out waiting for run_id={run_id}")
 
     return {
         "statement": statement,
@@ -216,6 +229,7 @@ def verify_proof_service(
         "verdict": body.get("verdict"),
         "repair_hints": body.get("repair_hints"),
         "endpoint": endpoint,
+        "run_id": run_id,
     }
 
 

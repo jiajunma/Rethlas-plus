@@ -89,6 +89,8 @@ This script:
 - runs section-level verification and writes `agents/generation/results/example/section_verification.json`
 - writes the verified proof to `agents/generation/results/example/blueprint_verified.md` if verification succeeds
 
+Section-level verification and full verification now use the asynchronous verifier interface under the hood, so long verification jobs are polled by run id instead of blocking on one large synchronous HTTP request.
+
 ## 4b. Run With Recovery
 
 For long-running problems, use the resumable runner:
