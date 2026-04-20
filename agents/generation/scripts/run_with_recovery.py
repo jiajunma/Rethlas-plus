@@ -399,6 +399,7 @@ def launch_section_verify_sidecar(
         [
             sys.executable,
             str(SECTION_VERIFY),
+            "--resume-existing",
             "--passes-required",
             "1",
             "--max-consecutive-failures",
@@ -587,11 +588,6 @@ def main() -> int:
         log_file = logs_dir / f"{problem_id}-attempt{attempt_num:02d}.md"
         state["current_log"] = str(log_file)
         state["attempt_started_at_utc"] = utc_now()
-        if section_report.exists():
-            try:
-                section_report.replace(stale_section_report)
-            except Exception:  # noqa: BLE001
-                pass
         prompt = build_prompt(args, problem_id, repair_brief_path, suspect_claims_path, base_extra_prompt)
         write_json(state_path, state)
         cleanup_orphan_generator_codex()
