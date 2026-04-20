@@ -616,7 +616,12 @@ def main() -> int:
                 state["current_phase"] = "section_verifying"
                 write_json(state_path, state)
                 section_exit = run_monitored_subprocess(
-                    [sys.executable, str(SECTION_VERIFY), str(blueprint)],
+                    [
+                        sys.executable,
+                        str(SECTION_VERIFY),
+                        "--resume-existing",
+                        str(blueprint),
+                    ],
                     cwd=REPO_ROOT,
                     log_path=section_verify_log,
                     timeout_seconds=args.section_verify_timeout_seconds,
