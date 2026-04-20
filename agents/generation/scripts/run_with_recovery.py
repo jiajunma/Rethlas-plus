@@ -10,9 +10,10 @@ import signal
 import subprocess
 import sys
 import time
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -57,6 +58,12 @@ def read_json(path: Path) -> Dict[str, Any]:
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def append_jsonl(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def process_alive(pid: int) -> bool:
@@ -116,6 +123,167 @@ def classify_failure(log_text: str) -> str:
     return "unknown"
 
 
+def build_prompt(
+    args: argparse.Namespace,
+    problem_id: str,
+    repair_brief_path: Path,
+    suspect_claims_path: Path,
+    base_extra_prompt: str,
+) -> str:
+    prompt = (
+        f"Use AGENTS.md exactly to solve the math problem in {args.problem_file}. "
+        f"If memory/{problem_id}/ or results/{problem_id}/ already contain artifacts from an earlier run, "
+        "resume from them instead of restarting from scratch. Preserve and build on prior memory, failed paths, and proof drafts."
+    )
+    if repair_brief_path.exists():
+        prompt += (
+            "\n\nCurrent repair brief from the latest verification failure:\n"
+            + repair_brief_path.read_text(encoding="utf-8")
+            + "\nUse it explicitly to prioritize the next repair."
+        )
+    if suspect_claims_path.exists():
+        prompt += (
+            "\n\nRepeated-failure suspect claims:\n"
+            + suspect_claims_path.read_text(encoding="utf-8")
+            + "\nIf one of these claims appears false, do not keep patching blindly; either revise the statement or produce counterexample evidence."
+        )
+    if base_extra_prompt.strip():
+        prompt += " " + base_extra_prompt.strip()
+    return prompt
+
+
+def latest_memory_verification_record(memory_verification_path: Path) -> Optional[Dict[str, Any]]:
+    if not memory_verification_path.exists():
+        return None
+    lines = memory_verification_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload.get("record") if isinstance(payload.get("record"), dict) else payload
+    return None
+
+
+def build_repair_brief(
+    section_report: Path,
+    memory_verification_path: Path,
+) -> Optional[Dict[str, Any]]:
+    if section_report.exists():
+        payload = read_json(section_report)
+        if payload:
+            structure = payload.get("structure_report") or {}
+            issues = structure.get("issues") or []
+            pass_reports = payload.get("pass_reports") or []
+            latest = pass_reports[-1] if pass_reports else {}
+            section_reports = latest.get("section_reports") or []
+            failing = next((r for r in section_reports if r.get("verdict") not in {None, "correct"}), None)
+            if issues or failing:
+                brief: Dict[str, Any] = {
+                    "created_at_utc": utc_now(),
+                    "source": "section_verification",
+                    "scope": "structure" if issues else "section",
+                    "failing_locations": [],
+                    "summary": structure.get("summary") or latest.get("overall_verdict") or "Section verification failed.",
+                    "critical_errors": [],
+                    "gaps": [],
+                    "repair_hints": "",
+                    "next_actions": [],
+                }
+                if issues:
+                    brief["failing_locations"] = [item.get("location", "") for item in issues]
+                    brief["gaps"] = [{"location": item.get("location", ""), "issue": item.get("issue", "")} for item in issues]
+                    brief["repair_hints"] = "Repair the structure issues first, then rerun section verification."
+                    brief["next_actions"] = ["Fix the failing structure items", "Rerun section verification from pass 1"]
+                elif failing:
+                    report = (failing.get("verification") or {}).get("verification_report") or {}
+                    brief["failing_locations"] = [failing.get("title", "")]
+                    brief["summary"] = report.get("summary") or failing.get("error") or "Section verification failed."
+                    brief["critical_errors"] = report.get("critical_errors") or []
+                    brief["gaps"] = report.get("gaps") or []
+                    brief["repair_hints"] = (failing.get("verification") or {}).get("repair_hints") or failing.get("error", "")
+                    brief["next_actions"] = ["Repair the failing block", "Rerun section verification from pass 1"]
+                return brief
+
+    latest_verification = latest_memory_verification_record(memory_verification_path)
+    if latest_verification and latest_verification.get("verdict") == "wrong":
+        verification_report = latest_verification.get("verification_report") or {}
+        return {
+            "created_at_utc": utc_now(),
+            "source": "verification_reports_memory",
+            "scope": "full_proof",
+            "failing_locations": [
+                item.get("location", "")
+                for item in (verification_report.get("critical_errors") or []) + (verification_report.get("gaps") or [])
+                if isinstance(item, dict)
+            ],
+            "summary": latest_verification.get("summary") or verification_report.get("summary") or "Full verification failed.",
+            "critical_errors": verification_report.get("critical_errors") or [],
+            "gaps": verification_report.get("gaps") or [],
+            "repair_hints": latest_verification.get("repair_hints") or "",
+            "next_actions": ["Repair the reported issues", "Rerun section verification and then full verification"],
+        }
+    return None
+
+
+def update_suspect_claims(
+    suspect_claims_path: Path,
+    repair_brief: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    existing = read_json(suspect_claims_path) if suspect_claims_path.exists() else {}
+    claims: Dict[str, Dict[str, Any]] = existing if isinstance(existing, dict) else {}
+    if repair_brief:
+        for item in (repair_brief.get("critical_errors") or []) + (repair_brief.get("gaps") or []):
+            if not isinstance(item, dict):
+                continue
+            location = str(item.get("location", "")).strip()
+            if not location:
+                continue
+            entry = claims.setdefault(
+                location,
+                {
+                    "location": location,
+                    "count": 0,
+                    "kinds_seen": [],
+                    "last_summary": "",
+                    "latest_hint": "",
+                    "status": "monitor",
+                },
+            )
+            entry["count"] += 1
+            kind = "critical_error" if item in (repair_brief.get("critical_errors") or []) else "gap"
+            if kind not in entry["kinds_seen"]:
+                entry["kinds_seen"].append(kind)
+            entry["last_summary"] = repair_brief.get("summary", "")
+            entry["latest_hint"] = repair_brief.get("repair_hints", "")
+            if entry["count"] >= 4:
+                entry["status"] = "suspected_false"
+            elif entry["count"] >= 2:
+                entry["status"] = "repeated_failure"
+    write_json(suspect_claims_path, claims)
+    return list(claims.values())
+
+
+def snapshot_attempt_artifacts(
+    snapshots_dir: Path,
+    attempt_num: int,
+    blueprint: Path,
+    section_report: Path,
+    repair_brief_path: Path,
+) -> None:
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
+    if blueprint.exists():
+        shutil.copy2(blueprint, snapshots_dir / f"attempt{attempt_num:02d}_blueprint.md")
+    if section_report.exists():
+        shutil.copy2(section_report, snapshots_dir / f"attempt{attempt_num:02d}_section_verification.json")
+    if repair_brief_path.exists():
+        shutil.copy2(repair_brief_path, snapshots_dir / f"attempt{attempt_num:02d}_repair_brief.json")
+
+
 def pause_for_rate_limit(state: Dict[str, Any], state_path: Path, heartbeat_path: Path) -> int:
     state["status"] = "paused_rate_limit"
     state["updated_at_utc"] = utc_now()
@@ -125,15 +293,13 @@ def pause_for_rate_limit(state: Dict[str, Any], state_path: Path, heartbeat_path
         time.sleep(60)
 
 
-def run_attempt(args: argparse.Namespace, problem_id: str, attempt_num: int, log_file: Path) -> int:
-    prompt = (
-        f"Use AGENTS.md exactly to solve the math problem in {args.problem_file}. "
-        f"If memory/{problem_id}/ or results/{problem_id}/ already contain artifacts from an earlier run, "
-        "resume from them instead of restarting from scratch. Preserve and build on prior memory, failed paths, and proof drafts."
-    )
-    if args.extra_prompt.strip():
-        prompt += " " + args.extra_prompt.strip()
-
+def run_attempt(
+    args: argparse.Namespace,
+    problem_id: str,
+    attempt_num: int,
+    log_file: Path,
+    prompt: str,
+) -> int:
     cmd = [
         "codex",
         "exec",
@@ -190,6 +356,11 @@ def main() -> int:
     blueprint = results_dir / "blueprint.md"
     section_report = results_dir / "section_verification.json"
     stale_section_report = results_dir / "section_verification.stale_preclean.json"
+    repair_brief_path = results_dir / "repair_brief.json"
+    suspect_claims_path = results_dir / "suspect_claims.json"
+    loop_journal_path = results_dir / "loop_journal.jsonl"
+    snapshots_dir = results_dir / "attempt_snapshots"
+    memory_verification_path = MEMORY_ROOT / problem_id / "verification_reports.jsonl"
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +371,7 @@ def main() -> int:
     state.setdefault("problem_file", args.problem_file)
     state.setdefault("created_at_utc", utc_now())
     state.setdefault("attempts", [])
+    base_extra_prompt = args.extra_prompt
 
     if verified_blueprint.exists():
         state["status"] = "verified"
@@ -218,6 +390,14 @@ def main() -> int:
         state["runner_pid"] = os.getpid()
         state["updated_at_utc"] = utc_now()
         write_json(state_path, state)
+        append_jsonl(
+            loop_journal_path,
+            {
+                "timestamp_utc": utc_now(),
+                "event": "attempt_started",
+                "attempt": attempt_num,
+            },
+        )
 
         if not verification_service_ok(args.verify_url):
             state["status"] = "blocked_verifier"
@@ -235,8 +415,9 @@ def main() -> int:
                 section_report.replace(stale_section_report)
             except Exception:  # noqa: BLE001
                 pass
+        prompt = build_prompt(args, problem_id, repair_brief_path, suspect_claims_path, base_extra_prompt)
         write_json(state_path, state)
-        exit_code = run_attempt(args, problem_id, attempt_num, log_file)
+        exit_code = run_attempt(args, problem_id, attempt_num, log_file, prompt)
         log_text = log_file.read_text(encoding="utf-8", errors="ignore")
         failure_type = classify_failure(log_text) if exit_code != 0 else ""
 
@@ -260,6 +441,42 @@ def main() -> int:
                 )
             except Exception:  # noqa: BLE001
                 pass
+
+        repair_brief = build_repair_brief(section_report, memory_verification_path)
+        if repair_brief:
+            write_json(repair_brief_path, repair_brief)
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "repair_brief_written",
+                    "attempt": attempt_num,
+                    "repair_brief": repair_brief,
+                },
+            )
+        suspect_claims = update_suspect_claims(suspect_claims_path, repair_brief)
+        if suspect_claims:
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "suspect_claims_updated",
+                    "attempt": attempt_num,
+                    "suspect_claims": suspect_claims,
+                },
+            )
+        snapshot_attempt_artifacts(snapshots_dir, attempt_num, blueprint, section_report, repair_brief_path)
+        append_jsonl(
+            loop_journal_path,
+            {
+                "timestamp_utc": utc_now(),
+                "event": "attempt_finished",
+                "attempt": attempt_num,
+                "exit_code": exit_code,
+                "failure_type": failure_type,
+                "log_file": str(log_file),
+            },
+        )
 
         if verified_blueprint.exists():
             state["status"] = "verified"
