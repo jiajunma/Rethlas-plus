@@ -113,6 +113,18 @@ def verification_service_ok(verify_url: str) -> bool:
         return False
 
 
+def fetch_verifier_health(verify_url: str) -> Dict[str, Any]:
+    target = verify_url if verify_url.endswith("/health") else verify_url.rstrip("/") + "/health"
+    try:
+        r = requests.get(target, timeout=3)
+        if not r.ok:
+            return {}
+        payload = r.json()
+        return payload if isinstance(payload, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def classify_failure(log_text: str) -> str:
     lowered = log_text.lower()
     if "429" in log_text or "too many requests" in lowered or "rate limit" in lowered:
@@ -447,6 +459,25 @@ def main() -> int:
 
     attempt_num = len(state["attempts"]) + 1
     while args.max_attempts == 0 or attempt_num <= args.max_attempts:
+        verifier_health = fetch_verifier_health(args.verify_url)
+        if (
+            state.get("status") == "blocked_on_verifier_backend"
+            and not verifier_health.get("active_run_id")
+            and str(verifier_health.get("queue_depth", "0")) == "0"
+        ):
+            state["status"] = "retrying"
+            state["current_phase"] = "recovering_from_idle_verifier"
+            state["updated_at_utc"] = utc_now()
+            write_json(state_path, state)
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "recovered_from_idle_verifier",
+                    "attempt": attempt_num,
+                },
+            )
+
         heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
         state["status"] = "running"
         state["active_attempt"] = attempt_num
@@ -463,7 +494,7 @@ def main() -> int:
             },
         )
 
-        if not verification_service_ok(args.verify_url):
+        if not verifier_health or not verification_service_ok(args.verify_url):
             state["status"] = "blocked_verifier"
             state["updated_at_utc"] = utc_now()
             state["last_failure_type"] = "verifier_unreachable"
