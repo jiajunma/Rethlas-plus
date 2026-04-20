@@ -12,7 +12,12 @@ MAX_ATTEMPTS="${MAX_ATTEMPTS:-0}"
 EXTRA_PROMPT="${EXTRA_PROMPT:-}"
 
 cd "$ROOT_DIR"
-python3 scripts/run_with_recovery.py \
+PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python3"
+fi
+
+"$PYTHON_BIN" scripts/run_with_recovery.py \
   --problem-file "$PROBLEM_FILE" \
   --model "$MODEL" \
   --reasoning-effort "$REASONING_EFFORT" \

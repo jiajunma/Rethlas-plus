@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import atexit
 import re
 import signal
 import subprocess
@@ -56,6 +57,42 @@ def read_json(path: Path) -> Dict[str, Any]:
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def acquire_lock(lock_path: Path) -> None:
+    if lock_path.exists():
+        try:
+            payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            payload = {}
+        old_pid = payload.get("pid")
+        if isinstance(old_pid, int) and process_alive(old_pid):
+            raise RuntimeError(f"run_with_recovery already active with pid={old_pid}")
+        lock_path.unlink(missing_ok=True)
+
+    payload = {
+        "pid": os.getpid(),
+        "created_at_utc": utc_now(),
+    }
+    write_json(lock_path, payload)
+
+    def _cleanup() -> None:
+        try:
+            current = json.loads(lock_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            current = {}
+        if current.get("pid") == os.getpid():
+            lock_path.unlink(missing_ok=True)
+
+    atexit.register(_cleanup)
 
 
 def verification_service_ok(verify_url: str) -> bool:
@@ -138,6 +175,7 @@ def main() -> int:
     results_dir = RESULTS_ROOT / problem_id
     logs_dir = LOGS_ROOT / problem_rel
     state_path = results_dir / "run_state.json"
+    lock_path = results_dir / "run_lock.json"
     heartbeat_path = results_dir / "heartbeat.txt"
     verified_blueprint = results_dir / "blueprint_verified.md"
     blueprint = results_dir / "blueprint.md"
@@ -145,6 +183,7 @@ def main() -> int:
 
     logs_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
+    acquire_lock(lock_path)
 
     state = read_json(state_path)
     state.setdefault("problem_id", problem_id)
@@ -165,6 +204,8 @@ def main() -> int:
     while args.max_attempts == 0 or attempt_num <= args.max_attempts:
         heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
         state["status"] = "running"
+        state["active_attempt"] = attempt_num
+        state["runner_pid"] = os.getpid()
         state["updated_at_utc"] = utc_now()
         write_json(state_path, state)
 
@@ -177,6 +218,9 @@ def main() -> int:
             continue
 
         log_file = logs_dir / f"{problem_id}-attempt{attempt_num:02d}.md"
+        state["current_log"] = str(log_file)
+        state["attempt_started_at_utc"] = utc_now()
+        write_json(state_path, state)
         exit_code = run_attempt(args, problem_id, attempt_num, log_file)
         log_text = log_file.read_text(encoding="utf-8", errors="ignore")
         failure_type = classify_failure(log_text) if exit_code != 0 else ""
@@ -214,6 +258,7 @@ def main() -> int:
         state["last_failure_type"] = failure_type
         state["working_blueprint"] = str(blueprint) if blueprint.exists() else ""
         state["section_verification"] = str(section_report) if section_report.exists() else ""
+        state.pop("attempt_started_at_utc", None)
         write_json(state_path, state)
         heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
 
