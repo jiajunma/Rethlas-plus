@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from common.codex_budget import acquire_slot, note_rate_limit, release_slot  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verify-url", default="http://127.0.0.1:8091/health")
     parser.add_argument("--backoff-seconds", type=int, default=30)
     parser.add_argument("--attempt-timeout-seconds", type=int, default=1800)
+    parser.add_argument("--section-verify-timeout-seconds", type=int, default=1200)
     parser.add_argument("--max-attempts", type=int, default=0, help="0 means unlimited")
     parser.add_argument("--extra-prompt", default="")
     return parser.parse_args()
@@ -293,6 +296,49 @@ def pause_for_rate_limit(state: Dict[str, Any], state_path: Path, heartbeat_path
         time.sleep(60)
 
 
+def run_monitored_subprocess(
+    cmd: List[str],
+    cwd: Path,
+    log_path: Path,
+    timeout_seconds: int,
+    heartbeat_path: Path,
+    state_path: Path,
+    state: Dict[str, Any],
+    phase: str,
+) -> int:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("w", encoding="utf-8") as handle:
+        handle.write(f"started_at_utc: {utc_now()}\n")
+        handle.write(f"phase: {phase}\n")
+        handle.write(f"command: {' '.join(cmd)}\n\n")
+        handle.flush()
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            preexec_fn=os.setsid,
+        )
+        start = time.monotonic()
+        while True:
+            heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+            state["updated_at_utc"] = utc_now()
+            state["current_phase"] = phase
+            write_json(state_path, state)
+            try:
+                return proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                if time.monotonic() - start >= timeout_seconds:
+                    handle.write(f"\n[runner] {phase} timed out after {timeout_seconds} seconds\n")
+                    handle.flush()
+                    os.killpg(proc.pid, signal.SIGINT)
+                    try:
+                        return proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        return proc.wait()
+
+
 def run_attempt(
     args: argparse.Namespace,
     problem_id: str,
@@ -321,30 +367,34 @@ def run_attempt(
         handle.write(f"attempt: {attempt_num}\n")
         handle.write(f"command: {' '.join(cmd)}\n\n")
         handle.flush()
-        proc = subprocess.Popen(
-            cmd,
-            cwd=REPO_ROOT,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            preexec_fn=os.setsid,
-        )
-        start = time.monotonic()
-        while True:
-            heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
-            state["updated_at_utc"] = utc_now()
-            write_json(state_path, state)
-            try:
-                return proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                if time.monotonic() - start >= args.attempt_timeout_seconds:
-                    handle.write(f"\n[runner] attempt timed out after {args.attempt_timeout_seconds} seconds\n")
-                    handle.flush()
-                    os.killpg(proc.pid, signal.SIGINT)
-                    try:
-                        return proc.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                        return proc.wait()
+        slot_path = acquire_slot(f"generator:{problem_id}:attempt{attempt_num}")
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                preexec_fn=os.setsid,
+            )
+            start = time.monotonic()
+            while True:
+                heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+                state["updated_at_utc"] = utc_now()
+                write_json(state_path, state)
+                try:
+                    return proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() - start >= args.attempt_timeout_seconds:
+                        handle.write(f"\n[runner] attempt timed out after {args.attempt_timeout_seconds} seconds\n")
+                        handle.flush()
+                        os.killpg(proc.pid, signal.SIGINT)
+                        try:
+                            return proc.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                            return proc.wait()
+        finally:
+            release_slot(slot_path)
 
 
 def main() -> int:
@@ -360,11 +410,11 @@ def main() -> int:
     logs_dir = LOGS_ROOT / problem_rel
     state_path = results_dir / "run_state.json"
     lock_path = results_dir / "run_lock.json"
-    heartbeat_path = results_dir / "heartbeat.txt"
-    verified_blueprint = results_dir / "blueprint_verified.md"
-    blueprint = results_dir / "blueprint.md"
-    section_report = results_dir / "section_verification.json"
-    stale_section_report = results_dir / "section_verification.stale_preclean.json"
+        heartbeat_path = results_dir / "heartbeat.txt"
+        verified_blueprint = results_dir / "blueprint_verified.md"
+        blueprint = results_dir / "blueprint.md"
+        section_report = results_dir / "section_verification.json"
+        stale_section_report = results_dir / "section_verification.stale_preclean.json"
     repair_brief_path = results_dir / "repair_brief.json"
     suspect_claims_path = results_dir / "suspect_claims.json"
     loop_journal_path = results_dir / "loop_journal.jsonl"
@@ -397,6 +447,7 @@ def main() -> int:
         state["status"] = "running"
         state["active_attempt"] = attempt_num
         state["runner_pid"] = os.getpid()
+        state["current_phase"] = "generation"
         state["updated_at_utc"] = utc_now()
         write_json(state_path, state)
         append_jsonl(
@@ -443,11 +494,21 @@ def main() -> int:
 
         if blueprint.exists():
             try:
-                subprocess.run(
+                section_verify_log = results_dir / "section_verify_run.log"
+                state["current_phase"] = "section_verifying"
+                write_json(state_path, state)
+                section_exit = run_monitored_subprocess(
                     [sys.executable, str(SECTION_VERIFY), str(blueprint)],
                     cwd=REPO_ROOT,
-                    check=False,
+                    log_path=section_verify_log,
+                    timeout_seconds=args.section_verify_timeout_seconds,
+                    heartbeat_path=heartbeat_path,
+                    state_path=state_path,
+                    state=state,
+                    phase="section_verifying",
                 )
+                if section_exit != 0 and not section_report.exists():
+                    failure_type = failure_type or "section_verifier_failed"
             except Exception:  # noqa: BLE001
                 pass
 
@@ -500,10 +561,12 @@ def main() -> int:
         state["working_blueprint"] = str(blueprint) if blueprint.exists() else ""
         state["section_verification"] = str(section_report) if section_report.exists() else ""
         state.pop("attempt_started_at_utc", None)
+        state["current_phase"] = "idle"
         write_json(state_path, state)
         heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
 
         if failure_type == "rate_limit":
+            note_rate_limit()
             return pause_for_rate_limit(state, state_path, heartbeat_path)
 
         attempt_num += 1

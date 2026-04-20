@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import threading
 import shlex
 import subprocess
@@ -14,6 +15,8 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from common.codex_budget import acquire_slot, get_budget_status, note_rate_limit, release_slot  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,10 +32,11 @@ SUMMARY_SCRIPT = WORK_DIR / "scripts" / "build_verification_summary.py"
 STATE_FILENAME = "state.json"
 
 ACTIVE_LOCK = threading.Lock()
-ACTIVE_RUN_ID: Optional[str] = None
+ACTIVE_RUN_IDS: set[str] = set()
 VERIFY_QUEUE: Deque[Tuple[str, str, str]] = deque()
 QUEUE_CONDITION = threading.Condition()
 WORKER_STARTED = False
+VERIFIER_WORKERS = int(os.getenv("VERIFY_WORKERS", "2"))
 
 
 class VerifyRequest(BaseModel):
@@ -245,6 +249,7 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
     cmd = build_codex_command(run_id=run_id, statement=statement, proof=proof)
 
     started_at = datetime.now(timezone.utc).isoformat()
+    slot_path = acquire_slot(f"verifier:{run_id}")
     try:
         with log_path.open("w", encoding="utf-8") as log_handle:
             log_handle.write(f"started_at_utc: {started_at}\n")
@@ -266,9 +271,14 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
             status_code=504,
             detail=f"codex exec timed out after {exc.timeout} seconds. See log at {log_path}",
         ) from exc
+    finally:
+        release_slot(slot_path)
 
     verification_path = _verification_path(run_id)
     if completed.returncode != 0:
+        log_text = log_path.read_text(encoding="utf-8", errors="ignore")
+        if "429" in log_text or "rate limit" in log_text.lower() or "too many requests" in log_text.lower():
+            note_rate_limit()
         _mark_finished(run_id, statement, "failed", {"exit_code": completed.returncode})
         raise HTTPException(
             status_code=500,
@@ -313,25 +323,23 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
 
 
 def _run_verification_background(run_id: str, statement: str, proof: str) -> None:
-    global ACTIVE_RUN_ID
     try:
         run_codex_verification(run_id=run_id, statement=statement, proof=proof)
     except Exception as exc:  # noqa: BLE001
         _mark_finished(run_id, statement, "failed", {"error": str(exc)})
     finally:
         with ACTIVE_LOCK:
-            ACTIVE_RUN_ID = None
+            ACTIVE_RUN_IDS.discard(run_id)
 
 
 def _worker_loop() -> None:
-    global ACTIVE_RUN_ID
     while True:
         with QUEUE_CONDITION:
             while not VERIFY_QUEUE:
                 QUEUE_CONDITION.wait()
             run_id, statement, proof = VERIFY_QUEUE.popleft()
         with ACTIVE_LOCK:
-            ACTIVE_RUN_ID = run_id
+            ACTIVE_RUN_IDS.add(run_id)
         _run_verification_background(run_id, statement, proof)
 
 
@@ -340,8 +348,9 @@ def _ensure_worker_started() -> None:
     with QUEUE_CONDITION:
         if WORKER_STARTED:
             return
-        thread = threading.Thread(target=_worker_loop, daemon=True)
-        thread.start()
+        for _ in range(max(1, VERIFIER_WORKERS)):
+            thread = threading.Thread(target=_worker_loop, daemon=True)
+            thread.start()
         WORKER_STARTED = True
 
 
@@ -363,13 +372,17 @@ def startup_reconcile_states() -> None:
 @app.get("/health")
 def health() -> Dict[str, str]:
     with ACTIVE_LOCK:
-        active_run_id = ACTIVE_RUN_ID
+        active_run_ids = sorted(ACTIVE_RUN_IDS)
     with QUEUE_CONDITION:
         queue_depth = len(VERIFY_QUEUE)
+    budget = get_budget_status()
     return {
         "status": "ok",
-        "active_run_id": active_run_id or "",
+        "active_run_id": active_run_ids[0] if active_run_ids else "",
+        "active_run_ids": ",".join(active_run_ids),
         "queue_depth": str(queue_depth),
+        "codex_current_limit": str(budget.get("current_limit", "")),
+        "codex_active_slots": str(budget.get("active_slots", "")),
     }
 
 
