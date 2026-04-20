@@ -77,6 +77,29 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def cleanup_orphan_generator_codex() -> None:
+    completed = subprocess.run(
+        [
+            "/bin/zsh",
+            "-lc",
+            "ps -axo pid,ppid,command | awk '/codex exec -C / && /agents\\/generation/ && $2 == 1 {print $1}'",
+        ],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    for raw in completed.stdout.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            os.kill(int(raw), signal.SIGTERM)
+        except Exception:
+            pass
+
+
 def acquire_lock(lock_path: Path) -> None:
     if lock_path.exists():
         try:
@@ -512,6 +535,7 @@ def main() -> int:
                 pass
         prompt = build_prompt(args, problem_id, repair_brief_path, suspect_claims_path, base_extra_prompt)
         write_json(state_path, state)
+        cleanup_orphan_generator_codex()
         exit_code = run_attempt(args, problem_id, attempt_num, log_file, prompt, heartbeat_path, state_path, state)
         log_text = log_file.read_text(encoding="utf-8", errors="ignore")
         failure_type = classify_failure(log_text) if exit_code != 0 else ""
