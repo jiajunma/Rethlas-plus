@@ -16,6 +16,7 @@ import requests
 VERIFY_URL = "http://127.0.0.1:8091"
 DEFAULT_TIMEOUT_SECONDS = 3600
 POLL_INTERVAL_SECONDS = 5
+PROOF_LINE_TARGET = 100
 
 
 @dataclass
@@ -86,12 +87,14 @@ def extract_block_parts(block: str) -> ProofBlock:
 
 def structure_report(blocks: List[ProofBlock]) -> Dict[str, Any]:
     issues: List[Dict[str, str]] = []
+    warnings: List[Dict[str, str]] = []
 
     if not blocks:
         issues.append({"location": "blueprint", "issue": "No top-level proof blocks found."})
         return {
             "summary": "No top-level blocks.",
             "issues": issues,
+            "warnings": warnings,
             "block_titles": [],
         }
 
@@ -100,11 +103,11 @@ def structure_report(blocks: List[ProofBlock]) -> Dict[str, Any]:
             issues.append({"location": block.title, "issue": "Missing `## statement` section."})
         if not block.proof:
             issues.append({"location": block.title, "issue": "Missing `## proof` section."})
-        if block.proof_nonblank_lines > 30:
-            issues.append(
+        if block.proof_nonblank_lines > PROOF_LINE_TARGET:
+            warnings.append(
                 {
                     "location": block.title,
-                    "issue": f"Proof has {block.proof_nonblank_lines} non-blank lines; exceeds 30-line target.",
+                    "issue": f"Proof has {block.proof_nonblank_lines} non-blank lines; exceeds the {PROOF_LINE_TARGET}-line quality target.",
                 }
             )
 
@@ -120,6 +123,7 @@ def structure_report(blocks: List[ProofBlock]) -> Dict[str, Any]:
     return {
         "summary": summary,
         "issues": issues,
+        "warnings": warnings,
         "block_titles": [block.title for block in blocks],
     }
 

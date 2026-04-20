@@ -66,8 +66,9 @@ The proof blueprint must follow a divide-and-conquer structure.
 - Each top-level block must have
   - `## statement`
   - `## proof`
-- Prefer proofs under 30 non-blank lines.
-- If a proof would exceed 30 non-blank lines, split it into additional lemmas or propositions first.
+- Prefer proofs under 100 non-blank lines when practical.
+- Proof length is a quality guideline, not a hard verification condition.
+- If a proof becomes unwieldy, split it into additional lemmas or propositions first.
 - The main theorem should mostly assemble previously proved blocks, not carry the main technical burden by itself.
 
 ## Adaptive Control Loop
