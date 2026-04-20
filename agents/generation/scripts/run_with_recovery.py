@@ -254,7 +254,7 @@ def main() -> int:
         if blueprint.exists():
             try:
                 subprocess.run(
-                    ["python3", str(SECTION_VERIFY), str(blueprint)],
+                    [sys.executable, str(SECTION_VERIFY), str(blueprint)],
                     cwd=REPO_ROOT,
                     check=False,
                 )
