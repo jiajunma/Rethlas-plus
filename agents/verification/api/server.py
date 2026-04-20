@@ -7,9 +7,10 @@ import threading
 import shlex
 import subprocess
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -27,9 +28,11 @@ VERIFICATION_FILENAMES = ("verification.json", "verificationt.json")
 SUMMARY_SCRIPT = WORK_DIR / "scripts" / "build_verification_summary.py"
 STATE_FILENAME = "state.json"
 
-QUEUE_LOCK = threading.Lock()
 ACTIVE_LOCK = threading.Lock()
 ACTIVE_RUN_ID: Optional[str] = None
+VERIFY_QUEUE: Deque[Tuple[str, str, str]] = deque()
+QUEUE_CONDITION = threading.Condition()
+WORKER_STARTED = False
 
 
 class VerifyRequest(BaseModel):
@@ -126,6 +129,42 @@ def _build_summary(run_id: str, statement: str, verification_path: Path) -> None
         cwd=WORK_DIR,
         check=False,
     )
+
+
+def _current_state_status(run_id: str) -> Optional[str]:
+    return _read_state(run_id).get("status")
+
+
+def _wait_for_completion(run_id: str, timeout_seconds: Optional[int]) -> Dict[str, Any]:
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    while True:
+        status = _current_state_status(run_id)
+        if status == "succeeded":
+            verification_path = _verification_path(run_id)
+            if verification_path is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"verification succeeded but no result was found for run_id={run_id}",
+                )
+            return json.loads(verification_path.read_text(encoding="utf-8"))
+        if status == "failed":
+            state = _read_state(run_id)
+            raise HTTPException(
+                status_code=500,
+                detail=state.get("error") or f"verification failed for run_id={run_id}",
+            )
+        if status == "timed_out":
+            state = _read_state(run_id)
+            raise HTTPException(
+                status_code=504,
+                detail=state.get("error") or f"verification timed out for run_id={run_id}",
+            )
+        if deadline is not None and time.monotonic() >= deadline:
+            raise HTTPException(
+                status_code=504,
+                detail=f"timed out waiting for run_id={run_id}",
+            )
+        time.sleep(1)
 
 
 def build_prompt(run_id: str, statement: str, proof: str) -> str:
@@ -264,18 +303,33 @@ def _run_verification_background(run_id: str, statement: str, proof: str) -> Non
             ACTIVE_RUN_ID = None
 
 
-def _start_background_verification(run_id: str, statement: str, proof: str) -> None:
+def _worker_loop() -> None:
     global ACTIVE_RUN_ID
-    with ACTIVE_LOCK:
-        if ACTIVE_RUN_ID is not None:
-            raise HTTPException(status_code=409, detail=f"Verifier busy with run_id={ACTIVE_RUN_ID}")
-        ACTIVE_RUN_ID = run_id
-    thread = threading.Thread(
-        target=_run_verification_background,
-        args=(run_id, statement, proof),
-        daemon=True,
-    )
-    thread.start()
+    while True:
+        with QUEUE_CONDITION:
+            while not VERIFY_QUEUE:
+                QUEUE_CONDITION.wait()
+            run_id, statement, proof = VERIFY_QUEUE.popleft()
+        with ACTIVE_LOCK:
+            ACTIVE_RUN_ID = run_id
+        _run_verification_background(run_id, statement, proof)
+
+
+def _ensure_worker_started() -> None:
+    global WORKER_STARTED
+    with QUEUE_CONDITION:
+        if WORKER_STARTED:
+            return
+        thread = threading.Thread(target=_worker_loop, daemon=True)
+        thread.start()
+        WORKER_STARTED = True
+
+
+def _enqueue_verification(run_id: str, statement: str, proof: str) -> None:
+    _ensure_worker_started()
+    with QUEUE_CONDITION:
+        VERIFY_QUEUE.append((run_id, statement, proof))
+        QUEUE_CONDITION.notify()
 
 
 app = FastAPI(title="Verification Agent API", version="0.1.0")
@@ -283,17 +337,31 @@ app = FastAPI(title="Verification Agent API", version="0.1.0")
 
 @app.get("/health")
 def health() -> Dict[str, str]:
-    return {"status": "ok"}
+    with ACTIVE_LOCK:
+        active_run_id = ACTIVE_RUN_ID
+    with QUEUE_CONDITION:
+        queue_depth = len(VERIFY_QUEUE)
+    return {
+        "status": "ok",
+        "active_run_id": active_run_id or "",
+        "queue_depth": str(queue_depth),
+    }
 
 
 @app.post("/verify")
 def verify(request: VerifyRequest) -> Dict[str, Any]:
     run_id = _allocate_run_id(request.statement)
-    return run_codex_verification(
-        run_id=run_id,
-        statement=request.statement,
-        proof=request.proof,
+    _write_state(
+        run_id,
+        {
+            "run_id": run_id,
+            "status": "queued",
+            "statement": request.statement,
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        },
     )
+    _enqueue_verification(run_id, request.statement, request.proof)
+    return _wait_for_completion(run_id, CODEX_TIMEOUT_SECONDS)
 
 
 @app.post("/verify_async", response_model=VerifyAcceptedResponse)
@@ -308,7 +376,7 @@ def verify_async(request: VerifyRequest) -> VerifyAcceptedResponse:
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
-    _start_background_verification(run_id, request.statement, request.proof)
+    _enqueue_verification(run_id, request.statement, request.proof)
     return VerifyAcceptedResponse(run_id=run_id, status="queued")
 
 
