@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import sys
 import threading
@@ -113,6 +114,41 @@ def _write_verification_payload(run_id: str, payload: Dict[str, Any]) -> Path:
     return verification_path
 
 
+def _is_verification_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    verdict = payload.get("verdict")
+    if not isinstance(verdict, str) or verdict not in {"correct", "wrong"}:
+        return False
+    if not isinstance(payload.get("repair_hints", ""), str):
+        return False
+    report = payload.get("verification_report")
+    if not isinstance(report, dict):
+        return False
+    if not isinstance(report.get("summary", ""), str):
+        return False
+    if not isinstance(report.get("critical_errors", []), list):
+        return False
+    if not isinstance(report.get("gaps", []), list):
+        return False
+    return True
+
+
+def _recover_verification_payload_from_log(log_text: str) -> Optional[Dict[str, Any]]:
+    tail = log_text[-200000:]
+    decoder = json.JSONDecoder()
+    candidate_starts = [m.start() for m in re.finditer(r"\{", tail)]
+    recovered: Optional[Dict[str, Any]] = None
+    for start in candidate_starts:
+        try:
+            payload, _ = decoder.raw_decode(tail[start:])
+        except json.JSONDecodeError:
+            continue
+        if _is_verification_payload(payload):
+            recovered = payload
+    return recovered
+
+
 def _reconcile_stale_states() -> None:
     RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
     for run_dir in RESULTS_ROOT.iterdir():
@@ -196,7 +232,10 @@ def build_prompt(run_id: str, statement: str, proof: str) -> str:
         f"Run_id: {run_id}. "
         f"Statement: {statement}. "
         f"Proof:\n{proof}\n\n"
-        "Use AGENTS.md to verify the above proof for the statement."
+        "Use AGENTS.md to verify the above proof for the statement. "
+        "You must still write results/{run_id}/verification.json if possible, "
+        "but in addition your final response must end with the raw verification JSON object itself, "
+        "with no markdown fence and no extra prose after that JSON."
     )
 
 
@@ -275,8 +314,14 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
         release_slot(slot_path)
 
     verification_path = _verification_path(run_id)
+    log_text = log_path.read_text(encoding="utf-8", errors="ignore")
+    recovered_payload = _recover_verification_payload_from_log(log_text)
     if completed.returncode != 0:
-        log_text = log_path.read_text(encoding="utf-8", errors="ignore")
+        if recovered_payload is not None:
+            written_verification_path = _write_verification_payload(run_id, recovered_payload)
+            _build_summary(run_id, statement, written_verification_path)
+            _mark_finished(run_id, statement, "succeeded", {"verdict": recovered_payload.get("verdict")})
+            return recovered_payload
         if "429" in log_text or "rate limit" in log_text.lower() or "too many requests" in log_text.lower():
             note_rate_limit()
         _mark_finished(run_id, statement, "failed", {"exit_code": completed.returncode})
@@ -289,6 +334,11 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
         )
 
     if verification_path is None:
+        if recovered_payload is not None:
+            written_verification_path = _write_verification_payload(run_id, recovered_payload)
+            _build_summary(run_id, statement, written_verification_path)
+            _mark_finished(run_id, statement, "succeeded", {"verdict": recovered_payload.get("verdict")})
+            return recovered_payload
         _mark_finished(run_id, statement, "failed", {"error": "verification output missing"})
         expected_primary = _results_dir(run_id) / VERIFICATION_FILENAMES[0]
         raise HTTPException(

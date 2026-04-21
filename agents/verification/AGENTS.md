@@ -137,6 +137,8 @@ Target file must be:
 
 - `results/{run_id}/verification.json`
 
+In addition, your final response must include the same verification payload as raw JSON, with no markdown fence and no extra prose after that JSON object.
+
 Stop only after this file is written successfully.
 
 ## Output JSON Contract
