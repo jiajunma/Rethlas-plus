@@ -173,6 +173,7 @@ def build_prompt(
     problem_id: str,
     repair_brief_path: Path,
     suspect_claims_path: Path,
+    theorem_library_path: Path,
     base_extra_prompt: str,
 ) -> str:
     prompt = (
@@ -191,6 +192,13 @@ def build_prompt(
             "\n\nRepeated-failure suspect claims:\n"
             + suspect_claims_path.read_text(encoding="utf-8")
             + "\nIf one of these claims appears false, do not keep patching blindly; either revise the statement or produce counterexample evidence."
+        )
+    if theorem_library_path.exists():
+        prompt += (
+            "\n\nAccepted theorem library:\n"
+            + theorem_library_path.read_text(encoding="utf-8")
+            + "\nTreat every entry with `accepted: true` as an established theorem for this problem. "
+            "Do not discard these results when you reorganize the proof; reuse them as proved lemmas."
         )
     if base_extra_prompt.strip():
         prompt += " " + base_extra_prompt.strip()
@@ -412,6 +420,7 @@ def launch_section_verify_sidecar(
             "1",
             "--max-consecutive-failures",
             "1",
+            "--skip-theorem-library-writes",
             "--output",
             str(live_output_path),
             "--timeout-seconds",
@@ -524,6 +533,7 @@ def main() -> int:
     stale_section_report = results_dir / "section_verification.stale_preclean.json"
     repair_brief_path = results_dir / "repair_brief.json"
     suspect_claims_path = results_dir / "suspect_claims.json"
+    theorem_library_path = results_dir / "theorem_library.json"
     loop_journal_path = results_dir / "loop_journal.jsonl"
     snapshots_dir = results_dir / "attempt_snapshots"
     memory_verification_path = MEMORY_ROOT / problem_id / "verification_reports.jsonl"
@@ -599,7 +609,14 @@ def main() -> int:
         log_file = logs_dir / f"{problem_id}-attempt{attempt_num:02d}.md"
         state["current_log"] = str(log_file)
         state["attempt_started_at_utc"] = utc_now()
-        prompt = build_prompt(args, problem_id, repair_brief_path, suspect_claims_path, base_extra_prompt)
+        prompt = build_prompt(
+            args,
+            problem_id,
+            repair_brief_path,
+            suspect_claims_path,
+            theorem_library_path,
+            base_extra_prompt,
+        )
         write_json(state_path, state)
         cleanup_orphan_generator_codex()
         exit_code = run_attempt(args, problem_id, attempt_num, log_file, prompt, heartbeat_path, state_path, state)
@@ -632,7 +649,7 @@ def main() -> int:
                         "--max-workers",
                         str(args.section_verify_max_workers),
                         "--passes-required",
-                        "1",
+                        "3",
                         "--output",
                         str(section_report),
                         str(blueprint),

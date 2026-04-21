@@ -19,6 +19,8 @@ DEFAULT_TIMEOUT_SECONDS = 3600
 POLL_INTERVAL_SECONDS = 5
 PROOF_LINE_TARGET = 100
 LABEL_PATTERN = re.compile(r"(lem:[A-Za-z0-9_]+|prop:[A-Za-z0-9_]+|thm:[A-Za-z0-9_]+)")
+THEOREM_LIBRARY_FILENAME = "theorem_library.json"
+LEGACY_VERIFIED_CACHE_FILENAME = "section_verified_cache.json"
 
 
 @dataclass
@@ -41,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-workers", type=int, default=2)
     parser.add_argument("--max-consecutive-failures", type=int, default=3)
     parser.add_argument("--passes-required", type=int, default=3)
+    parser.add_argument("--accept-after-verifies", type=int, default=3)
+    parser.add_argument("--skip-theorem-library-writes", action="store_true")
     parser.add_argument("--start-index", type=int, default=1)
     parser.add_argument("--resume-existing", action="store_true")
     return parser.parse_args()
@@ -48,6 +52,11 @@ def parse_args() -> argparse.Namespace:
 
 def compute_input_hash(statement: str, proof_text: str) -> str:
     payload = statement + "\n\n---PROOF---\n\n" + proof_text
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_statement_key(statement: str) -> str:
+    payload = statement
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -262,6 +271,150 @@ def main() -> int:
 
     results_dir = blueprint_path.parent
     output_path = args.output.resolve() if args.output is not None else results_dir / "section_verification.json"
+    theorem_library_path = results_dir / THEOREM_LIBRARY_FILENAME
+    legacy_verified_cache_path = results_dir / LEGACY_VERIFIED_CACHE_FILENAME
+    block_statement_keys = {
+        idx: compute_statement_key(block.statement)
+        for idx, block in enumerate(blocks, start=1)
+    }
+    blocks_by_title = {block.title: (idx, block) for idx, block in enumerate(blocks, start=1)}
+
+    def load_theorem_library() -> Dict[str, Dict[str, Any]]:
+        for path in [theorem_library_path, legacy_verified_cache_path]:
+            if not path.exists():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            accepted = payload.get("accepted", {})
+            if isinstance(accepted, dict):
+                return accepted
+        return {}
+
+    def write_theorem_library(library: Dict[str, Dict[str, Any]]) -> None:
+        payload = {
+            "updated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "accepted": library,
+        }
+        theorem_library_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def bootstrap_theorem_library(library: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        changed = False
+        source_paths = []
+        if output_path.exists():
+            source_paths.append(output_path)
+        snapshots_dir = results_dir / "attempt_snapshots"
+        if snapshots_dir.exists():
+            source_paths.extend(sorted(snapshots_dir.glob("attempt*_section_verification.json")))
+        for source_path in source_paths:
+            try:
+                payload = json.loads(source_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            for pass_report in payload.get("pass_reports", []) or []:
+                if not isinstance(pass_report, dict):
+                    continue
+                pass_index = pass_report.get("pass_index")
+                for report in pass_report.get("section_reports", []) or []:
+                    if not isinstance(report, dict) or classify_report(report) != "correct":
+                        continue
+                    title = report.get("title")
+                    idx = report.get("index")
+                    current: Optional[ProofBlock] = None
+                    current_idx: Optional[int] = None
+                    if isinstance(title, str) and title in blocks_by_title:
+                        current_idx, current = blocks_by_title[title]
+                    elif isinstance(idx, int) and 1 <= idx <= len(blocks):
+                        block = blocks[idx - 1]
+                        if block.title == title:
+                            current_idx, current = idx, block
+                    if current is None or current_idx is None:
+                        continue
+                    statement_key = block_statement_keys[current_idx]
+                    if statement_key in library:
+                        continue
+                    cached_report = dict(report)
+                    cached_report["index"] = current_idx
+                    cached_report["title"] = current.title
+                    cached_report["statement_key"] = statement_key
+                    entry = library.setdefault(
+                        statement_key,
+                        {
+                            "title": current.title,
+                            "kind": current.kind,
+                            "statement": current.statement,
+                            "statement_key": statement_key,
+                            "correct_observation_ids": [],
+                            "correct_verify_count": 0,
+                            "accepted": False,
+                            "accepted_at_utc": "",
+                            "last_verified_at_utc": "",
+                            "source_paths": [],
+                            "report": cached_report,
+                        },
+                    )
+                    observation_id = f"snapshot:{source_path}:pass{pass_index}:block{current_idx}"
+                    if observation_id not in entry["correct_observation_ids"]:
+                        entry["correct_observation_ids"].append(observation_id)
+                    entry["correct_verify_count"] = len(entry["correct_observation_ids"])
+                    entry["accepted"] = entry["correct_verify_count"] >= args.accept_after_verifies
+                    if entry["accepted"] and not entry.get("accepted_at_utc"):
+                        entry["accepted_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    entry["last_verified_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    if str(source_path) not in entry["source_paths"]:
+                        entry["source_paths"].append(str(source_path))
+                    entry["report"] = cached_report
+                    changed = True
+        if changed:
+            write_theorem_library(library)
+        return library
+
+    theorem_library = bootstrap_theorem_library(load_theorem_library())
+    verification_session_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+    def record_verified_report(
+        idx: int,
+        block: ProofBlock,
+        report: Dict[str, Any],
+        source_path: Path,
+        pass_index: int,
+    ) -> None:
+        if args.skip_theorem_library_writes:
+            return
+        statement_key = block_statement_keys[idx]
+        cached_report = dict(report)
+        cached_report["index"] = idx
+        cached_report["title"] = block.title
+        cached_report["statement_key"] = statement_key
+        entry = theorem_library.setdefault(
+            statement_key,
+            {
+                "title": block.title,
+                "kind": block.kind,
+                "statement": block.statement,
+                "statement_key": statement_key,
+                "correct_observation_ids": [],
+                "correct_verify_count": 0,
+                "accepted": False,
+                "accepted_at_utc": "",
+                "last_verified_at_utc": "",
+                "source_paths": [],
+                "report": cached_report,
+            },
+        )
+        observation_id = f"runtime:{verification_session_id}:pass{pass_index}:block{idx}"
+        if observation_id not in entry["correct_observation_ids"]:
+            entry["correct_observation_ids"].append(observation_id)
+        entry["correct_verify_count"] = len(entry["correct_observation_ids"])
+        entry["accepted"] = entry["correct_verify_count"] >= args.accept_after_verifies
+        if entry["accepted"] and not entry.get("accepted_at_utc"):
+            entry["accepted_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        entry["last_verified_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if str(source_path) not in entry["source_paths"]:
+            entry["source_paths"].append(str(source_path))
+        entry["report"] = cached_report
+        write_theorem_library(theorem_library)
 
     def write_snapshot(
         pass_reports: List[Dict[str, Any]],
@@ -311,11 +464,31 @@ def main() -> int:
         }
 
         section_reports: List[Dict[str, Any]] = []
+        accepted_indices = set()
+        for idx, block in enumerate(blocks, start=1):
+            statement_key = block_statement_keys[idx]
+            cached = theorem_library.get(statement_key)
+            if not isinstance(cached, dict):
+                continue
+            if not cached.get("accepted"):
+                continue
+            report = cached.get("report")
+            if not isinstance(report, dict):
+                continue
+            reused = dict(report)
+            reused["index"] = idx
+            reused["title"] = block.title
+            reused["statement_key"] = statement_key
+            reused["reused_from_theorem_library"] = True
+            section_reports.append(reused)
+            accepted_indices.add(idx)
         for report in load_existing_section_reports(pass_index):
             if not isinstance(report, dict):
                 continue
             idx = report.get("index")
             if not isinstance(idx, int):
+                continue
+            if idx in accepted_indices:
                 continue
             if report.get("input_hash") != expected_input_hashes.get(idx):
                 continue
@@ -421,6 +594,7 @@ def main() -> int:
                 if severity == "correct":
                     consecutive_failures = 0
                     completed_indices.add(idx)
+                    record_verified_report(idx, block, report, output_path, pass_index)
                 elif severity == "gap":
                     overall_verdict = "wrong"
                     completed_indices.add(idx)
@@ -476,10 +650,13 @@ def main() -> int:
 
                 for idx in sorted(parallel_reports):
                     report = parallel_reports[idx]
+                    block = blocks[idx - 1]
                     section_reports.append(report)
                     severity = classify_report(report)
                     if severity in {"correct", "gap"}:
                         completed_indices.add(idx)
+                    if severity == "correct":
+                        record_verified_report(idx, block, report, output_path, pass_index)
                     if severity == "gap":
                         if overall_verdict == "correct":
                             overall_verdict = "wrong"
