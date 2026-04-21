@@ -332,8 +332,6 @@ def main() -> int:
                     if current is None or current_idx is None:
                         continue
                     statement_key = block_statement_keys[current_idx]
-                    if statement_key in library:
-                        continue
                     cached_report = dict(report)
                     cached_report["index"] = current_idx
                     cached_report["title"] = current.title
