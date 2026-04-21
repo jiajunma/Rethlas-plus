@@ -260,6 +260,45 @@ def classify_report(report: Dict[str, Any]) -> str:
     return "critical"
 
 
+def dedupe_section_reports(reports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_index: Dict[int, Dict[str, Any]] = {}
+    extras: List[Dict[str, Any]] = []
+    priority = {
+        "correct": 4,
+        "gap": 3,
+        "critical": 2,
+        "infrastructure_error": 1,
+    }
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        idx = report.get("index")
+        if not isinstance(idx, int):
+            extras.append(report)
+            continue
+        existing = by_index.get(idx)
+        if existing is None:
+            by_index[idx] = report
+            continue
+        existing_kind = classify_report(existing)
+        new_kind = classify_report(report)
+        if priority.get(new_kind, 0) >= priority.get(existing_kind, 0):
+            by_index[idx] = report
+    return extras + [by_index[idx] for idx in sorted(by_index)]
+
+
+def upsert_section_report(section_reports: List[Dict[str, Any]], report: Dict[str, Any]) -> None:
+    idx = report.get("index")
+    if not isinstance(idx, int):
+        section_reports.append(report)
+        return
+    for pos, existing in enumerate(section_reports):
+        if isinstance(existing, dict) and existing.get("index") == idx:
+            section_reports[pos] = report
+            return
+    section_reports.append(report)
+
+
 def main() -> int:
     args = parse_args()
     blueprint_path = args.blueprint.resolve()
@@ -302,10 +341,10 @@ def main() -> int:
     def bootstrap_theorem_library(library: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         changed = False
         source_paths = []
-        if output_path.exists():
+        if output_path.exists() and not args.skip_theorem_library_writes:
             source_paths.append(output_path)
         snapshots_dir = results_dir / "attempt_snapshots"
-        if snapshots_dir.exists():
+        if snapshots_dir.exists() and not args.skip_theorem_library_writes:
             source_paths.extend(sorted(snapshots_dir.glob("attempt*_section_verification.json")))
         for source_path in source_paths:
             try:
@@ -447,7 +486,7 @@ def main() -> int:
             if isinstance(item, dict) and item.get("pass_index") == pass_index:
                 reports = item.get("section_reports", [])
                 if isinstance(reports, list):
-                    return reports
+                    return dedupe_section_reports(reports)
         return []
 
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
@@ -478,7 +517,7 @@ def main() -> int:
             reused["title"] = block.title
             reused["statement_key"] = statement_key
             reused["reused_from_theorem_library"] = True
-            section_reports.append(reused)
+            upsert_section_report(section_reports, reused)
             accepted_indices.add(idx)
         for report in load_existing_section_reports(pass_index):
             if not isinstance(report, dict):
@@ -490,7 +529,7 @@ def main() -> int:
                 continue
             if report.get("input_hash") != expected_input_hashes.get(idx):
                 continue
-            section_reports.append(report)
+            upsert_section_report(section_reports, report)
 
         overall_verdict = "correct"
         completed_indices = {
@@ -574,7 +613,7 @@ def main() -> int:
                         "error": str(exc),
                     }
                     overall_verdict = "infrastructure_error"
-                    section_reports.append(report)
+                    upsert_section_report(section_reports, report)
                     write_in_progress()
                     print(
                         f"[verify_sections] block {idx} infrastructure_error: {exc}",
@@ -582,7 +621,7 @@ def main() -> int:
                     )
                     break
 
-                section_reports.append(report)
+                upsert_section_report(section_reports, report)
                 write_in_progress()
                 print(
                     f"[verify_sections] block {idx} verdict: {report['verdict']}",
@@ -649,7 +688,7 @@ def main() -> int:
                 for idx in sorted(parallel_reports):
                     report = parallel_reports[idx]
                     block = blocks[idx - 1]
-                    section_reports.append(report)
+                    upsert_section_report(section_reports, report)
                     severity = classify_report(report)
                     if severity in {"correct", "gap"}:
                         completed_indices.add(idx)
