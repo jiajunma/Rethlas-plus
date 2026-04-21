@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--backoff-seconds", type=int, default=30)
     parser.add_argument("--attempt-timeout-seconds", type=int, default=1800)
     parser.add_argument("--section-verify-timeout-seconds", type=int, default=1200)
+    parser.add_argument("--section-verify-mode", choices=("sequential", "parallel"), default="parallel")
+    parser.add_argument("--section-verify-max-workers", type=int, default=3)
     parser.add_argument("--max-attempts", type=int, default=0, help="0 means unlimited")
     parser.add_argument("--extra-prompt", default="")
     return parser.parse_args()
@@ -389,6 +391,7 @@ def run_monitored_subprocess(
 
 
 def launch_section_verify_sidecar(
+    args: argparse.Namespace,
     blueprint: Path,
     results_dir: Path,
     timeout_seconds: int,
@@ -400,6 +403,10 @@ def launch_section_verify_sidecar(
             sys.executable,
             str(SECTION_VERIFY),
             "--resume-existing",
+            "--mode",
+            args.section_verify_mode,
+            "--max-workers",
+            str(args.section_verify_max_workers),
             "--passes-required",
             "1",
             "--max-consecutive-failures",
@@ -465,6 +472,7 @@ def run_attempt(
                     and verifier_idle(args.verify_url)
                 ):
                     section_sidecar = launch_section_verify_sidecar(
+                        args,
                         REPO_ROOT / "results" / problem_id / "blueprint.md",
                         REPO_ROOT / "results" / problem_id,
                         args.section_verify_timeout_seconds,
@@ -616,6 +624,10 @@ def main() -> int:
                         sys.executable,
                         str(SECTION_VERIFY),
                         "--resume-existing",
+                        "--mode",
+                        args.section_verify_mode,
+                        "--max-workers",
+                        str(args.section_verify_max_workers),
                         str(blueprint),
                     ],
                     cwd=REPO_ROOT,
