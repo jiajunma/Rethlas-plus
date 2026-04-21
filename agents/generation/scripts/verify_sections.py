@@ -299,6 +299,20 @@ def upsert_section_report(section_reports: List[Dict[str, Any]], report: Dict[st
     section_reports.append(report)
 
 
+def dependency_closure(dependencies: Dict[int, List[int]], idx: int) -> List[int]:
+    seen: set[int] = set()
+
+    def dfs(current: int) -> None:
+        for dep in dependencies.get(current, []):
+            if dep in seen:
+                continue
+            seen.add(dep)
+            dfs(dep)
+
+    dfs(idx)
+    return sorted(seen)
+
+
 def main() -> int:
     args = parse_args()
     blueprint_path = args.blueprint.resolve()
@@ -490,16 +504,6 @@ def main() -> int:
         return []
 
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
-        prefix_markdowns: List[str] = []
-        current = []
-        for block in blocks:
-            current.append(block.markdown.rstrip() + "\n")
-            prefix_markdowns.append("\n".join(current).strip() + "\n")
-        expected_input_hashes = {
-            idx: compute_input_hash(block.statement, prefix_markdowns[idx - 1])
-            for idx, block in enumerate(blocks, start=1)
-        }
-
         section_reports: List[Dict[str, Any]] = []
         accepted_indices = set()
         for idx, block in enumerate(blocks, start=1):
@@ -558,6 +562,41 @@ def main() -> int:
 
         dependencies: Dict[int, List[int]] = dependency_data["dependencies"]
 
+        def build_verification_context(idx: int) -> str:
+            parts: List[str] = []
+            for dep_idx in dependency_closure(dependencies, idx):
+                dep_block = blocks[dep_idx - 1]
+                dep_statement_key = block_statement_keys[dep_idx]
+                cached = theorem_library.get(dep_statement_key)
+                if isinstance(cached, dict) and cached.get("accepted"):
+                    parts.append(
+                        "\n".join(
+                            [
+                                dep_block.title,
+                                "",
+                                "## statement",
+                                dep_block.statement.strip(),
+                                "",
+                                "## proof",
+                                "Accepted in theorem library after three successful verifier passes.",
+                            ]
+                        ).strip()
+                        + "\n"
+                    )
+                else:
+                    parts.append(dep_block.markdown.rstrip() + "\n")
+            parts.append(blocks[idx - 1].markdown.rstrip() + "\n")
+            return "\n".join(parts).strip() + "\n"
+
+        verification_contexts = {
+            idx: build_verification_context(idx)
+            for idx in range(1, len(blocks) + 1)
+        }
+        expected_input_hashes = {
+            idx: compute_input_hash(block.statement, verification_contexts[idx])
+            for idx, block in enumerate(blocks, start=1)
+        }
+
         def verify_one(idx: int, block: ProofBlock, proof_text: str, input_hash: str) -> Dict[str, Any]:
             report: Dict[str, Any] = {
                 "index": idx,
@@ -594,7 +633,7 @@ def main() -> int:
                     break
                 idx = min(ready_indices)
                 block = blocks[idx - 1]
-                proof_text = prefix_markdowns[idx - 1]
+                proof_text = verification_contexts[idx]
                 input_hash = expected_input_hashes[idx]
                 print(
                     f"[verify_sections] pass starting block {idx}/{len(blocks)}: {block.title}",
@@ -663,7 +702,7 @@ def main() -> int:
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     for idx in batch_indices:
                         block = blocks[idx - 1]
-                        proof_text = prefix_markdowns[idx - 1]
+                        proof_text = verification_contexts[idx]
                         input_hash = expected_input_hashes[idx]
                         futures[executor.submit(verify_one, idx, block, proof_text, input_hash)] = (idx, block, input_hash)
 
