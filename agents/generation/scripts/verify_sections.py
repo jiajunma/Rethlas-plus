@@ -226,6 +226,24 @@ def call_verifier(
     raise TimeoutError(f"Verifier run {run_id} did not finish within {timeout_seconds} seconds")
 
 
+def classify_report(report: Dict[str, Any]) -> str:
+    verdict = report.get("verdict")
+    if verdict == "correct":
+        return "correct"
+    if verdict == "infrastructure_error":
+        return "infrastructure_error"
+    verification = (report.get("verification") or {}).get("verification_report") or {}
+    critical_errors = verification.get("critical_errors") or []
+    gaps = verification.get("gaps") or []
+    if critical_errors:
+        return "critical"
+    if gaps:
+        return "gap"
+    if report.get("error"):
+        return "infrastructure_error"
+    return "critical"
+
+
 def main() -> int:
     args = parse_args()
     blueprint_path = args.blueprint.resolve()
@@ -278,15 +296,15 @@ def main() -> int:
         section_reports: List[Dict[str, Any]] = [
             report
             for report in load_existing_section_reports(pass_index)
-            if isinstance(report, dict) and report.get("verdict") == "correct"
+            if isinstance(report, dict)
         ]
         overall_verdict = "correct"
-        existing_indices = {
+        completed_indices = {
             report.get("index")
             for report in section_reports
             if isinstance(report, dict)
             and isinstance(report.get("index"), int)
-            and report.get("verdict") == "correct"
+            and classify_report(report) in {"correct", "gap"}
         }
 
         def write_in_progress() -> None:
@@ -336,12 +354,12 @@ def main() -> int:
                 ready_indices = [
                     idx
                     for idx in range(args.start_index, len(blocks) + 1)
-                    if idx not in existing_indices
-                    and all(dep in existing_indices for dep in dependencies.get(idx, []))
+                    if idx not in completed_indices
+                    and all(dep in completed_indices for dep in dependencies.get(idx, []))
                 ]
                 if not ready_indices:
                     remaining_indices = [
-                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in existing_indices
+                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in completed_indices
                     ]
                     if remaining_indices:
                         overall_verdict = "blocked_by_dependency"
@@ -379,27 +397,31 @@ def main() -> int:
                     f"[verify_sections] block {idx} verdict: {report['verdict']}",
                     flush=True,
                 )
-                if report["verdict"] != "correct":
-                    consecutive_failures += 1
+                severity = classify_report(report)
+                if severity == "correct":
+                    consecutive_failures = 0
+                    completed_indices.add(idx)
+                elif severity == "gap":
                     overall_verdict = "wrong"
+                    completed_indices.add(idx)
+                else:
+                    consecutive_failures += 1
+                    overall_verdict = "infrastructure_error" if severity == "infrastructure_error" else "wrong"
                     if consecutive_failures >= args.max_consecutive_failures:
                         overall_verdict = "return_to_generator"
                         break
-                else:
-                    consecutive_failures = 0
-                    existing_indices.add(idx)
         else:
             max_workers = max(1, args.max_workers)
             while True:
                 ready_indices = [
                     idx
                     for idx in range(args.start_index, len(blocks) + 1)
-                    if idx not in existing_indices
-                    and all(dep in existing_indices for dep in dependencies.get(idx, []))
+                    if idx not in completed_indices
+                    and all(dep in completed_indices for dep in dependencies.get(idx, []))
                 ]
                 if not ready_indices:
                     remaining_indices = [
-                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in existing_indices
+                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in completed_indices
                     ]
                     if remaining_indices and overall_verdict == "correct":
                         overall_verdict = "blocked_by_dependency"
@@ -433,11 +455,18 @@ def main() -> int:
                 for idx in sorted(parallel_reports):
                     report = parallel_reports[idx]
                     section_reports.append(report)
-                    if report.get("verdict") == "correct":
-                        existing_indices.add(idx)
-                    elif overall_verdict == "correct":
-                        overall_verdict = "wrong"
-                if overall_verdict not in {"correct"}:
+                    severity = classify_report(report)
+                    if severity in {"correct", "gap"}:
+                        completed_indices.add(idx)
+                    if severity == "gap":
+                        if overall_verdict == "correct":
+                            overall_verdict = "wrong"
+                    elif severity == "critical":
+                        if overall_verdict == "correct":
+                            overall_verdict = "wrong"
+                    elif severity == "infrastructure_error":
+                        overall_verdict = "infrastructure_error"
+                if overall_verdict in {"infrastructure_error", "return_to_generator"}:
                     break
 
         return {
