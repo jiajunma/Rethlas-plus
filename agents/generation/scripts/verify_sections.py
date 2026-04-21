@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import time
@@ -33,6 +34,7 @@ class ProofBlock:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("blueprint", type=Path)
+    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--verify-url", default=VERIFY_URL)
     parser.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
@@ -42,6 +44,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--start-index", type=int, default=1)
     parser.add_argument("--resume-existing", action="store_true")
     return parser.parse_args()
+
+
+def compute_input_hash(statement: str, proof_text: str) -> str:
+    payload = statement + "\n\n---PROOF---\n\n" + proof_text
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def split_top_level_blocks(text: str) -> List[str]:
@@ -254,7 +261,7 @@ def main() -> int:
     dependency_data = build_dependency_data(blocks)
 
     results_dir = blueprint_path.parent
-    output_path = results_dir / "section_verification.json"
+    output_path = args.output.resolve() if args.output is not None else results_dir / "section_verification.json"
 
     def write_snapshot(
         pass_reports: List[Dict[str, Any]],
@@ -293,11 +300,27 @@ def main() -> int:
         return []
 
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
-        section_reports: List[Dict[str, Any]] = [
-            report
-            for report in load_existing_section_reports(pass_index)
-            if isinstance(report, dict)
-        ]
+        prefix_markdowns: List[str] = []
+        current = []
+        for block in blocks:
+            current.append(block.markdown.rstrip() + "\n")
+            prefix_markdowns.append("\n".join(current).strip() + "\n")
+        expected_input_hashes = {
+            idx: compute_input_hash(block.statement, prefix_markdowns[idx - 1])
+            for idx, block in enumerate(blocks, start=1)
+        }
+
+        section_reports: List[Dict[str, Any]] = []
+        for report in load_existing_section_reports(pass_index):
+            if not isinstance(report, dict):
+                continue
+            idx = report.get("index")
+            if not isinstance(idx, int):
+                continue
+            if report.get("input_hash") != expected_input_hashes.get(idx):
+                continue
+            section_reports.append(report)
+
         overall_verdict = "correct"
         completed_indices = {
             report.get("index")
@@ -323,20 +346,15 @@ def main() -> int:
                 "overall_verdict": "wrong",
             }
 
-        prefix_markdowns: List[str] = []
-        current = []
-        for block in blocks:
-            current.append(block.markdown.rstrip() + "\n")
-            prefix_markdowns.append("\n".join(current).strip() + "\n")
-
         dependencies: Dict[int, List[int]] = dependency_data["dependencies"]
 
-        def verify_one(idx: int, block: ProofBlock, proof_text: str) -> Dict[str, Any]:
+        def verify_one(idx: int, block: ProofBlock, proof_text: str, input_hash: str) -> Dict[str, Any]:
             report: Dict[str, Any] = {
                 "index": idx,
                 "title": block.title,
                 "kind": block.kind,
                 "proof_nonblank_lines": block.proof_nonblank_lines,
+                "input_hash": input_hash,
             }
             verifier_payload = call_verifier(
                 verify_url=args.verify_url,
@@ -367,18 +385,20 @@ def main() -> int:
                 idx = min(ready_indices)
                 block = blocks[idx - 1]
                 proof_text = prefix_markdowns[idx - 1]
+                input_hash = expected_input_hashes[idx]
                 print(
                     f"[verify_sections] pass starting block {idx}/{len(blocks)}: {block.title}",
                     flush=True,
                 )
                 try:
-                    report = verify_one(idx, block, proof_text)
+                    report = verify_one(idx, block, proof_text, input_hash)
                 except Exception as exc:  # noqa: BLE001
                     report = {
                         "index": idx,
                         "title": block.title,
                         "kind": block.kind,
                         "proof_nonblank_lines": block.proof_nonblank_lines,
+                        "input_hash": input_hash,
                         "verdict": "infrastructure_error",
                         "error": str(exc),
                     }
@@ -433,11 +453,12 @@ def main() -> int:
                     for idx in batch_indices:
                         block = blocks[idx - 1]
                         proof_text = prefix_markdowns[idx - 1]
-                        futures[executor.submit(verify_one, idx, block, proof_text)] = (idx, block)
+                        input_hash = expected_input_hashes[idx]
+                        futures[executor.submit(verify_one, idx, block, proof_text, input_hash)] = (idx, block, input_hash)
 
                     parallel_reports: Dict[int, Dict[str, Any]] = {}
                     for future in as_completed(futures):
-                        idx, block = futures[future]
+                        idx, block, input_hash = futures[future]
                         try:
                             parallel_reports[idx] = future.result()
                         except Exception as exc:  # noqa: BLE001
@@ -446,6 +467,7 @@ def main() -> int:
                                 "title": block.title,
                                 "kind": block.kind,
                                 "proof_nonblank_lines": block.proof_nonblank_lines,
+                                "input_hash": input_hash,
                                 "verdict": "infrastructure_error",
                                 "error": str(exc),
                             }

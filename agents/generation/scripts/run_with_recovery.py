@@ -397,6 +397,7 @@ def launch_section_verify_sidecar(
     timeout_seconds: int,
 ) -> subprocess.Popen[str]:
     log_path = results_dir / "section_verify_live.log"
+    live_output_path = results_dir / "section_verification.live.json"
     handle = log_path.open("w", encoding="utf-8")
     return subprocess.Popen(
         [
@@ -411,6 +412,8 @@ def launch_section_verify_sidecar(
             "1",
             "--max-consecutive-failures",
             "1",
+            "--output",
+            str(live_output_path),
             "--timeout-seconds",
             str(timeout_seconds),
             str(blueprint),
@@ -628,6 +631,10 @@ def main() -> int:
                         args.section_verify_mode,
                         "--max-workers",
                         str(args.section_verify_max_workers),
+                        "--passes-required",
+                        "1",
+                        "--output",
+                        str(section_report),
                         str(blueprint),
                     ],
                     cwd=REPO_ROOT,
