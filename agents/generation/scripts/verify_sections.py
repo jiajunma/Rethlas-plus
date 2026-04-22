@@ -64,7 +64,8 @@ def compute_statement_key(statement: str) -> str:
 
 
 def compute_verification_key(statement: str, dependency_context: str, proof: str) -> str:
-    return compute_input_hash(statement, dependency_context + "\n\n" + proof)
+    payload = statement + "\n\n---CONTEXT---\n\n" + dependency_context + "\n\n---PROOF---\n\n" + proof
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def split_top_level_blocks(text: str) -> List[str]:
