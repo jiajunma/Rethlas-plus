@@ -347,6 +347,7 @@ def main() -> int:
     theorem_library_path = results_dir / THEOREM_LIBRARY_FILENAME
     verification_cache_path = results_dir / VERIFICATION_CACHE_FILENAME
     legacy_verified_cache_path = results_dir / LEGACY_VERIFIED_CACHE_FILENAME
+    verifier_results_root = Path(__file__).resolve().parents[2] / "verification" / "results"
     block_statement_keys = {
         idx: compute_statement_key(block.statement)
         for idx, block in enumerate(blocks, start=1)
@@ -694,6 +695,54 @@ def main() -> int:
                     return dedupe_section_reports(reports)
         return []
 
+    def recover_completed_verifier_reports(verification_keys_by_idx: Dict[int, str]) -> List[Dict[str, Any]]:
+        if not verifier_results_root.exists():
+            return []
+        target_by_key = {
+            verification_keys_by_idx[idx]: idx
+            for idx in range(args.start_index, len(blocks) + 1)
+        }
+        recovered: Dict[int, Dict[str, Any]] = {}
+        for run_dir in sorted(
+            [p for p in verifier_results_root.iterdir() if p.is_dir()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ):
+            state_path = run_dir / "state.json"
+            verification_path = run_dir / "verification.json"
+            if not state_path.exists() or not verification_path.exists():
+                continue
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                verification_payload = json.loads(verification_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(state, dict) or not isinstance(verification_payload, dict):
+                continue
+            if state.get("status") != "succeeded":
+                continue
+            verification_key = str(state.get("verification_key") or "")
+            idx = target_by_key.get(verification_key)
+            if idx is None or idx in recovered:
+                continue
+            block = blocks[idx - 1]
+            recovered[idx] = {
+                "index": idx,
+                "title": block.title,
+                "kind": block.kind,
+                "proof_nonblank_lines": block.proof_nonblank_lines,
+                "input_hash": verification_key,
+                "verification_key": verification_key,
+                "dependency_indices": dependencies.get(idx, []),
+                "dependency_titles": [blocks[dep - 1].title for dep in dependencies.get(idx, [])],
+                "observed_at_utc": str(state.get("updated_at_utc") or ""),
+                "run_id": run_dir.name,
+                "verification": verification_payload,
+                "verdict": verification_payload.get("verdict", "wrong"),
+                "recovered_from_verifier_results": True,
+            }
+        return [recovered[idx] for idx in sorted(recovered)]
+
     def build_dependency_context(idx: int) -> str:
         dependency_cards: List[tuple[str, str]] = []
         for dep_idx in closure_indices_by_idx[idx]:
@@ -840,6 +889,14 @@ def main() -> int:
             if report.get("verification_key") != verification_keys_by_idx.get(idx) and report.get("input_hash") != verification_keys_by_idx.get(idx):
                 continue
             upsert_section_report(section_reports, report)
+        for report in recover_completed_verifier_reports(verification_keys_by_idx):
+            idx = report.get("index")
+            if not isinstance(idx, int) or idx in initial_accepted_indices:
+                continue
+            upsert_section_report(section_reports, report)
+            update_cache_after_report(idx, blocks[idx - 1], verification_keys_by_idx[idx], report, output_path, pass_index)
+            reconcile_promotions_from_cache(output_path)
+            maybe_promote_to_accepted(idx, blocks[idx - 1], verification_keys_by_idx[idx], output_path)
 
         overall_verdict = "correct"
         accepted_indices, provisional_indices, failure_roots, invalidated_indices, completed_indices = compute_session_sets(section_reports)

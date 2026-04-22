@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import atexit
+import hashlib
 import re
 import signal
 import subprocess
@@ -26,6 +27,8 @@ LOGS_ROOT = REPO_ROOT / "logs"
 MEMORY_ROOT = REPO_ROOT / "memory"
 SECTION_VERIFY = REPO_ROOT / "scripts" / "verify_sections.py"
 THEOREM_LIBRARY_LINT = REPO_ROOT / "scripts" / "lint_theorem_library.py"
+VERIFIER_RESULTS_ROOT = REPO_ROOT.parent / "verification" / "results"
+LABEL_PATTERN = re.compile(r"(lem:[A-Za-z0-9_]+|prop:[A-Za-z0-9_]+|thm:[A-Za-z0-9_]+)")
 
 
 def utc_now() -> str:
@@ -51,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--verify-url", default="http://127.0.0.1:8091/health")
     parser.add_argument("--backoff-seconds", type=int, default=30)
     parser.add_argument("--attempt-timeout-seconds", type=int, default=1800)
-    parser.add_argument("--section-verify-timeout-seconds", type=int, default=1200)
+    parser.add_argument("--section-verify-timeout-seconds", type=int, default=0)
     parser.add_argument("--section-verify-mode", choices=("sequential", "parallel"), default="parallel")
     parser.add_argument("--section-verify-max-workers", type=int, default=3)
     parser.add_argument("--max-attempts", type=int, default=0, help="0 means unlimited")
@@ -215,9 +218,197 @@ def should_resume_section_verification(section_report_path: Path) -> bool:
     return "wrong" not in statuses and any(status in {"ready", "provisional", "invalidated"} for status in statuses)
 
 
+def split_top_level_blocks(text: str) -> List[str]:
+    lines = text.splitlines()
+    starts: List[int] = []
+    for i, line in enumerate(lines):
+        if line.startswith("# "):
+            starts.append(i)
+    if not starts:
+        return []
+    starts.append(len(lines))
+    return ["\n".join(lines[a:b]).strip() + "\n" for a, b in zip(starts, starts[1:])]
+
+
+def extract_blueprint_block(block: str) -> Dict[str, Any]:
+    lines = block.splitlines()
+    title = lines[0].strip() if lines else ""
+    statement_match = re.search(r"^## statement\s*$", block, flags=re.MULTILINE)
+    proof_match = re.search(r"^## proof\s*$", block, flags=re.MULTILINE)
+    statement = ""
+    proof = ""
+    if statement_match and proof_match and statement_match.end() <= proof_match.start():
+        statement = block[statement_match.end():proof_match.start()].strip()
+        proof = block[proof_match.end():].strip()
+    label_match = LABEL_PATTERN.search(title)
+    label = label_match.group(1) if label_match else ""
+    return {
+        "title": title,
+        "statement": statement,
+        "proof": proof,
+        "label": label,
+    }
+
+
+def build_current_blueprint_verification_map(blueprint_path: Path, theorem_library_path: Path) -> Dict[str, Dict[str, Any]]:
+    if not blueprint_path.exists():
+        return {}
+    blocks = [extract_blueprint_block(block) for block in split_top_level_blocks(blueprint_path.read_text(encoding="utf-8"))]
+    theorem_library = read_json(theorem_library_path) if theorem_library_path.exists() else {}
+    accepted_statement_keys = {
+        key
+        for key, value in ((theorem_library or {}).get("accepted") or {}).items()
+        if isinstance(value, dict) and value.get("accepted") is True
+    }
+    labels_by_index: Dict[int, str] = {}
+    indices_by_label: Dict[str, int] = {}
+    for idx, block in enumerate(blocks, start=1):
+        label = block.get("label") or ""
+        if label:
+            labels_by_index[idx] = label
+            indices_by_label[label] = idx
+
+    dependencies: Dict[int, List[int]] = {}
+    for idx, block in enumerate(blocks, start=1):
+        refs = sorted(set(LABEL_PATTERN.findall(block.get("proof", ""))))
+        dependencies[idx] = sorted(
+            {
+                indices_by_label[ref]
+                for ref in refs
+                if ref in indices_by_label and indices_by_label[ref] != idx
+            }
+        )
+
+    def statement_key(statement: str) -> str:
+        return hashlib.sha256(statement.encode("utf-8")).hexdigest()
+
+    def closure(idx: int) -> List[int]:
+        seen: set[int] = set()
+
+        def dfs(current: int) -> None:
+            for dep in dependencies.get(current, []):
+                if dep in seen:
+                    continue
+                seen.add(dep)
+                dfs(dep)
+
+        dfs(idx)
+        return sorted(seen)
+
+    current: Dict[str, Dict[str, Any]] = {}
+    for idx, block in enumerate(blocks, start=1):
+        if statement_key(block.get("statement", "")) in accepted_statement_keys:
+            continue
+        dependency_cards = []
+        for dep_idx in closure(idx):
+            dep_block = blocks[dep_idx - 1]
+            dependency_cards.append(
+                (
+                    dep_block.get("label") or dep_block.get("title") or "",
+                    "\n".join(
+                        [
+                            dep_block.get("title", ""),
+                            "",
+                            "## statement",
+                            dep_block.get("statement", "").strip(),
+                        ]
+                    ).strip(),
+                )
+            )
+        dependency_cards.sort(key=lambda item: item[0])
+        dependency_context = "\n\n".join(card for _, card in dependency_cards).strip()
+        verification_key = hashlib.sha256(
+            (
+                block.get("statement", "")
+                + "\n\n---PROOF---\n\n"
+                + dependency_context
+                + "\n\n"
+                + block.get("proof", "")
+            ).encode("utf-8")
+        ).hexdigest()
+        current[verification_key] = {
+            "index": idx,
+            "title": block.get("title", ""),
+            "statement": block.get("statement", ""),
+            "proof": block.get("proof", ""),
+            "verification_key": verification_key,
+        }
+    return current
+
+
+def latest_matching_wrong_verifier_result(blueprint_path: Path, theorem_library_path: Path) -> Optional[Dict[str, Any]]:
+    current_map = build_current_blueprint_verification_map(blueprint_path, theorem_library_path)
+    if not current_map or not VERIFIER_RESULTS_ROOT.exists():
+        return None
+    for run_dir in sorted(
+        [p for p in VERIFIER_RESULTS_ROOT.iterdir() if p.is_dir()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        state_path = run_dir / "state.json"
+        verification_path = run_dir / "verification.json"
+        if not state_path.exists() or not verification_path.exists():
+            continue
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            verification_payload = json.loads(verification_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        verification_key = str(state.get("verification_key") or "")
+        if verification_key not in current_map:
+            continue
+        if state.get("status") != "succeeded":
+            continue
+        if verification_payload.get("verdict") != "wrong":
+            continue
+        verification_report = verification_payload.get("verification_report") or {}
+        if not ((verification_report.get("critical_errors") or []) or (verification_report.get("gaps") or [])):
+            continue
+        matched = dict(current_map[verification_key])
+        matched.update(
+            {
+                "run_id": run_dir.name,
+                "verification": verification_payload,
+            }
+        )
+        return matched
+    return None
+
+
+def latest_current_wrong_section_report(section_report_path: Path) -> Optional[Dict[str, Any]]:
+    payload = read_json(section_report_path) if section_report_path.exists() else {}
+    if not payload:
+        return None
+    pass_reports = payload.get("pass_reports") or []
+    latest = pass_reports[-1] if isinstance(pass_reports, list) and pass_reports else {}
+    if not isinstance(latest, dict):
+        return None
+    section_reports = latest.get("section_reports") or []
+    failing_candidates = [
+        r for r in section_reports
+        if isinstance(r, dict) and r.get("verdict") not in {None, "correct"}
+    ]
+    if not failing_candidates:
+        return None
+
+    def failing_priority(report: Dict[str, Any]) -> tuple[int, int]:
+        verification = (report.get("verification") or {}).get("verification_report") or {}
+        has_math_issue = bool((verification.get("critical_errors") or []) or (verification.get("gaps") or []))
+        idx = int(report.get("index") or 0)
+        return (0 if has_math_issue else 1, -idx)
+
+    chosen = sorted(failing_candidates, key=failing_priority)[0]
+    verification = chosen.get("verification") or {}
+    verification_report = verification.get("verification_report") or {}
+    if not ((verification_report.get("critical_errors") or []) or (verification_report.get("gaps") or [])):
+        return None
+    return chosen
+
+
 def build_prompt(
     args: argparse.Namespace,
     problem_id: str,
+    blueprint_path: Path,
     section_report_path: Path,
     repair_brief_path: Path,
     suspect_claims_path: Path,
@@ -258,6 +449,9 @@ def build_prompt(
     }
     section_snapshot = latest_section_snapshot(section_report_path)
     current_states_by_title = section_snapshot.get("states_by_title") or {}
+    current_wrong_report = latest_current_wrong_section_report(section_report_path)
+    if current_wrong_report is None:
+        current_wrong_report = latest_matching_wrong_verifier_result(blueprint_path, theorem_library_path)
     include_repair_brief = True
     if repair_brief_path.exists():
         try:
@@ -275,12 +469,29 @@ def build_prompt(
             )
             if not currently_wrong:
                 include_repair_brief = False
+    if current_wrong_report is not None:
+        include_repair_brief = False
 
     prompt = (
         f"Use AGENTS.md exactly to solve the math problem in {args.problem_file}. "
         f"If memory/{problem_id}/ or results/{problem_id}/ already contain artifacts from an earlier run, "
         "resume from them instead of restarting from scratch. Preserve and build on prior memory, failed paths, and proof drafts."
     )
+    if current_wrong_report is not None:
+        verification = current_wrong_report.get("verification") or {}
+        verifier_payload = {
+            "title": current_wrong_report.get("title"),
+            "run_id": current_wrong_report.get("run_id"),
+            "verification_key": current_wrong_report.get("verification_key"),
+            "verdict": current_wrong_report.get("verdict"),
+            "verification_report": verification.get("verification_report") or {},
+            "repair_hints": verification.get("repair_hints") or "",
+        }
+        prompt += (
+            "\n\nCurrent verifier result for the active failing theorem:\n"
+            + json.dumps(verifier_payload, ensure_ascii=False, indent=2)
+            + "\nUse this verifier result directly as the repair target. Treat it as the primary source of truth for the current failing theorem."
+        )
     if repair_brief_path.exists() and include_repair_brief:
         prompt += (
             "\n\nCurrent repair brief from the latest verification failure:\n"
@@ -342,7 +553,18 @@ def build_repair_brief(
             pass_reports = payload.get("pass_reports") or []
             latest = pass_reports[-1] if pass_reports else {}
             section_reports = latest.get("section_reports") or []
-            failing = next((r for r in section_reports if r.get("verdict") not in {None, "correct"}), None)
+            failing_candidates = [
+                r for r in section_reports
+                if isinstance(r, dict) and r.get("verdict") not in {None, "correct"}
+            ]
+
+            def failing_priority(report: Dict[str, Any]) -> tuple[int, int]:
+                verification = (report.get("verification") or {}).get("verification_report") or {}
+                has_math_issue = bool((verification.get("critical_errors") or []) or (verification.get("gaps") or []))
+                idx = int(report.get("index") or 0)
+                return (0 if has_math_issue else 1, -idx)
+
+            failing = sorted(failing_candidates, key=failing_priority)[0] if failing_candidates else None
             if issues or failing:
                 brief: Dict[str, Any] = {
                     "created_at_utc": utc_now(),
@@ -530,7 +752,7 @@ def run_monitored_subprocess(
             try:
                 return proc.wait(timeout=15)
             except subprocess.TimeoutExpired:
-                if time.monotonic() - start >= timeout_seconds:
+                if timeout_seconds > 0 and time.monotonic() - start >= timeout_seconds:
                     handle.write(f"\n[runner] {phase} timed out after {timeout_seconds} seconds\n")
                     handle.flush()
                     os.killpg(proc.pid, signal.SIGINT)
@@ -586,7 +808,7 @@ def run_attempt(
                 try:
                     return proc.wait(timeout=15)
                 except subprocess.TimeoutExpired:
-                    if time.monotonic() - start >= args.attempt_timeout_seconds:
+                    if args.attempt_timeout_seconds > 0 and time.monotonic() - start >= args.attempt_timeout_seconds:
                         handle.write(f"\n[runner] attempt timed out after {args.attempt_timeout_seconds} seconds\n")
                         handle.flush()
                         os.killpg(proc.pid, signal.SIGINT)
@@ -810,6 +1032,7 @@ def main() -> int:
         prompt = build_prompt(
             args,
             problem_id,
+            blueprint,
             section_report,
             repair_brief_path,
             suspect_claims_path,
