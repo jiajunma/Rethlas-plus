@@ -865,6 +865,29 @@ def main() -> int:
                 )
             return states
 
+        def verification_candidates(
+            accepted_indices: set[int],
+            provisional_indices: set[int],
+            failure_roots: set[int],
+            invalidated_indices: set[int],
+            completed_indices: set[int],
+        ) -> List[int]:
+            candidates = [
+                idx
+                for idx in range(args.start_index, len(blocks) + 1)
+                if idx not in accepted_indices
+                and idx not in failure_roots
+                and idx not in invalidated_indices
+                and all(dep in completed_indices for dep in dependencies.get(idx, []))
+            ]
+            candidates.sort(
+                key=lambda idx: (
+                    -current_pair_streak(verification_keys_by_idx[idx]),
+                    idx,
+                )
+            )
+            return candidates
+
         section_reports: List[Dict[str, Any]] = []
         for idx in initial_accepted_indices:
             block = blocks[idx - 1]
@@ -995,20 +1018,25 @@ def main() -> int:
         if args.mode == "sequential":
             consecutive_failures = 0
             while True:
-                ready_indices = [
-                    idx
-                    for idx in range(args.start_index, len(blocks) + 1)
-                    if idx not in completed_indices
-                    and all(dep in completed_indices for dep in dependencies.get(idx, []))
-                ]
-                if not ready_indices:
+                candidate_indices = verification_candidates(
+                    accepted_indices,
+                    provisional_indices,
+                    failure_roots,
+                    invalidated_indices,
+                    completed_indices,
+                )
+                if not candidate_indices:
                     remaining_indices = [
-                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in completed_indices
+                        idx
+                        for idx in range(args.start_index, len(blocks) + 1)
+                        if idx not in accepted_indices
+                        and idx not in failure_roots
+                        and idx not in invalidated_indices
                     ]
                     if remaining_indices:
                         overall_verdict = "blocked_by_dependency"
                     break
-                idx = min(ready_indices)
+                idx = candidate_indices[0]
                 block = blocks[idx - 1]
                 dependency_context = dependency_contexts[idx]
                 input_hash = verification_keys_by_idx[idx]
@@ -1070,21 +1098,26 @@ def main() -> int:
         else:
             max_workers = max(1, args.max_workers)
             while True:
-                ready_indices = [
-                    idx
-                    for idx in range(args.start_index, len(blocks) + 1)
-                    if idx not in completed_indices
-                    and all(dep in completed_indices for dep in dependencies.get(idx, []))
-                ]
-                if not ready_indices:
+                candidate_indices = verification_candidates(
+                    accepted_indices,
+                    provisional_indices,
+                    failure_roots,
+                    invalidated_indices,
+                    completed_indices,
+                )
+                if not candidate_indices:
                     remaining_indices = [
-                        idx for idx in range(args.start_index, len(blocks) + 1) if idx not in completed_indices
+                        idx
+                        for idx in range(args.start_index, len(blocks) + 1)
+                        if idx not in accepted_indices
+                        and idx not in failure_roots
+                        and idx not in invalidated_indices
                     ]
                     if remaining_indices and overall_verdict == "correct":
                         overall_verdict = "blocked_by_dependency"
                     break
 
-                batch_indices = ready_indices[:max_workers]
+                batch_indices = candidate_indices[:max_workers]
                 futures = {}
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     for idx in batch_indices:
