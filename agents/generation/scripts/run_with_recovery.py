@@ -340,6 +340,7 @@ def latest_matching_wrong_verifier_result(blueprint_path: Path, theorem_library_
     current_map = build_current_blueprint_verification_map(blueprint_path, theorem_library_path)
     if not current_map or not VERIFIER_RESULTS_ROOT.exists():
         return None
+    seen_completed_keys: set[str] = set()
     for run_dir in sorted(
         [p for p in VERIFIER_RESULTS_ROOT.iterdir() if p.is_dir()],
         key=lambda p: p.stat().st_mtime,
@@ -359,6 +360,9 @@ def latest_matching_wrong_verifier_result(blueprint_path: Path, theorem_library_
             continue
         if state.get("status") != "succeeded":
             continue
+        if verification_key in seen_completed_keys:
+            continue
+        seen_completed_keys.add(verification_key)
         if verification_payload.get("verdict") != "wrong":
             continue
         verification_report = verification_payload.get("verification_report") or {}
@@ -960,7 +964,28 @@ def main() -> int:
             time.sleep(args.backoff_seconds)
             continue
 
-        if blueprint.exists() and should_resume_section_verification(section_report):
+        current_matching_wrong = (
+            latest_matching_wrong_verifier_result(blueprint, theorem_library_path)
+            if blueprint.exists()
+            else None
+        )
+
+        if current_matching_wrong is not None:
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "current_wrong_result_detected",
+                    "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
+                    "title": current_matching_wrong.get("title"),
+                    "run_id": current_matching_wrong.get("run_id"),
+                    "verification_key": current_matching_wrong.get("verification_key"),
+                },
+            )
+
+        if blueprint.exists() and current_matching_wrong is None and should_resume_section_verification(section_report):
             state["status"] = "running"
             state["runner_pid"] = os.getpid()
             state["current_phase"] = "section_verifying"
