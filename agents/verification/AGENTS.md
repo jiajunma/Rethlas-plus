@@ -75,14 +75,20 @@ For each statement/subproof in the markdown, in textual order:
    - correct theorem application,
    - missing assumptions,
    - unjustified jumps / hand-wavy reasoning.
-3. Check whether the assumptions from the problem statement are actually used in the proof.
-4. If some assumptions appear unused, think carefully before classifying them:
+3. Check dependency closure explicitly:
+   - if the current argument invokes an earlier lemma/proposition/theorem, verify that the needed dependency actually appears in the supplied proof context, either as a full earlier block or as an explicit accepted-theorem stub;
+   - if a needed dependency is missing from the supplied context, record at least a gap, and record a critical error if the argument materially relies on that missing statement.
+4. Check faithful use of dependent statements:
+   - compare the way the current proof uses each cited dependency with the actual statement text of that dependency as it appears in the supplied context;
+   - do not allow the proof to use a stronger version, an extra conclusion, or an unstated corollary unless that stronger claim is separately justified in the supplied context.
+5. Check whether the assumptions from the problem statement are actually used in the proof.
+6. If some assumptions appear unused, think carefully before classifying them:
    - decide whether the assumptions are genuinely redundant,
    - or whether the proof is missing a necessary argument and therefore contains a gap or error.
-5. Record all findings using:
+7. Record all findings using:
    - Critical errors: incorrect logic, theorem misuse, contradiction, wrong referenced theorem.
    - Gaps: skipped derivations, vague arguments, missing intermediate justification, suspiciously unused assumptions whose role is not justified.
-6. Append structured records to `statement_checks`.
+8. Append structured records to `statement_checks`.
 
 ### Step 3: External reference checking
 

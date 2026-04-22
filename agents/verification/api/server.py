@@ -233,6 +233,8 @@ def build_prompt(run_id: str, statement: str, proof: str) -> str:
         f"Statement: {statement}. "
         f"Proof:\n{proof}\n\n"
         "Use AGENTS.md to verify the above proof for the statement. "
+        "Be explicit about dependency closure: check whether every depended-on theorem actually appears in the supplied proof context, "
+        "and whether the current proof uses only what those dependent statements literally assert. "
         "You must still write results/{run_id}/verification.json if possible, "
         "but in addition your final response must end with the raw verification JSON object itself, "
         "with no markdown fence and no extra prose after that JSON."
