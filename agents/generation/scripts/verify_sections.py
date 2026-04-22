@@ -773,6 +773,7 @@ def main() -> int:
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
 
         initial_accepted_indices = accepted_indices_set()
+        deferred_indices: set[int] = set()
 
         def compute_failure_roots(section_reports: List[Dict[str, Any]]) -> set[int]:
             roots: set[int] = set()
@@ -876,6 +877,7 @@ def main() -> int:
                 idx
                 for idx in range(args.start_index, len(blocks) + 1)
                 if idx not in accepted_indices
+                and idx not in deferred_indices
                 and idx not in failure_roots
                 and idx not in invalidated_indices
                 and all(dep in completed_indices for dep in dependencies.get(idx, []))
@@ -1034,7 +1036,11 @@ def main() -> int:
                         and idx not in invalidated_indices
                     ]
                     if remaining_indices:
-                        overall_verdict = "blocked_by_dependency"
+                        overall_verdict = (
+                            "infrastructure_error"
+                            if any(idx in deferred_indices for idx in remaining_indices)
+                            else "blocked_by_dependency"
+                        )
                     break
                 idx = candidate_indices[0]
                 block = blocks[idx - 1]
@@ -1087,7 +1093,10 @@ def main() -> int:
                     accepted_indices, provisional_indices, failure_roots, invalidated_indices, completed_indices = compute_session_sets(section_reports)
                 else:
                     consecutive_failures += 1
-                    overall_verdict = "infrastructure_error" if severity == "infrastructure_error" else "wrong"
+                    if severity == "infrastructure_error":
+                        deferred_indices.add(idx)
+                    else:
+                        overall_verdict = "wrong"
                     if severity == "critical":
                         update_cache_after_report(idx, block, input_hash, report, output_path, pass_index)
                         reconcile_promotions_from_cache(output_path)
@@ -1114,7 +1123,11 @@ def main() -> int:
                         and idx not in invalidated_indices
                     ]
                     if remaining_indices and overall_verdict == "correct":
-                        overall_verdict = "blocked_by_dependency"
+                        overall_verdict = (
+                            "infrastructure_error"
+                            if any(idx in deferred_indices for idx in remaining_indices)
+                            else "blocked_by_dependency"
+                        )
                     break
 
                 batch_indices = candidate_indices[:max_workers]
@@ -1169,8 +1182,8 @@ def main() -> int:
                         if overall_verdict == "correct":
                             overall_verdict = "wrong"
                     elif severity == "infrastructure_error":
-                        overall_verdict = "infrastructure_error"
-                if overall_verdict in {"infrastructure_error", "return_to_generator"}:
+                        deferred_indices.add(idx)
+                if overall_verdict in {"return_to_generator"}:
                     break
 
         accepted_now, provisional_now, failure_roots_now, invalidated_now, completed_now = compute_session_sets(section_reports)
