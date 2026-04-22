@@ -264,11 +264,17 @@ def build_repair_brief(
                 elif failing:
                     report = (failing.get("verification") or {}).get("verification_report") or {}
                     brief["failing_locations"] = [failing.get("title", "")]
-                    brief["summary"] = report.get("summary") or failing.get("error") or "Section verification failed."
-                    brief["critical_errors"] = report.get("critical_errors") or []
-                    brief["gaps"] = report.get("gaps") or []
-                    brief["repair_hints"] = (failing.get("verification") or {}).get("repair_hints") or failing.get("error", "")
-                    brief["next_actions"] = ["Repair the failing block", "Rerun section verification from pass 1"]
+                    if report.get("critical_errors") or report.get("gaps"):
+                        brief["summary"] = report.get("summary") or failing.get("error") or "Section verification failed."
+                        brief["critical_errors"] = report.get("critical_errors") or []
+                        brief["gaps"] = report.get("gaps") or []
+                        brief["repair_hints"] = (failing.get("verification") or {}).get("repair_hints") or failing.get("error", "")
+                        brief["next_actions"] = ["Repair the failing block", "Rerun section verification from pass 1"]
+                    else:
+                        brief["scope"] = "infrastructure"
+                        brief["summary"] = failing.get("error") or "Section verification infrastructure failure."
+                        brief["repair_hints"] = failing.get("error", "")
+                        brief["next_actions"] = ["Rerun section verification", "Check verifier backend health"]
                 return brief
 
     latest_verification = latest_memory_verification_record(memory_verification_path)
