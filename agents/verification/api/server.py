@@ -59,17 +59,21 @@ def _statement_hash(statement: str) -> str:
     return hashlib.sha256(statement.encode("utf-8")).hexdigest()[:12]
 
 
+def _verification_key_short(verification_key: str) -> str:
+    return verification_key[:12]
+
+
 def _verification_key(statement: str, proof: str, context: str = "") -> str:
     payload = statement + "\n\n---CONTEXT---\n\n" + context + "\n\n---PROOF---\n\n" + proof
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def generate_run_id(statement: str) -> str:
-    return f"{_utc_timestamp()}_{_statement_hash(statement)}"
+def generate_run_id(verification_key: str) -> str:
+    return f"{_utc_timestamp()}_{_verification_key_short(verification_key)}"
 
 
-def _allocate_run_id(statement: str) -> str:
-    base = generate_run_id(statement)
+def _allocate_run_id(verification_key: str) -> str:
+    base = generate_run_id(verification_key)
     run_id = base
     suffix = 1
     while (RESULTS_ROOT / run_id).exists():
@@ -308,6 +312,7 @@ def _mark_running(run_id: str, statement: str, verification_key: str) -> None:
             "run_id": run_id,
             "status": "running",
             "statement": statement,
+            "statement_key": _statement_hash(statement),
             "verification_key": verification_key,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
@@ -320,6 +325,7 @@ def _mark_finished(run_id: str, statement: str, status: str, details: Optional[D
         "run_id": run_id,
         "status": status,
         "statement": statement,
+        "statement_key": current.get("statement_key", _statement_hash(statement)),
         "verification_key": current.get("verification_key", ""),
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -494,13 +500,14 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
     if existing is not None:
         run_id, _state = existing
         return _wait_for_completion(run_id, CODEX_TIMEOUT_SECONDS)
-    run_id = _allocate_run_id(request.statement)
+    run_id = _allocate_run_id(verification_key)
     _write_state(
         run_id,
         {
             "run_id": run_id,
             "status": "queued",
             "statement": request.statement,
+            "statement_key": _statement_hash(request.statement),
             "verification_key": verification_key,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
@@ -516,13 +523,14 @@ def verify_async(request: VerifyRequest) -> VerifyAcceptedResponse:
     if existing is not None:
         run_id, state = existing
         return VerifyAcceptedResponse(run_id=run_id, status=str(state.get("status") or "queued"))
-    run_id = _allocate_run_id(request.statement)
+    run_id = _allocate_run_id(verification_key)
     _write_state(
         run_id,
         {
             "run_id": run_id,
             "status": "queued",
             "statement": request.statement,
+            "statement_key": _statement_hash(request.statement),
             "verification_key": verification_key,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
