@@ -313,6 +313,17 @@ def dependency_closure(dependencies: Dict[int, List[int]], idx: int) -> List[int
     return sorted(seen)
 
 
+def unique_strings(items: List[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
 def main() -> int:
     args = parse_args()
     blueprint_path = args.blueprint.resolve()
@@ -331,6 +342,16 @@ def main() -> int:
         for idx, block in enumerate(blocks, start=1)
     }
     blocks_by_title = {block.title: (idx, block) for idx, block in enumerate(blocks, start=1)}
+    dependencies: Dict[int, List[int]] = dependency_data["dependencies"]
+    labels_by_index: Dict[int, str] = dependency_data["labels_by_index"]
+    reverse_dependencies: Dict[int, List[int]] = {idx: [] for idx in range(1, len(blocks) + 1)}
+    for idx, deps in dependencies.items():
+        for dep in deps:
+            reverse_dependencies.setdefault(dep, []).append(idx)
+    dep_statement_keys_by_idx = {
+        idx: [block_statement_keys[dep] for dep in dependencies.get(idx, [])]
+        for idx in range(1, len(blocks) + 1)
+    }
 
     def load_theorem_library() -> Dict[str, Dict[str, Any]]:
         for path in [theorem_library_path, legacy_verified_cache_path]:
@@ -344,6 +365,139 @@ def main() -> int:
             if isinstance(accepted, dict):
                 return accepted
         return {}
+
+    def library_status(entry: Dict[str, Any]) -> str:
+        status = entry.get("status")
+        if isinstance(status, str) and status:
+            return status
+        if entry.get("invalidated"):
+            return "invalidated"
+        if entry.get("accepted"):
+            return "accepted"
+        if int(entry.get("correct_verify_count", 0) or 0) > 0:
+            return "provisional"
+        return "unverified"
+
+    def is_reusable(entry: Optional[Dict[str, Any]]) -> bool:
+        return isinstance(entry, dict) and library_status(entry) in {"accepted", "provisional"}
+
+    def ensure_library_entry(idx: int, block: ProofBlock, cached_report: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        statement_key = block_statement_keys[idx]
+        entry = theorem_library.setdefault(
+            statement_key,
+            {
+                "title": block.title,
+                "kind": block.kind,
+                "label": labels_by_index.get(idx, ""),
+                "statement": block.statement,
+                "statement_key": statement_key,
+                "dependency_labels": [labels_by_index.get(dep, "") for dep in dependencies.get(idx, []) if labels_by_index.get(dep, "")],
+                "dependency_statement_keys": dep_statement_keys_by_idx[idx],
+                "correct_observation_ids": [],
+                "correct_verify_count": 0,
+                "accepted": False,
+                "status": "unverified",
+                "accepted_at_utc": "",
+                "last_verified_at_utc": "",
+                "source_paths": [],
+                "invalidated": False,
+                "invalidated_at_utc": "",
+                "invalidated_reason": "",
+                "invalidated_by_statement_key": "",
+                "report": cached_report or {},
+            },
+        )
+        entry["title"] = block.title
+        entry["kind"] = block.kind
+        entry["label"] = labels_by_index.get(idx, "")
+        entry["statement"] = block.statement
+        entry["statement_key"] = statement_key
+        entry["dependency_labels"] = unique_strings(
+            [labels_by_index.get(dep, "") for dep in dependencies.get(idx, [])]
+        )
+        entry["dependency_statement_keys"] = dep_statement_keys_by_idx[idx]
+        entry.setdefault("correct_observation_ids", [])
+        entry["correct_verify_count"] = len(entry["correct_observation_ids"])
+        entry.setdefault("accepted", False)
+        entry.setdefault("status", "unverified")
+        entry.setdefault("accepted_at_utc", "")
+        entry.setdefault("last_verified_at_utc", "")
+        entry.setdefault("source_paths", [])
+        entry.setdefault("invalidated", False)
+        entry.setdefault("invalidated_at_utc", "")
+        entry.setdefault("invalidated_reason", "")
+        entry.setdefault("invalidated_by_statement_key", "")
+        if cached_report is not None:
+            entry["report"] = cached_report
+        return entry
+
+    def recompute_library_statuses() -> None:
+        current_statement_keys = set(block_statement_keys.values())
+        for idx, block in enumerate(blocks, start=1):
+            ensure_library_entry(idx, block)
+        for key, entry in theorem_library.items():
+            if not isinstance(entry, dict):
+                continue
+            if key not in current_statement_keys:
+                if entry.get("invalidated"):
+                    entry["status"] = "invalidated"
+                    entry["accepted"] = False
+                elif int(entry.get("correct_verify_count", 0) or 0) >= args.accept_after_verifies:
+                    entry["status"] = "accepted"
+                    entry["accepted"] = True
+                elif int(entry.get("correct_verify_count", 0) or 0) > 0:
+                    entry["status"] = "provisional"
+                    entry["accepted"] = False
+                else:
+                    entry["status"] = "unverified"
+                    entry["accepted"] = False
+        for idx, block in enumerate(blocks, start=1):
+            statement_key = block_statement_keys[idx]
+            entry = theorem_library[statement_key]
+            count = int(entry.get("correct_verify_count", 0) or 0)
+            if entry.get("invalidated"):
+                entry["status"] = "invalidated"
+                entry["accepted"] = False
+                continue
+            if count <= 0:
+                entry["status"] = "unverified"
+                entry["accepted"] = False
+                continue
+            if count < args.accept_after_verifies:
+                entry["status"] = "provisional"
+                entry["accepted"] = False
+                continue
+            dep_keys = dep_statement_keys_by_idx[idx]
+            if all(theorem_library.get(dep_key, {}).get("status") == "accepted" for dep_key in dep_keys):
+                entry["status"] = "accepted"
+                entry["accepted"] = True
+                if not entry.get("accepted_at_utc"):
+                    entry["accepted_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            else:
+                entry["status"] = "provisional"
+                entry["accepted"] = False
+
+    def invalidate_entry_and_downstream(start_idx: int, reason: str) -> None:
+        queue: List[int] = [start_idx]
+        seen: set[int] = set()
+        root_statement_key = block_statement_keys[start_idx]
+        while queue:
+            idx = queue.pop(0)
+            if idx in seen:
+                continue
+            seen.add(idx)
+            block = blocks[idx - 1]
+            entry = ensure_library_entry(idx, block)
+            entry["invalidated"] = True
+            entry["invalidated_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            entry["invalidated_reason"] = reason
+            entry["invalidated_by_statement_key"] = root_statement_key
+            entry["accepted"] = False
+            entry["status"] = "invalidated"
+            for downstream_idx in reverse_dependencies.get(idx, []):
+                queue.append(downstream_idx)
+        recompute_library_statuses()
+        write_theorem_library(theorem_library)
 
     def write_theorem_library(library: Dict[str, Dict[str, Any]]) -> None:
         payload = {
@@ -384,39 +538,22 @@ def main() -> int:
                             current_idx, current = idx, block
                     if current is None or current_idx is None:
                         continue
-                    statement_key = block_statement_keys[current_idx]
                     cached_report = dict(report)
                     cached_report["index"] = current_idx
                     cached_report["title"] = current.title
+                    statement_key = block_statement_keys[current_idx]
                     cached_report["statement_key"] = statement_key
-                    entry = library.setdefault(
-                        statement_key,
-                        {
-                            "title": current.title,
-                            "kind": current.kind,
-                            "statement": current.statement,
-                            "statement_key": statement_key,
-                            "correct_observation_ids": [],
-                            "correct_verify_count": 0,
-                            "accepted": False,
-                            "accepted_at_utc": "",
-                            "last_verified_at_utc": "",
-                            "source_paths": [],
-                            "report": cached_report,
-                        },
-                    )
+                    entry = ensure_library_entry(current_idx, current, cached_report)
                     observation_id = f"snapshot:{source_path}:pass{pass_index}:block{current_idx}"
                     if observation_id not in entry["correct_observation_ids"]:
                         entry["correct_observation_ids"].append(observation_id)
                     entry["correct_verify_count"] = len(entry["correct_observation_ids"])
-                    entry["accepted"] = entry["correct_verify_count"] >= args.accept_after_verifies
-                    if entry["accepted"] and not entry.get("accepted_at_utc"):
-                        entry["accepted_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     entry["last_verified_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                     if str(source_path) not in entry["source_paths"]:
                         entry["source_paths"].append(str(source_path))
                     entry["report"] = cached_report
                     changed = True
+        recompute_library_statuses()
         if changed:
             write_theorem_library(library)
         return library
@@ -433,38 +570,24 @@ def main() -> int:
     ) -> None:
         if args.skip_theorem_library_writes:
             return
-        statement_key = block_statement_keys[idx]
         cached_report = dict(report)
         cached_report["index"] = idx
         cached_report["title"] = block.title
-        cached_report["statement_key"] = statement_key
-        entry = theorem_library.setdefault(
-            statement_key,
-            {
-                "title": block.title,
-                "kind": block.kind,
-                "statement": block.statement,
-                "statement_key": statement_key,
-                "correct_observation_ids": [],
-                "correct_verify_count": 0,
-                "accepted": False,
-                "accepted_at_utc": "",
-                "last_verified_at_utc": "",
-                "source_paths": [],
-                "report": cached_report,
-            },
-        )
+        cached_report["statement_key"] = block_statement_keys[idx]
+        entry = ensure_library_entry(idx, block, cached_report)
         observation_id = f"runtime:{verification_session_id}:pass{pass_index}:block{idx}"
         if observation_id not in entry["correct_observation_ids"]:
             entry["correct_observation_ids"].append(observation_id)
         entry["correct_verify_count"] = len(entry["correct_observation_ids"])
-        entry["accepted"] = entry["correct_verify_count"] >= args.accept_after_verifies
-        if entry["accepted"] and not entry.get("accepted_at_utc"):
-            entry["accepted_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        entry["invalidated"] = False
+        entry["invalidated_at_utc"] = ""
+        entry["invalidated_reason"] = ""
+        entry["invalidated_by_statement_key"] = ""
         entry["last_verified_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         if str(source_path) not in entry["source_paths"]:
             entry["source_paths"].append(str(source_path))
         entry["report"] = cached_report
+        recompute_library_statuses()
         write_theorem_library(theorem_library)
 
     def write_snapshot(
@@ -504,71 +627,19 @@ def main() -> int:
         return []
 
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
-        section_reports: List[Dict[str, Any]] = []
-        accepted_indices = set()
-        for idx, block in enumerate(blocks, start=1):
-            statement_key = block_statement_keys[idx]
-            cached = theorem_library.get(statement_key)
-            if not isinstance(cached, dict):
-                continue
-            if not cached.get("accepted"):
-                continue
-            report = cached.get("report")
-            if not isinstance(report, dict):
-                continue
-            reused = dict(report)
-            reused["index"] = idx
-            reused["title"] = block.title
-            reused["statement_key"] = statement_key
-            reused["reused_from_theorem_library"] = True
-            upsert_section_report(section_reports, reused)
-            accepted_indices.add(idx)
-        for report in load_existing_section_reports(pass_index):
-            if not isinstance(report, dict):
-                continue
-            idx = report.get("index")
-            if not isinstance(idx, int):
-                continue
-            if idx in accepted_indices:
-                continue
-            if report.get("input_hash") != expected_input_hashes.get(idx):
-                continue
-            upsert_section_report(section_reports, report)
-
-        overall_verdict = "correct"
-        completed_indices = {
-            report.get("index")
-            for report in section_reports
-            if isinstance(report, dict)
-            and isinstance(report.get("index"), int)
-            and classify_report(report) in {"correct", "gap"}
-        }
-
-        def write_in_progress() -> None:
-            partial_reports = pass_reports + [
-                {
-                    "section_reports": section_reports,
-                    "overall_verdict": overall_verdict,
-                    "pass_index": pass_index,
-                }
-            ]
-            write_snapshot(partial_reports, overall_verdict, completed_passes)
-
-        if structure["issues"]:
-            return {
-                "section_reports": section_reports,
-                "overall_verdict": "wrong",
-            }
-
-        dependencies: Dict[int, List[int]] = dependency_data["dependencies"]
-
         def build_verification_context(idx: int) -> str:
             parts: List[str] = []
             for dep_idx in dependency_closure(dependencies, idx):
                 dep_block = blocks[dep_idx - 1]
                 dep_statement_key = block_statement_keys[dep_idx]
                 cached = theorem_library.get(dep_statement_key)
-                if isinstance(cached, dict) and cached.get("accepted"):
+                if is_reusable(cached):
+                    status = library_status(cached)
+                    note = (
+                        "Accepted in theorem library after three successful verifier passes."
+                        if status == "accepted"
+                        else f"Provisionally verified in theorem library ({cached.get('correct_verify_count', 0)} successful verifier passes, not yet accepted)."
+                    )
                     parts.append(
                         "\n".join(
                             [
@@ -578,7 +649,7 @@ def main() -> int:
                                 dep_block.statement.strip(),
                                 "",
                                 "## proof",
-                                "Accepted in theorem library after three successful verifier passes.",
+                                note,
                             ]
                         ).strip()
                         + "\n"
@@ -596,6 +667,73 @@ def main() -> int:
             idx: compute_input_hash(block.statement, verification_contexts[idx])
             for idx, block in enumerate(blocks, start=1)
         }
+
+        def recompute_completed_indices(section_reports: List[Dict[str, Any]]) -> set[int]:
+            completed: set[int] = set()
+            for idx, block in enumerate(blocks, start=1):
+                entry = theorem_library.get(block_statement_keys[idx])
+                if is_reusable(entry):
+                    completed.add(idx)
+            for report in section_reports:
+                if not isinstance(report, dict):
+                    continue
+                idx = report.get("index")
+                if not isinstance(idx, int):
+                    continue
+                entry = theorem_library.get(block_statement_keys[idx])
+                if entry is not None and library_status(entry) == "invalidated":
+                    continue
+                if classify_report(report) == "correct":
+                    completed.add(idx)
+            return completed
+
+        section_reports: List[Dict[str, Any]] = []
+        reusable_indices = set()
+        for idx, block in enumerate(blocks, start=1):
+            statement_key = block_statement_keys[idx]
+            cached = theorem_library.get(statement_key)
+            if not is_reusable(cached):
+                continue
+            report = cached.get("report")
+            if not isinstance(report, dict):
+                continue
+            reused = dict(report)
+            reused["index"] = idx
+            reused["title"] = block.title
+            reused["statement_key"] = statement_key
+            reused["reused_from_theorem_library"] = True
+            upsert_section_report(section_reports, reused)
+            reusable_indices.add(idx)
+        for report in load_existing_section_reports(pass_index):
+            if not isinstance(report, dict):
+                continue
+            idx = report.get("index")
+            if not isinstance(idx, int):
+                continue
+            if idx in reusable_indices:
+                continue
+            if report.get("input_hash") != expected_input_hashes.get(idx):
+                continue
+            upsert_section_report(section_reports, report)
+
+        overall_verdict = "correct"
+        completed_indices = recompute_completed_indices(section_reports)
+
+        def write_in_progress() -> None:
+            partial_reports = pass_reports + [
+                {
+                    "section_reports": section_reports,
+                    "overall_verdict": overall_verdict,
+                    "pass_index": pass_index,
+                }
+            ]
+            write_snapshot(partial_reports, overall_verdict, completed_passes)
+
+        if structure["issues"]:
+            return {
+                "section_reports": section_reports,
+                "overall_verdict": "wrong",
+            }
 
         def verify_one(idx: int, block: ProofBlock, proof_text: str, input_hash: str) -> Dict[str, Any]:
             report: Dict[str, Any] = {
@@ -669,14 +807,18 @@ def main() -> int:
                 severity = classify_report(report)
                 if severity == "correct":
                     consecutive_failures = 0
-                    completed_indices.add(idx)
                     record_verified_report(idx, block, report, output_path, pass_index)
+                    completed_indices = recompute_completed_indices(section_reports)
                 elif severity == "gap":
                     overall_verdict = "wrong"
-                    completed_indices.add(idx)
+                    invalidate_entry_and_downstream(idx, f"gap in pass {pass_index}: {report.get('title', block.title)}")
+                    completed_indices = recompute_completed_indices(section_reports)
                 else:
                     consecutive_failures += 1
                     overall_verdict = "infrastructure_error" if severity == "infrastructure_error" else "wrong"
+                    if severity == "critical":
+                        invalidate_entry_and_downstream(idx, f"critical error in pass {pass_index}: {report.get('title', block.title)}")
+                        completed_indices = recompute_completed_indices(section_reports)
                     if consecutive_failures >= args.max_consecutive_failures:
                         overall_verdict = "return_to_generator"
                         break
@@ -729,10 +871,13 @@ def main() -> int:
                     block = blocks[idx - 1]
                     upsert_section_report(section_reports, report)
                     severity = classify_report(report)
-                    if severity in {"correct", "gap"}:
-                        completed_indices.add(idx)
                     if severity == "correct":
                         record_verified_report(idx, block, report, output_path, pass_index)
+                    elif severity == "gap":
+                        invalidate_entry_and_downstream(idx, f"gap in pass {pass_index}: {report.get('title', block.title)}")
+                    elif severity == "critical":
+                        invalidate_entry_and_downstream(idx, f"critical error in pass {pass_index}: {report.get('title', block.title)}")
+                    completed_indices = recompute_completed_indices(section_reports)
                     if severity == "gap":
                         if overall_verdict == "correct":
                             overall_verdict = "wrong"
