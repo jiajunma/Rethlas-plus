@@ -809,6 +809,11 @@ def main() -> int:
             accepted_indices = accepted_indices_set()
             failure_roots = compute_failure_roots(section_reports)
             invalidated_indices = compute_invalidated_indices(failure_roots)
+            reports_by_index = {
+                report.get("index"): report
+                for report in section_reports
+                if isinstance(report, dict) and isinstance(report.get("index"), int)
+            }
             provisional_indices: set[int] = set()
             changed = True
             while changed:
@@ -816,7 +821,8 @@ def main() -> int:
                 for idx, block in enumerate(blocks, start=1):
                     if idx in accepted_indices or idx in provisional_indices or idx in invalidated_indices:
                         continue
-                    if current_pair_streak(verification_keys_by_idx[idx]) <= 0:
+                    report = reports_by_index.get(idx)
+                    if not isinstance(report, dict) or classify_report(report) != "correct":
                         continue
                     if all(dep in accepted_indices or dep in provisional_indices for dep in dependencies.get(idx, [])):
                         provisional_indices.add(idx)
@@ -883,6 +889,7 @@ def main() -> int:
                 idx
                 for idx in range(args.start_index, len(blocks) + 1)
                 if idx not in accepted_indices
+                and idx not in provisional_indices
                 and idx not in deferred_indices
                 and idx not in failure_roots
                 and idx not in invalidated_indices
@@ -1038,6 +1045,7 @@ def main() -> int:
                         idx
                         for idx in range(args.start_index, len(blocks) + 1)
                         if idx not in accepted_indices
+                        and idx not in provisional_indices
                         and idx not in failure_roots
                         and idx not in invalidated_indices
                     ]
@@ -1127,6 +1135,7 @@ def main() -> int:
                         idx
                         for idx in range(args.start_index, len(blocks) + 1)
                         if idx not in accepted_indices
+                        and idx not in provisional_indices
                         and idx not in failure_roots
                         and idx not in invalidated_indices
                     ]

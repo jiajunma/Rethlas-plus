@@ -203,6 +203,12 @@ def latest_section_snapshot(section_report_path: Path) -> Dict[str, Any]:
     }
 
 
+def active_section_blueprint_path(state: Dict[str, Any], blueprint_path: Path, section_blueprint_path: Path) -> Path:
+    if str(state.get("current_phase") or "") == "section_verifying" and section_blueprint_path.exists():
+        return section_blueprint_path
+    return blueprint_path
+
+
 def should_resume_section_verification(section_report_path: Path) -> bool:
     snapshot = latest_section_snapshot(section_report_path)
     if not snapshot:
@@ -853,14 +859,17 @@ def run_attempt(
 def run_section_verification_phase(
     args: argparse.Namespace,
     blueprint: Path,
+    section_blueprint: Path,
     section_report: Path,
     results_dir: Path,
     heartbeat_path: Path,
     state_path: Path,
     state: Dict[str, Any],
 ) -> int:
+    shutil.copy2(blueprint, section_blueprint)
     section_verify_log = results_dir / "section_verify_run.log"
     state["current_phase"] = "section_verifying"
+    state["section_blueprint"] = str(section_blueprint)
     write_json(state_path, state)
     return run_monitored_subprocess(
         [
@@ -875,7 +884,7 @@ def run_section_verification_phase(
             "3",
             "--output",
             str(section_report),
-            str(blueprint),
+            str(section_blueprint),
         ],
         cwd=REPO_ROOT,
         log_path=section_verify_log,
@@ -904,6 +913,7 @@ def main() -> int:
     heartbeat_path = results_dir / "heartbeat.txt"
     verified_blueprint = results_dir / "blueprint_verified.md"
     blueprint = results_dir / "blueprint.md"
+    section_blueprint = results_dir / "section_blueprint.md"
     section_report = results_dir / "section_verification.json"
     stale_section_report = results_dir / "section_verification.stale_preclean.json"
     repair_brief_path = results_dir / "repair_brief.json"
@@ -942,6 +952,7 @@ def main() -> int:
     attempt_num = len(state["attempts"]) + 1
     while args.max_attempts == 0 or attempt_num <= args.max_attempts:
         attempt_execution_id = f"{state['execution_id']}:attempt{attempt_num}"
+        active_blueprint = active_section_blueprint_path(state, blueprint, section_blueprint)
         verifier_health = fetch_verifier_health(args.verify_url)
         if (
             state.get("status") == "blocked_on_verifier_backend"
@@ -990,9 +1001,9 @@ def main() -> int:
             time.sleep(args.backoff_seconds)
             continue
 
-        if blueprint.exists():
+        if active_blueprint.exists():
             refresh_verification_cache_from_results(
-                blueprint_path=blueprint,
+                blueprint_path=active_blueprint,
                 theorem_library_path=theorem_library_path,
                 verifier_results_root=VERIFIER_RESULTS_ROOT,
                 output_path=verification_cache_path,
@@ -1000,11 +1011,11 @@ def main() -> int:
 
         scheduler_view = (
             build_current_scheduler_view(
-                blueprint_path=blueprint,
+                blueprint_path=active_blueprint,
                 theorem_library_path=theorem_library_path,
                 verification_cache_path=verification_cache_path,
             )
-            if blueprint.exists()
+            if active_blueprint.exists()
             else {"blocks": []}
         )
         current_matching_wrong = (
@@ -1012,7 +1023,7 @@ def main() -> int:
                 scheduler_view=scheduler_view,
                 verification_cache_path=verification_cache_path,
             )
-            if blueprint.exists()
+            if active_blueprint.exists()
             else None
         )
 
@@ -1032,10 +1043,10 @@ def main() -> int:
             )
 
         if (
-            blueprint.exists()
+            active_blueprint.exists()
             and current_matching_wrong is None
             and should_resume_section_verification_from_current_view(
-                blueprint_path=blueprint,
+                blueprint_path=active_blueprint,
                 theorem_library_path=theorem_library_path,
                 verification_cache_path=verification_cache_path,
             )
@@ -1059,6 +1070,7 @@ def main() -> int:
                 run_section_verification_phase(
                     args=args,
                     blueprint=blueprint,
+                    section_blueprint=section_blueprint,
                     section_report=section_report,
                     results_dir=results_dir,
                     heartbeat_path=heartbeat_path,
@@ -1067,7 +1079,7 @@ def main() -> int:
                 )
             except Exception:  # noqa: BLE001
                 pass
-            theorem_library_lint = run_theorem_library_lint(blueprint, theorem_library_path, theorem_library_lint_path)
+            theorem_library_lint = run_theorem_library_lint(active_blueprint, theorem_library_path, theorem_library_lint_path)
             if theorem_library_lint:
                 append_jsonl(
                     loop_journal_path,
@@ -1111,7 +1123,7 @@ def main() -> int:
         prompt = build_prompt(
             args,
             problem_id,
-            blueprint,
+            active_section_blueprint_path(state, blueprint, section_blueprint),
             section_report,
             repair_brief_path,
             suspect_claims_path,
@@ -1142,6 +1154,7 @@ def main() -> int:
                 section_exit = run_section_verification_phase(
                     args=args,
                     blueprint=blueprint,
+                    section_blueprint=section_blueprint,
                     section_report=section_report,
                     results_dir=results_dir,
                     heartbeat_path=heartbeat_path,
@@ -1153,15 +1166,16 @@ def main() -> int:
             except Exception:  # noqa: BLE001
                 pass
 
-        if blueprint.exists():
+        active_blueprint = active_section_blueprint_path(state, blueprint, section_blueprint)
+        if active_blueprint.exists():
             refresh_verification_cache_from_results(
-                blueprint_path=blueprint,
+                blueprint_path=active_blueprint,
                 theorem_library_path=theorem_library_path,
                 verifier_results_root=VERIFIER_RESULTS_ROOT,
                 output_path=verification_cache_path,
             )
 
-        theorem_library_lint = run_theorem_library_lint(blueprint, theorem_library_path, theorem_library_lint_path)
+        theorem_library_lint = run_theorem_library_lint(active_blueprint, theorem_library_path, theorem_library_lint_path)
         if theorem_library_lint:
             append_jsonl(
                 loop_journal_path,
