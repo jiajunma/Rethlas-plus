@@ -151,11 +151,6 @@ def fetch_verifier_health(verify_url: str) -> Dict[str, Any]:
         return {}
 
 
-def verifier_idle(verify_url: str) -> bool:
-    health = fetch_verifier_health(verify_url)
-    return bool(health) and not health.get("active_run_id") and str(health.get("queue_depth", "0")) == "0"
-
-
 def classify_failure(log_text: str) -> str:
     lowered = log_text.lower()
     if "429" in log_text or "too many requests" in lowered or "rate limit" in lowered:
@@ -442,43 +437,6 @@ def run_monitored_subprocess(
                         return proc.wait()
 
 
-def launch_section_verify_sidecar(
-    args: argparse.Namespace,
-    blueprint: Path,
-    results_dir: Path,
-    timeout_seconds: int,
-) -> subprocess.Popen[str]:
-    log_path = results_dir / "section_verify_live.log"
-    live_output_path = results_dir / "section_verification.live.json"
-    handle = log_path.open("w", encoding="utf-8")
-    return subprocess.Popen(
-        [
-            sys.executable,
-            str(SECTION_VERIFY),
-            "--resume-existing",
-            "--mode",
-            args.section_verify_mode,
-            "--max-workers",
-            str(args.section_verify_max_workers),
-            "--passes-required",
-            "1",
-            "--max-consecutive-failures",
-            "1",
-            "--skip-theorem-library-writes",
-            "--output",
-            str(live_output_path),
-            "--timeout-seconds",
-            str(timeout_seconds),
-            str(blueprint),
-        ],
-        cwd=REPO_ROOT,
-        stdout=handle,
-        stderr=subprocess.STDOUT,
-        preexec_fn=os.setsid,
-        text=True,
-    )
-
-
 def run_attempt(
     args: argparse.Namespace,
     problem_id: str,
@@ -508,7 +466,6 @@ def run_attempt(
         handle.write(f"command: {' '.join(cmd)}\n\n")
         handle.flush()
         slot_path = acquire_slot(f"generator:{problem_id}:attempt{attempt_num}")
-        section_sidecar: Optional[subprocess.Popen[str]] = None
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -522,19 +479,6 @@ def run_attempt(
                 heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
                 state["updated_at_utc"] = utc_now()
                 write_json(state_path, state)
-                if (
-                    section_sidecar is None
-                    and (REPO_ROOT / "results" / problem_id / "blueprint.md").exists()
-                    and verifier_idle(args.verify_url)
-                ):
-                    section_sidecar = launch_section_verify_sidecar(
-                        args,
-                        REPO_ROOT / "results" / problem_id / "blueprint.md",
-                        REPO_ROOT / "results" / problem_id,
-                        args.section_verify_timeout_seconds,
-                    )
-                if section_sidecar is not None and section_sidecar.poll() is not None:
-                    section_sidecar = None
                 try:
                     return proc.wait(timeout=15)
                 except subprocess.TimeoutExpired:
@@ -548,11 +492,6 @@ def run_attempt(
                             os.killpg(proc.pid, signal.SIGKILL)
                             return proc.wait()
         finally:
-            if section_sidecar is not None and section_sidecar.poll() is None:
-                try:
-                    os.killpg(section_sidecar.pid, signal.SIGTERM)
-                except Exception:
-                    pass
             release_slot(slot_path)
 
 
