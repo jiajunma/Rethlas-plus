@@ -25,6 +25,7 @@ RESULTS_ROOT = REPO_ROOT / "results"
 LOGS_ROOT = REPO_ROOT / "logs"
 MEMORY_ROOT = REPO_ROOT / "memory"
 SECTION_VERIFY = REPO_ROOT / "scripts" / "verify_sections.py"
+THEOREM_LIBRARY_LINT = REPO_ROOT / "scripts" / "lint_theorem_library.py"
 
 
 def utc_now() -> str:
@@ -174,6 +175,7 @@ def build_prompt(
     repair_brief_path: Path,
     suspect_claims_path: Path,
     theorem_library_path: Path,
+    theorem_library_lint_path: Path,
     base_extra_prompt: str,
 ) -> str:
     prompt = (
@@ -199,6 +201,13 @@ def build_prompt(
             + theorem_library_path.read_text(encoding="utf-8")
             + "\nTreat every entry with `accepted: true` as an established theorem for this problem. "
             "Do not discard these results when you reorganize the proof; reuse them as proved lemmas."
+        )
+    if theorem_library_lint_path.exists():
+        prompt += (
+            "\n\nTheorem-library lint report:\n"
+            + theorem_library_lint_path.read_text(encoding="utf-8")
+            + "\nIf the lint report shows dependency-closure issues, stale accepted entries, or duplicate accepted statements, "
+            "repair the proof state conservatively without discarding genuinely accepted theorems."
         )
     if base_extra_prompt.strip():
         prompt += " " + base_extra_prompt.strip()
@@ -335,6 +344,35 @@ def snapshot_attempt_artifacts(
         shutil.copy2(section_report, snapshots_dir / f"attempt{attempt_num:02d}_section_verification.json")
     if repair_brief_path.exists():
         shutil.copy2(repair_brief_path, snapshots_dir / f"attempt{attempt_num:02d}_repair_brief.json")
+
+
+def run_theorem_library_lint(blueprint: Path, theorem_library_path: Path, output_path: Path) -> Dict[str, Any]:
+    if not blueprint.exists() or not theorem_library_path.exists():
+        return {}
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(THEOREM_LIBRARY_LINT),
+            str(blueprint),
+            "--theorem-library",
+            str(theorem_library_path),
+            "--output",
+            str(output_path),
+        ],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {
+            "error": completed.stderr or completed.stdout or f"lint exited {completed.returncode}",
+        }
+    try:
+        return json.loads(output_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def pause_for_rate_limit(state: Dict[str, Any], state_path: Path, heartbeat_path: Path) -> int:
@@ -534,6 +572,7 @@ def main() -> int:
     repair_brief_path = results_dir / "repair_brief.json"
     suspect_claims_path = results_dir / "suspect_claims.json"
     theorem_library_path = results_dir / "theorem_library.json"
+    theorem_library_lint_path = results_dir / "theorem_library_lint.json"
     loop_journal_path = results_dir / "loop_journal.jsonl"
     snapshots_dir = results_dir / "attempt_snapshots"
     memory_verification_path = MEMORY_ROOT / problem_id / "verification_reports.jsonl"
@@ -615,6 +654,7 @@ def main() -> int:
             repair_brief_path,
             suspect_claims_path,
             theorem_library_path,
+            theorem_library_lint_path,
             base_extra_prompt,
         )
         write_json(state_path, state)
@@ -666,6 +706,18 @@ def main() -> int:
                     failure_type = failure_type or "section_verifier_failed"
             except Exception:  # noqa: BLE001
                 pass
+
+        theorem_library_lint = run_theorem_library_lint(blueprint, theorem_library_path, theorem_library_lint_path)
+        if theorem_library_lint:
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "theorem_library_lint",
+                    "attempt": attempt_num,
+                    "theorem_library_lint": theorem_library_lint,
+                },
+            )
 
         repair_brief = build_repair_brief(section_report, memory_verification_path)
         if repair_brief:
