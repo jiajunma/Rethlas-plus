@@ -124,7 +124,7 @@ def _find_existing_run_for_verification_key(verification_key: str) -> Optional[T
         if state.get("verification_key") != verification_key:
             continue
         status = state.get("status")
-        if status in {"queued", "running", "succeeded"}:
+        if status in {"queued", "running"}:
             return run_dir.name, state
     return None
 

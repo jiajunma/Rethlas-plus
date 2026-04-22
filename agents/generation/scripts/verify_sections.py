@@ -489,11 +489,13 @@ def main() -> int:
         observed_at_utc: str,
     ) -> None:
         if classification == "correct":
+            is_new_run = run_id not in cache_entry["correct_run_ids"]
             if run_id not in cache_entry["correct_run_ids"]:
                 cache_entry["correct_run_ids"].append(run_id)
                 cache_entry["total_correct_verifies"] = int(cache_entry.get("total_correct_verifies", 0) or 0) + 1
-            previous = str(cache_entry.get("last_result") or "")
-            cache_entry["correct_streak"] = cache_entry["correct_streak"] + 1 if previous == "correct" else 1
+            if is_new_run:
+                previous = str(cache_entry.get("last_result") or "")
+                cache_entry["correct_streak"] = cache_entry["correct_streak"] + 1 if previous == "correct" else 1
             if isinstance(verification_payload, dict):
                 cache_entry["report"] = dict(verification_payload)
         elif classification in {"gap", "critical", "infrastructure_error"}:

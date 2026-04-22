@@ -168,9 +168,57 @@ def classify_failure(log_text: str) -> str:
     return "unknown"
 
 
+def latest_section_snapshot(section_report_path: Path) -> Dict[str, Any]:
+    payload = read_json(section_report_path) if section_report_path.exists() else {}
+    if not payload:
+        return {}
+    pass_reports = payload.get("pass_reports") or []
+    latest = pass_reports[-1] if isinstance(pass_reports, list) and pass_reports else {}
+    if not isinstance(latest, dict):
+        latest = {}
+    session_summary = latest.get("session_summary") or {}
+    block_states = latest.get("block_states") or []
+    if not isinstance(block_states, list):
+        block_states = []
+    states_by_title = {
+        str(item.get("title")): item
+        for item in block_states
+        if isinstance(item, dict) and item.get("title")
+    }
+    return {
+        "overall_verdict": payload.get("overall_verdict"),
+        "passes_completed": payload.get("passes_completed"),
+        "passes_required": payload.get("passes_required"),
+        "session_summary": session_summary if isinstance(session_summary, dict) else {},
+        "states_by_title": states_by_title,
+        "latest_pass": latest,
+    }
+
+
+def should_resume_section_verification(section_report_path: Path) -> bool:
+    snapshot = latest_section_snapshot(section_report_path)
+    if not snapshot:
+        return False
+    session_summary = snapshot.get("session_summary") or {}
+    ready = int(session_summary.get("ready", 0) or 0)
+    provisional = int(session_summary.get("provisional", 0) or 0)
+    wrong_roots = int(session_summary.get("wrong_roots", 0) or 0)
+    invalidated = int(session_summary.get("invalidated", 0) or 0)
+    if wrong_roots == 0 and (ready > 0 or provisional > 0 or invalidated > 0):
+        return True
+    states_by_title = snapshot.get("states_by_title") or {}
+    statuses = [
+        str(item.get("scheduler_status") or "")
+        for item in states_by_title.values()
+        if isinstance(item, dict)
+    ]
+    return "wrong" not in statuses and any(status in {"ready", "provisional", "invalidated"} for status in statuses)
+
+
 def build_prompt(
     args: argparse.Namespace,
     problem_id: str,
+    section_report_path: Path,
     repair_brief_path: Path,
     suspect_claims_path: Path,
     theorem_library_path: Path,
@@ -208,6 +256,8 @@ def build_prompt(
         for entry in (theorem_library_payload.get("accepted") or {}).values()
         if isinstance(entry, dict) and entry.get("accepted") is True
     }
+    section_snapshot = latest_section_snapshot(section_report_path)
+    current_states_by_title = section_snapshot.get("states_by_title") or {}
     include_repair_brief = True
     if repair_brief_path.exists():
         try:
@@ -217,6 +267,14 @@ def build_prompt(
         failing_locations = [str(x) for x in (repair_brief_payload.get("failing_locations") or [])]
         if failing_locations and all(location in accepted_titles for location in failing_locations):
             include_repair_brief = False
+        if include_repair_brief and failing_locations:
+            currently_wrong = any(
+                isinstance(current_states_by_title.get(location), dict)
+                and str(current_states_by_title.get(location, {}).get("scheduler_status") or "") == "wrong"
+                for location in failing_locations
+            )
+            if not currently_wrong:
+                include_repair_brief = False
 
     prompt = (
         f"Use AGENTS.md exactly to solve the math problem in {args.problem_file}. "
@@ -541,6 +599,43 @@ def run_attempt(
             release_slot(slot_path)
 
 
+def run_section_verification_phase(
+    args: argparse.Namespace,
+    blueprint: Path,
+    section_report: Path,
+    results_dir: Path,
+    heartbeat_path: Path,
+    state_path: Path,
+    state: Dict[str, Any],
+) -> int:
+    section_verify_log = results_dir / "section_verify_run.log"
+    state["current_phase"] = "section_verifying"
+    write_json(state_path, state)
+    return run_monitored_subprocess(
+        [
+            sys.executable,
+            str(SECTION_VERIFY),
+            "--resume-existing",
+            "--mode",
+            args.section_verify_mode,
+            "--max-workers",
+            str(args.section_verify_max_workers),
+            "--passes-required",
+            "3",
+            "--output",
+            str(section_report),
+            str(blueprint),
+        ],
+        cwd=REPO_ROOT,
+        log_path=section_verify_log,
+        timeout_seconds=args.section_verify_timeout_seconds,
+        heartbeat_path=heartbeat_path,
+        state_path=state_path,
+        state=state,
+        phase="section_verifying",
+    )
+
+
 def main() -> int:
     args = parse_args()
     problem_path = (REPO_ROOT / args.problem_file).resolve()
@@ -643,12 +738,79 @@ def main() -> int:
             time.sleep(args.backoff_seconds)
             continue
 
+        if blueprint.exists() and should_resume_section_verification(section_report):
+            state["status"] = "running"
+            state["runner_pid"] = os.getpid()
+            state["current_phase"] = "section_verifying"
+            state["updated_at_utc"] = utc_now()
+            write_json(state_path, state)
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "section_resume_started",
+                    "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
+                },
+            )
+            try:
+                run_section_verification_phase(
+                    args=args,
+                    blueprint=blueprint,
+                    section_report=section_report,
+                    results_dir=results_dir,
+                    heartbeat_path=heartbeat_path,
+                    state_path=state_path,
+                    state=state,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            theorem_library_lint = run_theorem_library_lint(blueprint, theorem_library_path, theorem_library_lint_path)
+            if theorem_library_lint:
+                append_jsonl(
+                    loop_journal_path,
+                    {
+                        "timestamp_utc": utc_now(),
+                        "event": "theorem_library_lint",
+                        "attempt": attempt_num,
+                        "execution_id": state["execution_id"],
+                        "attempt_execution_id": attempt_execution_id,
+                        "theorem_library_lint": theorem_library_lint,
+                    },
+                )
+            repair_brief = build_repair_brief(section_report, memory_verification_path)
+            if repair_brief:
+                write_json(repair_brief_path, repair_brief)
+            suspect_claims = update_suspect_claims(suspect_claims_path, repair_brief)
+            append_jsonl(
+                loop_journal_path,
+                {
+                    "timestamp_utc": utc_now(),
+                    "event": "section_resume_finished",
+                    "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
+                    "repair_brief_written": bool(repair_brief),
+                    "suspect_claims_count": len(suspect_claims),
+                },
+            )
+            if verified_blueprint.exists():
+                state["status"] = "verified"
+                state["verified_blueprint"] = str(verified_blueprint)
+                state["updated_at_utc"] = utc_now()
+                write_json(state_path, state)
+                heartbeat_path.write_text(utc_now() + "\n", encoding="utf-8")
+                print(f"Verified blueprint written to {verified_blueprint}")
+                return 0
+
         log_file = logs_dir / f"{problem_id}-attempt{attempt_num:02d}.md"
         state["current_log"] = str(log_file)
         state["attempt_started_at_utc"] = utc_now()
         prompt = build_prompt(
             args,
             problem_id,
+            section_report,
             repair_brief_path,
             suspect_claims_path,
             theorem_library_path,
@@ -675,31 +837,14 @@ def main() -> int:
 
         if blueprint.exists():
             try:
-                section_verify_log = results_dir / "section_verify_run.log"
-                state["current_phase"] = "section_verifying"
-                write_json(state_path, state)
-                section_exit = run_monitored_subprocess(
-                    [
-                        sys.executable,
-                        str(SECTION_VERIFY),
-                        "--resume-existing",
-                        "--mode",
-                        args.section_verify_mode,
-                        "--max-workers",
-                        str(args.section_verify_max_workers),
-                        "--passes-required",
-                        "3",
-                        "--output",
-                        str(section_report),
-                        str(blueprint),
-                    ],
-                    cwd=REPO_ROOT,
-                    log_path=section_verify_log,
-                    timeout_seconds=args.section_verify_timeout_seconds,
+                section_exit = run_section_verification_phase(
+                    args=args,
+                    blueprint=blueprint,
+                    section_report=section_report,
+                    results_dir=results_dir,
                     heartbeat_path=heartbeat_path,
                     state_path=state_path,
                     state=state,
-                    phase="section_verifying",
                 )
                 if section_exit != 0 and not section_report.exists():
                     failure_type = failure_type or "section_verifier_failed"
