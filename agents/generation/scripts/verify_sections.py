@@ -1091,6 +1091,7 @@ def main() -> int:
                     update_cache_after_report(idx, block, input_hash, report, output_path, pass_index)
                     reconcile_promotions_from_cache(output_path)
                     accepted_indices, provisional_indices, failure_roots, invalidated_indices, completed_indices = compute_session_sets(section_reports)
+                    break
                 else:
                     consecutive_failures += 1
                     if severity == "infrastructure_error":
@@ -1101,6 +1102,7 @@ def main() -> int:
                         update_cache_after_report(idx, block, input_hash, report, output_path, pass_index)
                         reconcile_promotions_from_cache(output_path)
                         accepted_indices, provisional_indices, failure_roots, invalidated_indices, completed_indices = compute_session_sets(section_reports)
+                        break
                     if consecutive_failures >= args.max_consecutive_failures:
                         overall_verdict = "return_to_generator"
                         break
@@ -1183,7 +1185,7 @@ def main() -> int:
                             overall_verdict = "wrong"
                     elif severity == "infrastructure_error":
                         deferred_indices.add(idx)
-                if overall_verdict in {"return_to_generator"}:
+                if overall_verdict in {"wrong", "return_to_generator"}:
                     break
 
         accepted_now, provisional_now, failure_roots_now, invalidated_now, completed_now = compute_session_sets(section_reports)
