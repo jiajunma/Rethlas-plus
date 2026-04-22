@@ -32,6 +32,10 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def execution_id_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
 def sanitize_problem_id(raw: str) -> str:
     cleaned = re.sub(r"\s+", "_", raw.strip())
     cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", cleaned)
@@ -173,12 +177,53 @@ def build_prompt(
     theorem_library_lint_path: Path,
     base_extra_prompt: str,
 ) -> str:
+    def summarize_theorem_library_for_prompt(path: Path) -> str:
+        payload = read_json(path) if path.exists() else {}
+        accepted = payload.get("accepted") or {}
+        if not isinstance(accepted, dict):
+            return ""
+        lines: List[str] = []
+        for entry in accepted.values():
+            if not isinstance(entry, dict) or entry.get("accepted") is not True:
+                continue
+            title = str(entry.get("title") or "")
+            statement = str(entry.get("statement") or "").strip()
+            if not title or not statement:
+                continue
+            lines.append(f"{title}\n{statement}\n")
+        return "\n".join(lines).strip()
+
+    def summarize_lint_for_prompt(path: Path) -> str:
+        payload = read_json(path) if path.exists() else {}
+        if not payload:
+            return ""
+        dep_issues = payload.get("accepted_dependency_issues") or []
+        if dep_issues:
+            return json.dumps({"accepted_dependency_issues": dep_issues}, ensure_ascii=False, indent=2)
+        return ""
+
+    theorem_library_payload = read_json(theorem_library_path) if theorem_library_path.exists() else {}
+    accepted_titles = {
+        str(entry.get("title", ""))
+        for entry in (theorem_library_payload.get("accepted") or {}).values()
+        if isinstance(entry, dict) and entry.get("accepted") is True
+    }
+    include_repair_brief = True
+    if repair_brief_path.exists():
+        try:
+            repair_brief_payload = read_json(repair_brief_path)
+        except Exception:  # noqa: BLE001
+            repair_brief_payload = {}
+        failing_locations = [str(x) for x in (repair_brief_payload.get("failing_locations") or [])]
+        if failing_locations and all(location in accepted_titles for location in failing_locations):
+            include_repair_brief = False
+
     prompt = (
         f"Use AGENTS.md exactly to solve the math problem in {args.problem_file}. "
         f"If memory/{problem_id}/ or results/{problem_id}/ already contain artifacts from an earlier run, "
         "resume from them instead of restarting from scratch. Preserve and build on prior memory, failed paths, and proof drafts."
     )
-    if repair_brief_path.exists():
+    if repair_brief_path.exists() and include_repair_brief:
         prompt += (
             "\n\nCurrent repair brief from the latest verification failure:\n"
             + repair_brief_path.read_text(encoding="utf-8")
@@ -190,19 +235,20 @@ def build_prompt(
             + suspect_claims_path.read_text(encoding="utf-8")
             + "\nIf one of these claims appears false, do not keep patching blindly; either revise the statement or produce counterexample evidence."
         )
-    if theorem_library_path.exists():
+    theorem_library_summary = summarize_theorem_library_for_prompt(theorem_library_path)
+    if theorem_library_summary:
         prompt += (
             "\n\nAccepted theorem library:\n"
-            + theorem_library_path.read_text(encoding="utf-8")
-            + "\nTreat every entry with `accepted: true` as an established theorem for this problem. "
+            + theorem_library_summary
+            + "\nTreat these accepted theorem statements as established for this problem. "
             "Do not discard these results when you reorganize the proof; reuse them as proved lemmas."
         )
-    if theorem_library_lint_path.exists():
+    lint_summary = summarize_lint_for_prompt(theorem_library_lint_path)
+    if lint_summary:
         prompt += (
-            "\n\nTheorem-library lint report:\n"
-            + theorem_library_lint_path.read_text(encoding="utf-8")
-            + "\nIf the lint report shows dependency-closure issues, stale accepted entries, or duplicate accepted statements, "
-            "repair the proof state conservatively without discarding genuinely accepted theorems."
+        "\n\nHard theorem-library lint report:\n"
+            + lint_summary
+            + "\nRepair any accepted-theorem dependency-closure issue conservatively without discarding genuinely accepted theorems."
         )
     if base_extra_prompt.strip():
         prompt += " " + base_extra_prompt.strip()
@@ -534,6 +580,7 @@ def main() -> int:
     state.setdefault("problem_file", args.problem_file)
     state.setdefault("created_at_utc", utc_now())
     state.setdefault("attempts", [])
+    state.setdefault("execution_id", execution_id_now())
     base_extra_prompt = args.extra_prompt
 
     if verified_blueprint.exists():
@@ -547,6 +594,7 @@ def main() -> int:
 
     attempt_num = len(state["attempts"]) + 1
     while args.max_attempts == 0 or attempt_num <= args.max_attempts:
+        attempt_execution_id = f"{state['execution_id']}:attempt{attempt_num}"
         verifier_health = fetch_verifier_health(args.verify_url)
         if (
             state.get("status") == "blocked_on_verifier_backend"
@@ -563,6 +611,8 @@ def main() -> int:
                     "timestamp_utc": utc_now(),
                     "event": "recovered_from_idle_verifier",
                     "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
                 },
             )
 
@@ -571,6 +621,7 @@ def main() -> int:
         state["active_attempt"] = attempt_num
         state["runner_pid"] = os.getpid()
         state["current_phase"] = "generation"
+        state["attempt_execution_id"] = attempt_execution_id
         state["updated_at_utc"] = utc_now()
         write_json(state_path, state)
         append_jsonl(
@@ -579,6 +630,8 @@ def main() -> int:
                 "timestamp_utc": utc_now(),
                 "event": "attempt_started",
                 "attempt": attempt_num,
+                "execution_id": state["execution_id"],
+                "attempt_execution_id": attempt_execution_id,
             },
         )
 
@@ -611,6 +664,7 @@ def main() -> int:
         state["attempts"].append(
             {
                 "attempt": attempt_num,
+                "attempt_execution_id": attempt_execution_id,
                 "started_log": str(log_file),
                 "exit_code": exit_code,
                 "failure_type": failure_type,
@@ -660,6 +714,8 @@ def main() -> int:
                     "timestamp_utc": utc_now(),
                     "event": "theorem_library_lint",
                     "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
                     "theorem_library_lint": theorem_library_lint,
                 },
             )
@@ -673,6 +729,8 @@ def main() -> int:
                     "timestamp_utc": utc_now(),
                     "event": "repair_brief_written",
                     "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
                     "repair_brief": repair_brief,
                 },
             )
@@ -684,6 +742,8 @@ def main() -> int:
                     "timestamp_utc": utc_now(),
                     "event": "suspect_claims_updated",
                     "attempt": attempt_num,
+                    "execution_id": state["execution_id"],
+                    "attempt_execution_id": attempt_execution_id,
                     "suspect_claims": suspect_claims,
                 },
             )
@@ -694,6 +754,8 @@ def main() -> int:
                 "timestamp_utc": utc_now(),
                 "event": "attempt_finished",
                 "attempt": attempt_num,
+                "execution_id": state["execution_id"],
+                "attempt_execution_id": attempt_execution_id,
                 "exit_code": exit_code,
                 "failure_type": failure_type,
                 "log_file": str(log_file),

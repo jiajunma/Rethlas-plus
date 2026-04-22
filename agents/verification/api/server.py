@@ -34,7 +34,7 @@ STATE_FILENAME = "state.json"
 
 ACTIVE_LOCK = threading.Lock()
 ACTIVE_RUN_IDS: set[str] = set()
-VERIFY_QUEUE: Deque[Tuple[str, str, str]] = deque()
+VERIFY_QUEUE: Deque[Tuple[str, str, str, str]] = deque()
 QUEUE_CONDITION = threading.Condition()
 WORKER_STARTED = False
 VERIFIER_WORKERS = int(os.getenv("VERIFY_WORKERS", "3"))
@@ -57,6 +57,11 @@ def _utc_timestamp() -> str:
 
 def _statement_hash(statement: str) -> str:
     return hashlib.sha256(statement.encode("utf-8")).hexdigest()[:12]
+
+
+def _verification_key(statement: str, proof: str, context: str = "") -> str:
+    payload = statement + "\n\n---CONTEXT---\n\n" + context + "\n\n---PROOF---\n\n" + proof
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def generate_run_id(statement: str) -> str:
@@ -105,6 +110,23 @@ def _write_state(run_id: str, payload: Dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
+
+
+def _find_existing_run_for_verification_key(verification_key: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
+    candidates = sorted(
+        [p for p in RESULTS_ROOT.iterdir() if p.is_dir()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for run_dir in candidates:
+        state = _read_state(run_dir.name)
+        if state.get("verification_key") != verification_key:
+            continue
+        status = state.get("status")
+        if status in {"queued", "running", "succeeded"}:
+            return run_dir.name, state
+    return None
 
 
 def _write_verification_payload(run_id: str, payload: Dict[str, Any]) -> Path:
@@ -164,6 +186,17 @@ def _reconcile_stale_states() -> None:
             continue
         status = payload.get("status")
         if status in {"queued", "running"}:
+            verification_path = _verification_path(run_dir.name)
+            if verification_path is not None:
+                try:
+                    verification_payload = json.loads(verification_path.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001
+                    verification_payload = {}
+                payload["status"] = "succeeded"
+                payload["verdict"] = verification_payload.get("verdict", payload.get("verdict", ""))
+                payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+                state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+                continue
             payload["status"] = "interrupted"
             payload["error"] = "Verifier restarted before this run completed."
             payload["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
@@ -268,23 +301,26 @@ def build_codex_command(run_id: str, statement: str, proof: str, context: str = 
     ]
 
 
-def _mark_running(run_id: str, statement: str) -> None:
+def _mark_running(run_id: str, statement: str, verification_key: str) -> None:
     _write_state(
         run_id,
         {
             "run_id": run_id,
             "status": "running",
             "statement": statement,
+            "verification_key": verification_key,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
 
 
 def _mark_finished(run_id: str, statement: str, status: str, details: Optional[Dict[str, Any]] = None) -> None:
+    current = _read_state(run_id)
     payload = {
         "run_id": run_id,
         "status": status,
         "statement": statement,
+        "verification_key": current.get("verification_key", ""),
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     if details:
@@ -298,7 +334,8 @@ def run_codex_verification(run_id: str, statement: str, proof: str, context: str
     log_path = _log_path(run_id)
     proof_path = results_dir / "proof.md"
     proof_path.write_text(proof, encoding="utf-8")
-    _mark_running(run_id, statement)
+    verification_key = _verification_key(statement, proof, context)
+    _mark_running(run_id, statement, verification_key)
     cmd = build_codex_command(run_id=run_id, statement=statement, proof=proof, context=context)
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -452,6 +489,11 @@ def health() -> Dict[str, str]:
 
 @app.post("/verify")
 def verify(request: VerifyRequest) -> Dict[str, Any]:
+    verification_key = _verification_key(request.statement, request.proof, request.context)
+    existing = _find_existing_run_for_verification_key(verification_key)
+    if existing is not None:
+        run_id, _state = existing
+        return _wait_for_completion(run_id, CODEX_TIMEOUT_SECONDS)
     run_id = _allocate_run_id(request.statement)
     _write_state(
         run_id,
@@ -459,6 +501,7 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
             "run_id": run_id,
             "status": "queued",
             "statement": request.statement,
+            "verification_key": verification_key,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -468,6 +511,11 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
 
 @app.post("/verify_async", response_model=VerifyAcceptedResponse)
 def verify_async(request: VerifyRequest) -> VerifyAcceptedResponse:
+    verification_key = _verification_key(request.statement, request.proof, request.context)
+    existing = _find_existing_run_for_verification_key(verification_key)
+    if existing is not None:
+        run_id, state = existing
+        return VerifyAcceptedResponse(run_id=run_id, status=str(state.get("status") or "queued"))
     run_id = _allocate_run_id(request.statement)
     _write_state(
         run_id,
@@ -475,6 +523,7 @@ def verify_async(request: VerifyRequest) -> VerifyAcceptedResponse:
             "run_id": run_id,
             "status": "queued",
             "statement": request.statement,
+            "verification_key": verification_key,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
