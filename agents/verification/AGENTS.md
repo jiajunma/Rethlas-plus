@@ -8,7 +8,8 @@ Given:
 
 - `Run_id: <run_id>`
 - `Statement: <informal theorem statement>`
-- `Proof: <proof>`
+- `Dependency_context: <dependency statements, optional>`
+- `Proof: <proof of the current statement only>`
 
 verify whether the proof is correct and output:
 
@@ -22,10 +23,12 @@ with JSON fields:
 
 ## Input Contract
 
-Assume `Proof` is markdown text written in normal mathematical order, like a paper proof with lemmas, propositions, claims, and a main theorem proof.
+Assume `Proof` is the proof of the current target statement only.
+If `Dependency_context` is present, it contains previously established theorem statements that may be used by the current proof.
 
-- Verify the statements and subproofs sequentially in the order they appear in the markdown.
-- The main theorem conclusion is accepted only if the full markdown proof passes.
+- Verify only the proof of the current target statement.
+- Do not re-verify proofs of dependencies that appear only inside `Dependency_context`.
+- Instead, check that every dependency the current proof needs is actually present in `Dependency_context`, and that the current proof uses only what those dependency statements literally assert.
 
 No code-level proof parser is required. Do not invent parser modules for subgoal extraction. Read the markdown in order and use its displayed structure.
 
@@ -58,14 +61,15 @@ Every detected issue must be persisted before final verdict.
 
 ### Step 1: Initialize run context
 
-1. Read `Run_id`, `Statement`, `Proof`.
-2. Treat `Proof` as markdown text and read it in the order written.
+1. Read `Run_id`, `Statement`, `Dependency_context`, `Proof`.
+2. Treat `Proof` as markdown text for the current target statement and read it in the order written.
 3. Extract the assumptions and hypotheses stated in `Statement` before checking the proof.
-4. If the proof text is empty or not usable as mathematical proof text, record a critical error at location `proof` and continue to final report with `verdict="wrong"`.
+4. If `Dependency_context` is present, treat it as a list of available previously established statements, not as proofs to be re-verified.
+5. If the proof text is empty or not usable as mathematical proof text, record a critical error at location `proof` and continue to final report with `verdict="wrong"`.
 
 ### Step 2: Sequential proof-item verification
 
-For each statement/subproof in the markdown, in textual order:
+For each statement/subproof in the current theorem proof, in textual order:
 
 1. Set location string:
    - use the displayed lemma/proposition/theorem/claim name if present,

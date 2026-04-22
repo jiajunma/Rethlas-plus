@@ -43,6 +43,7 @@ VERIFIER_WORKERS = int(os.getenv("VERIFY_WORKERS", "3"))
 class VerifyRequest(BaseModel):
     statement: str = Field(..., min_length=1)
     proof: str = Field(..., min_length=1)
+    context: str = ""
 
 
 class VerifyAcceptedResponse(BaseModel):
@@ -227,21 +228,32 @@ def _wait_for_completion(run_id: str, timeout_seconds: Optional[int]) -> Dict[st
         time.sleep(1)
 
 
-def build_prompt(run_id: str, statement: str, proof: str) -> str:
-    return (
+def build_prompt(run_id: str, statement: str, proof: str, context: str = "") -> str:
+    prompt = (
         f"Run_id: {run_id}. "
         f"Statement: {statement}. "
-        f"Proof:\n{proof}\n\n"
-        "Use AGENTS.md to verify the above proof for the statement. "
-        "Be explicit about dependency closure: check whether every depended-on theorem actually appears in the supplied proof context, "
-        "and whether the current proof uses only what those dependent statements literally assert. "
+    )
+    if context.strip():
+        prompt += (
+            "Dependency_context:\n"
+            f"{context}\n\n"
+        )
+    prompt += (
+        "Proof_of_current_statement_only:\n"
+        f"{proof}\n\n"
+        "Use AGENTS.md to verify only the proof of the current statement. "
+        "Treat Dependency_context as previously established theorem statements available for use. "
+        "Do not re-verify proofs of dependencies. "
+        "Instead, check that every dependency the current proof needs is actually present in Dependency_context, "
+        "and that the proof uses only what those dependent statements literally assert. "
         "You must still write results/{run_id}/verification.json if possible, "
         "but in addition your final response must end with the raw verification JSON object itself, "
         "with no markdown fence and no extra prose after that JSON."
     )
+    return prompt
 
 
-def build_codex_command(run_id: str, statement: str, proof: str) -> List[str]:
+def build_codex_command(run_id: str, statement: str, proof: str, context: str = "") -> List[str]:
     return [
         CODEX_BIN,
         "exec",
@@ -252,7 +264,7 @@ def build_codex_command(run_id: str, statement: str, proof: str) -> List[str]:
         "--config",
         f"model_reasoning_effort={CODEX_REASONING_EFFORT}",
         "--dangerously-bypass-approvals-and-sandbox",
-        build_prompt(run_id=run_id, statement=statement, proof=proof),
+        build_prompt(run_id=run_id, statement=statement, proof=proof, context=context),
     ]
 
 
@@ -280,14 +292,14 @@ def _mark_finished(run_id: str, statement: str, status: str, details: Optional[D
     _write_state(run_id, payload)
 
 
-def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str, Any]:
+def run_codex_verification(run_id: str, statement: str, proof: str, context: str = "") -> Dict[str, Any]:
     results_dir = _results_dir(run_id)
     results_dir.mkdir(parents=True, exist_ok=True)
     log_path = _log_path(run_id)
     proof_path = results_dir / "proof.md"
     proof_path.write_text(proof, encoding="utf-8")
     _mark_running(run_id, statement)
-    cmd = build_codex_command(run_id=run_id, statement=statement, proof=proof)
+    cmd = build_codex_command(run_id=run_id, statement=statement, proof=proof, context=context)
 
     started_at = datetime.now(timezone.utc).isoformat()
     slot_path = acquire_slot(f"verifier:{run_id}")
@@ -374,9 +386,9 @@ def run_codex_verification(run_id: str, statement: str, proof: str) -> Dict[str,
     return payload
 
 
-def _run_verification_background(run_id: str, statement: str, proof: str) -> None:
+def _run_verification_background(run_id: str, statement: str, proof: str, context: str = "") -> None:
     try:
-        run_codex_verification(run_id=run_id, statement=statement, proof=proof)
+        run_codex_verification(run_id=run_id, statement=statement, proof=proof, context=context)
     except Exception as exc:  # noqa: BLE001
         _mark_finished(run_id, statement, "failed", {"error": str(exc)})
     finally:
@@ -389,10 +401,10 @@ def _worker_loop() -> None:
         with QUEUE_CONDITION:
             while not VERIFY_QUEUE:
                 QUEUE_CONDITION.wait()
-            run_id, statement, proof = VERIFY_QUEUE.popleft()
+            run_id, statement, proof, context = VERIFY_QUEUE.popleft()
         with ACTIVE_LOCK:
             ACTIVE_RUN_IDS.add(run_id)
-        _run_verification_background(run_id, statement, proof)
+        _run_verification_background(run_id, statement, proof, context)
 
 
 def _ensure_worker_started() -> None:
@@ -406,10 +418,10 @@ def _ensure_worker_started() -> None:
         WORKER_STARTED = True
 
 
-def _enqueue_verification(run_id: str, statement: str, proof: str) -> None:
+def _enqueue_verification(run_id: str, statement: str, proof: str, context: str = "") -> None:
     _ensure_worker_started()
     with QUEUE_CONDITION:
-        VERIFY_QUEUE.append((run_id, statement, proof))
+        VERIFY_QUEUE.append((run_id, statement, proof, context))
         QUEUE_CONDITION.notify()
 
 
@@ -450,7 +462,7 @@ def verify(request: VerifyRequest) -> Dict[str, Any]:
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
-    _enqueue_verification(run_id, request.statement, request.proof)
+    _enqueue_verification(run_id, request.statement, request.proof, request.context)
     return _wait_for_completion(run_id, CODEX_TIMEOUT_SECONDS)
 
 
@@ -466,7 +478,7 @@ def verify_async(request: VerifyRequest) -> VerifyAcceptedResponse:
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     )
-    _enqueue_verification(run_id, request.statement, request.proof)
+    _enqueue_verification(run_id, request.statement, request.proof, request.context)
     return VerifyAcceptedResponse(run_id=run_id, status="queued")
 
 

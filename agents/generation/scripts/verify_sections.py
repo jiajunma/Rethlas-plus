@@ -180,14 +180,15 @@ def call_verifier(
     verify_url: str,
     statement: str,
     proof: str,
+    context: str,
     timeout_seconds: int,
 ) -> Dict[str, Any]:
-    payload = {"statement": statement, "proof": proof}
+    payload = {"statement": statement, "proof": proof, "context": context}
     submit = requests.post(
         f"{verify_url}/verify_async",
-        json=payload,
-        timeout=30,
-    )
+            json=payload,
+            timeout=30,
+        )
     if submit.status_code == 404:
         sync_response = requests.post(
             f"{verify_url}/verify",
@@ -365,6 +366,8 @@ def main() -> int:
             if isinstance(accepted, dict):
                 return accepted
         return {}
+
+    theorem_library: Dict[str, Dict[str, Any]] = load_theorem_library()
 
     def library_status(entry: Dict[str, Any]) -> str:
         status = entry.get("status")
@@ -558,7 +561,7 @@ def main() -> int:
             write_theorem_library(library)
         return library
 
-    theorem_library = bootstrap_theorem_library(load_theorem_library())
+    theorem_library = bootstrap_theorem_library(theorem_library)
     verification_session_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
     def record_verified_report(
@@ -627,44 +630,35 @@ def main() -> int:
         return []
 
     def run_one_pass(pass_index: int, completed_passes: int) -> Dict[str, Any]:
-        def build_verification_context(idx: int) -> str:
+        def build_dependency_context(idx: int) -> str:
             parts: List[str] = []
-            for dep_idx in dependency_closure(dependencies, idx):
+            for dep_idx in dependencies.get(idx, []):
                 dep_block = blocks[dep_idx - 1]
                 dep_statement_key = block_statement_keys[dep_idx]
-                cached = theorem_library.get(dep_statement_key)
-                if is_reusable(cached):
-                    status = library_status(cached)
-                    note = (
-                        "Accepted in theorem library after three successful verifier passes."
-                        if status == "accepted"
-                        else f"Provisionally verified in theorem library ({cached.get('correct_verify_count', 0)} successful verifier passes, not yet accepted)."
-                    )
-                    parts.append(
-                        "\n".join(
-                            [
-                                dep_block.title,
-                                "",
-                                "## statement",
-                                dep_block.statement.strip(),
-                                "",
-                                "## proof",
-                                note,
-                            ]
-                        ).strip()
-                        + "\n"
-                    )
-                else:
-                    parts.append(dep_block.markdown.rstrip() + "\n")
-            parts.append(blocks[idx - 1].markdown.rstrip() + "\n")
+                cached = theorem_library.get(dep_statement_key) or {}
+                status = library_status(cached) if isinstance(cached, dict) else "unverified"
+                parts.append(
+                    "\n".join(
+                        [
+                            dep_block.title,
+                            "",
+                            "## statement",
+                            dep_block.statement.strip(),
+                            "",
+                            "## dependency-status",
+                            status,
+                        ]
+                    ).strip()
+                    + "\n"
+                )
             return "\n".join(parts).strip() + "\n"
 
-        verification_contexts = {
-            idx: build_verification_context(idx)
+        dependency_contexts = {
+            idx: build_dependency_context(idx)
             for idx in range(1, len(blocks) + 1)
         }
         expected_input_hashes = {
-            idx: compute_input_hash(block.statement, verification_contexts[idx])
+            idx: compute_input_hash(block.statement, dependency_contexts[idx] + "\n\n" + block.proof)
             for idx, block in enumerate(blocks, start=1)
         }
 
@@ -735,7 +729,7 @@ def main() -> int:
                 "overall_verdict": "wrong",
             }
 
-        def verify_one(idx: int, block: ProofBlock, proof_text: str, input_hash: str) -> Dict[str, Any]:
+        def verify_one(idx: int, block: ProofBlock, dependency_context: str, input_hash: str) -> Dict[str, Any]:
             report: Dict[str, Any] = {
                 "index": idx,
                 "title": block.title,
@@ -746,7 +740,8 @@ def main() -> int:
             verifier_payload = call_verifier(
                 verify_url=args.verify_url,
                 statement=block.statement,
-                proof=proof_text,
+                proof=block.proof,
+                context=dependency_context,
                 timeout_seconds=args.timeout_seconds,
             )
             report["verification"] = verifier_payload
@@ -771,14 +766,14 @@ def main() -> int:
                     break
                 idx = min(ready_indices)
                 block = blocks[idx - 1]
-                proof_text = verification_contexts[idx]
+                dependency_context = dependency_contexts[idx]
                 input_hash = expected_input_hashes[idx]
                 print(
                     f"[verify_sections] pass starting block {idx}/{len(blocks)}: {block.title}",
                     flush=True,
                 )
                 try:
-                    report = verify_one(idx, block, proof_text, input_hash)
+                    report = verify_one(idx, block, dependency_context, input_hash)
                 except Exception as exc:  # noqa: BLE001
                     report = {
                         "index": idx,
@@ -844,9 +839,9 @@ def main() -> int:
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
                     for idx in batch_indices:
                         block = blocks[idx - 1]
-                        proof_text = verification_contexts[idx]
+                        dependency_context = dependency_contexts[idx]
                         input_hash = expected_input_hashes[idx]
-                        futures[executor.submit(verify_one, idx, block, proof_text, input_hash)] = (idx, block, input_hash)
+                        futures[executor.submit(verify_one, idx, block, dependency_context, input_hash)] = (idx, block, input_hash)
 
                     parallel_reports: Dict[int, Dict[str, Any]] = {}
                     for future in as_completed(futures):
