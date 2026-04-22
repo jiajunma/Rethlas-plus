@@ -17,7 +17,7 @@ import requests
 VERIFY_URL = "http://127.0.0.1:8091"
 DEFAULT_TIMEOUT_SECONDS = 3600
 POLL_INTERVAL_SECONDS = 5
-PROOF_LINE_TARGET = 100
+PROOF_LINE_TARGET = 200
 LABEL_PATTERN = re.compile(r"(lem:[A-Za-z0-9_]+|prop:[A-Za-z0-9_]+|thm:[A-Za-z0-9_]+)")
 THEOREM_LIBRARY_FILENAME = "theorem_library.json"
 LEGACY_VERIFIED_CACHE_FILENAME = "section_verified_cache.json"
