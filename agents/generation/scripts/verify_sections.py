@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from verification_aggregation import refresh_verification_cache_from_results
+
 
 VERIFY_URL = "http://127.0.0.1:8091"
 DEFAULT_TIMEOUT_SECONDS = 3600
@@ -577,8 +579,12 @@ def main() -> int:
     verification_cache = bootstrap_verification_cache_from_snapshots(verification_cache)
     if not args.skip_theorem_library_writes:
         write_theorem_library(theorem_library)
-        if not verification_cache_path.exists():
-            write_verification_cache(verification_cache)
+    verification_cache = refresh_verification_cache_from_results(
+        blueprint_path=blueprint_path,
+        theorem_library_path=theorem_library_path,
+        verifier_results_root=verifier_results_root,
+        output_path=verification_cache_path,
+    )
 
     verification_session_id = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 

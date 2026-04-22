@@ -19,6 +19,11 @@ from typing import Any, Dict, List, Optional
 import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from common.codex_budget import acquire_slot, maybe_restore_default_limit, note_rate_limit, release_slot  # noqa: E402
+from verification_aggregation import (  # noqa: E402
+    build_current_scheduler_view,
+    latest_current_wrong_from_scheduler_view,
+    refresh_verification_cache_from_results,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -216,6 +221,26 @@ def should_resume_section_verification(section_report_path: Path) -> bool:
         if isinstance(item, dict)
     ]
     return "wrong" not in statuses and any(status in {"ready", "provisional", "invalidated"} for status in statuses)
+
+
+def should_resume_section_verification_from_current_view(
+    blueprint_path: Path,
+    theorem_library_path: Path,
+    verification_cache_path: Path,
+) -> bool:
+    scheduler_view = build_current_scheduler_view(
+        blueprint_path=blueprint_path,
+        theorem_library_path=theorem_library_path,
+        verification_cache_path=verification_cache_path,
+    )
+    blocks = scheduler_view.get("blocks") or []
+    if any(block.get("scheduler_status") == "wrong" for block in blocks if isinstance(block, dict)):
+        return False
+    return any(
+        block.get("scheduler_status") in {"ready", "provisional"}
+        for block in blocks
+        if isinstance(block, dict)
+    )
 
 
 def split_top_level_blocks(text: str) -> List[str]:
@@ -885,6 +910,7 @@ def main() -> int:
     suspect_claims_path = results_dir / "suspect_claims.json"
     theorem_library_path = results_dir / "theorem_library.json"
     theorem_library_lint_path = results_dir / "theorem_library_lint.json"
+    verification_cache_path = results_dir / "verification_cache.json"
     loop_journal_path = results_dir / "loop_journal.jsonl"
     snapshots_dir = results_dir / "attempt_snapshots"
     memory_verification_path = MEMORY_ROOT / problem_id / "verification_reports.jsonl"
@@ -964,8 +990,28 @@ def main() -> int:
             time.sleep(args.backoff_seconds)
             continue
 
+        if blueprint.exists():
+            refresh_verification_cache_from_results(
+                blueprint_path=blueprint,
+                theorem_library_path=theorem_library_path,
+                verifier_results_root=VERIFIER_RESULTS_ROOT,
+                output_path=verification_cache_path,
+            )
+
+        scheduler_view = (
+            build_current_scheduler_view(
+                blueprint_path=blueprint,
+                theorem_library_path=theorem_library_path,
+                verification_cache_path=verification_cache_path,
+            )
+            if blueprint.exists()
+            else {"blocks": []}
+        )
         current_matching_wrong = (
-            latest_matching_wrong_verifier_result(blueprint, theorem_library_path)
+            latest_current_wrong_from_scheduler_view(
+                scheduler_view=scheduler_view,
+                verification_cache_path=verification_cache_path,
+            )
             if blueprint.exists()
             else None
         )
@@ -985,7 +1031,15 @@ def main() -> int:
                 },
             )
 
-        if blueprint.exists() and current_matching_wrong is None and should_resume_section_verification(section_report):
+        if (
+            blueprint.exists()
+            and current_matching_wrong is None
+            and should_resume_section_verification_from_current_view(
+                blueprint_path=blueprint,
+                theorem_library_path=theorem_library_path,
+                verification_cache_path=verification_cache_path,
+            )
+        ):
             state["status"] = "running"
             state["runner_pid"] = os.getpid()
             state["current_phase"] = "section_verifying"
@@ -1098,6 +1152,14 @@ def main() -> int:
                     failure_type = failure_type or "section_verifier_failed"
             except Exception:  # noqa: BLE001
                 pass
+
+        if blueprint.exists():
+            refresh_verification_cache_from_results(
+                blueprint_path=blueprint,
+                theorem_library_path=theorem_library_path,
+                verifier_results_root=VERIFIER_RESULTS_ROOT,
+                output_path=verification_cache_path,
+            )
 
         theorem_library_lint = run_theorem_library_lint(blueprint, theorem_library_path, theorem_library_lint_path)
         if theorem_library_lint:
