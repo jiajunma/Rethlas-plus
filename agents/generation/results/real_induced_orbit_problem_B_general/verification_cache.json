@@ -1,0 +1,190 @@
+{
+  "updated_at_utc": "2026-04-22T23:59:30Z",
+  "current_verification_keys": [
+    "20ab765e4e085ce54516ddc4bdd3c47e1b5d363ac358f8783fca27b1dd191117",
+    "d430d9d1979d10cf52c49f1c2ae74e54ea25bd606610c79f3da18ce6a3dfa6e7"
+  ],
+  "pairs": {
+    "d430d9d1979d10cf52c49f1c2ae74e54ea25bd606610c79f3da18ce6a3dfa6e7": {
+      "index": 27,
+      "title": "# theorem thm:recursive_signed_induction",
+      "label": "thm:recursive_signed_induction",
+      "statement": "Assume the geometric-partition input from the problem statement:\nevery \\(\\preceq\\)-maximal real orbit in\n\\[\n\\operatorname{Ind}_P^G(\\mathcal O_0)\n\\]\nhas ordinary partition\n\\[\n\\lambda_{\\mathrm{geom}}=\\operatorname{collapse}_X(\\lambda_0+(2^r)).\n\\]\n\nDefine recursively a set \\(\\mathcal A(D,r)\\) of admissible signed Young diagrams.\nWrite \\(\\sqcup\\) for multiset union of rows.\n\n1. If \\(r=0\\), set \\(\\mathcal A(D,0)=\\{D\\}\\).\n2. Suppose \\(r>0\\) and \\(D\\) has a largest row length \\(d\\ge 1\\).\n   - If \\(d\\) has free-sign parity, let \\(p_d^+,p_d^-\\) be the numbers of \\(+\\)- and \\(-\\)-rows of length \\(d\\), put\n\\[\nm=\\min(r,p_d^++p_d^-),\n\\]\nand choose \\(a,b\\) with \\(a+b=m\\), \\(a\\le p_d^+\\), \\(b\\le p_d^-\\).\nLet \\(D_{\\mathrm{res}}\\) be obtained from \\(D\\) by deleting \\(a\\) \\(+\\)-rows and \\(b\\) \\(-\\)-rows of length \\(d\\), and let \\(P_{\\mathrm{new}}\\) be the diagram consisting of \\(a\\) \\(-\\)-rows and \\(b\\) \\(+\\)-rows of length \\(d+2\\).\nFor this choice, the outputs are\n\\[\nP_{\\mathrm{new}}\\sqcup E\n\\qquad(E\\in \\mathcal A(D_{\\mathrm{res}},r-m)).\n\\]\nTake the union over all admissible choices of \\(a,b\\).\n   - If \\(d\\) has forced-pair parity, let \\(s_d\\) be the number of forced \\(+/-\\) pairs of length \\(d\\), and put\n\\[\nm=\\min(r,2s_d).\n\\]\nIf \\(m=2a\\), let \\(D_{\\mathrm{res}}\\) be obtained from \\(D\\) by deleting \\(a\\) forced \\(+/-\\) pairs of length \\(d\\), and let \\(P_{\\mathrm{new}}\\) consist of \\(a\\) forced \\(+/-\\) pairs of length \\(d+2\\).\nIf \\(m=2a+1\\), let \\(D_{\\mathrm{res}}\\) be obtained from \\(D\\) by deleting \\(a+1\\) forced \\(+/-\\) pairs of length \\(d\\), and let \\(P_{\\mathrm{new}}\\) consist of \\(a\\) forced \\(+/-\\) pairs of length \\(d+2\\) together with two rows of length \\(d+1\\) with opposite signs.\nFor each admissible choice, the outputs are\n\\[\nP_{\\mathrm{new}}\\sqcup E\n\\qquad(E\\in \\mathcal A(D_{\\mathrm{res}},r-m)).\n\\]\nTake the union over all admissible choices of the consumed length-\\(d\\) pairs.\n3. If \\(r>0\\) and \\(D\\) has no rows:\n   - in the symplectic family, choose any \\(a+b=r\\) and output \\(a\\) rows \\( [2]_+ \\) and \\(b\\) rows \\( [2]_- \\);\n   - in the orthogonal family, if \\(r=2a\\) output \\(a\\) forced \\(+/-\\) pairs of length \\(2\\), and if \\(r=2a+1\\) output those pairs together with two rows of length \\(1\\) of opposite signs.\n\nThen the \\(\\preceq\\)-maximal real induced orbits in \\(\\operatorname{Ind}_P^G(\\mathcal O_0)\\) are exactly the real nilpotent orbits whose signed Young diagrams lie in \\(\\mathcal A(D_0,r)\\).",
+      "proof": "Proposition `prop:slice_geometric_partition_classification` identifies the\ndiagrams in \\(\\mathcal A(D_0,r)\\) exactly with the signed Young diagrams of the\nslice points\n\\[\nx\\in x_0+\\mathfrak u\n\\]\nwhose ordinary partition is \\(\\lambda_{\\mathrm{geom}}\\).\n\nIf \\(E\\in \\mathcal A(D_0,r)\\), choose such a slice point \\(x\\). Lemma\n`lem:lambda_geom_points_are_maximal` then shows that the real orbit \\(G\\cdot x\\)\nis \\(\\preceq\\)-maximal in \\(\\operatorname{Ind}_P^G(\\mathcal O_0)\\). So every\ndiagram in \\(\\mathcal A(D_0,r)\\) occurs on a maximal real induced orbit.\n\nConversely, let \\(\\mathcal O\\) be a \\(\\preceq\\)-maximal real induced orbit. By\nthe geometric-partition hypothesis stated at the start of the theorem, every\npoint of \\(\\mathcal O\\) has ordinary partition \\(\\lambda_{\\mathrm{geom}}\\). By\nlemma `lem:maximal_orbits_vs_open_subsets`, the set\n\\[\n\\mathcal O\\cap S,\n\\qquad\nS=\\mathcal O_0+\\mathfrak u,\n\\]\ncontains a nonempty open subset of \\(S\\). Lemma\n`lem:open_in_S_gives_open_in_slice` therefore implies that\n\\[\n\\mathcal O\\cap (x_0+\\mathfrak u)\n\\]\ncontains a nonempty open subset of the slice. Choose\n\\[\nx\\in \\mathcal O\\cap(x_0+\\mathfrak u).\n\\]\nThen \\(x\\) has ordinary partition \\(\\lambda_{\\mathrm{geom}}\\), so proposition\n`prop:slice_geometric_partition_classification` gives\n\\[\n\\text{signed diagram}(x)\\in \\mathcal A(D_0,r).\n\\]\nThus the \\(\\preceq\\)-maximal real induced orbits are exactly the real nilpotent\norbits whose signed Young diagrams lie in \\(\\mathcal A(D_0,r)\\).",
+      "statement_key": "b4332799c75c24b57b78c9063d6150567ce80b567b0ccb6487f3de85fc880d0e",
+      "verification_key": "d430d9d1979d10cf52c49f1c2ae74e54ea25bd606610c79f3da18ce6a3dfa6e7",
+      "dependency_indices": [
+        1,
+        4,
+        23,
+        26
+      ],
+      "dependency_statement_keys": [
+        "d843bd509071b238639127c0248ab2ed5e40bc147484b7849e64ddc4554efb3e",
+        "446f715cc78ebd15f15470dbf63d6e5162a671a2b982955c6d9578cd9ba5aa40",
+        "7708979502d93c487bb20a7a40f1666362868a84cc2be08adb6177187f290897",
+        "58c43ae19eed5e330cf08598fb9e09c02aa74e7674e052b461fb12c1b1d56cd2",
+        "bb1f954d7434b0dc103428723570a48bbc479c93854c51718c1e51f3707ef189",
+        "e07b5000e8ee0d7c50602cd16609ccd2b535a36d7a3a01fd53ca772aafba3b26",
+        "9599afa37cbdcebba91b250e3ffe4ca85c7dc25a1f55e67a34e7d065bc504f3c",
+        "f7f367eabeb40890ee7a3711ea513b486202c4f0ebddc1e0f6c1f35728ca0e13",
+        "52fd2b16ea461fe753ba34023a6842e460701302d49df8786d4f101e00b252d5",
+        "0f842b25ba7189dfb8205c976eeea6479eb1175e555233b2b70d1e282a249d74",
+        "a44b05f10b87f5dd202f70d73bcdd162fa39e4161644682e3fc8574dc440bb7e",
+        "20e13cd8ddeff5937763bdc738cd91e99d36f7f0fd11480a6c7e3f74a1057d6d",
+        "bfb5453f9ae89e8b987b7cfe8fa3aaa9b5b97c8d602bed34c1d74985f682e545",
+        "cb14538f3d1d3185fd7b3e54468da80c9117b25adb084e272b8092e539a8935d",
+        "ebeb776e7bb8b31c4d7d2f865b73c3ab689022bb30a9522e98e7cb0894eb5a67",
+        "7e0960ae9d159c77408f70afebd5253b51a71b384abca3fdabf799a0f6f6d1ed",
+        "2358742f0da84697ce8b99349c63386e6205d376a0e7dc65000c45b2fa6b7336",
+        "e16e777342e3084094dcd2bff7c338cfceb79186f7b89012a769f407e9ad2aa5",
+        "07cf020a7f9e2b1bb50f4ef42d1909826a78a64b8386ece330166407d3e1e494",
+        "59d8feffc79ec687ff34f9e0d4320ef4e39a97f7cda75628c878388505599f9b",
+        "15553e48a78e9c034b9589f81e6c15033c8ef35eea0100c388ca100b08c2ea56",
+        "fba16c64d9f4ab889cf28429e651d21d05b8c89996bfc0160513a638251a02e3",
+        "34a6378c55b18b5769604d6e0ab2c7ea279c4bc6fa1bec6e70f6c90a978b6ab3",
+        "a1856dcaa581cc6b15abce9ef0450bca5f8c88ad65e15f45511005ad71172e09"
+      ],
+      "correct_run_ids": [
+        "20260422T142013Z_b4332799c75c",
+        "20260422T142558Z_b4332799c75c",
+        "20260422T143110Z_b4332799c75c",
+        "20260422T143621Z_b4332799c75c",
+        "20260422T144647Z_b4332799c75c",
+        "20260422T145143Z_b4332799c75c",
+        "20260422T150015Z_b4332799c75c",
+        "20260422T151559Z_b4332799c75c",
+        "20260422T152831Z_b4332799c75c",
+        "20260422T161212Z_b4332799c75c",
+        "20260422T161903Z_b4332799c75c",
+        "20260422T162334Z_b4332799c75c",
+        "20260422T194608Z_b4332799c75c",
+        "20260422T201103Z_b4332799c75c",
+        "20260422T201438Z_b4332799c75c",
+        "20260422T220857Z_b4332799c75c",
+        "20260422T223353Z_b4332799c75c",
+        "20260422T224555Z_b4332799c75c",
+        "20260422T225126Z_b4332799c75c",
+        "20260422T230056Z_b4332799c75c",
+        "20260422T233116Z_d430d9d1979d",
+        "20260422T233718Z_d430d9d1979d",
+        "20260422T234630Z_d430d9d1979d",
+        "20260422T235337Z_d430d9d1979d"
+      ],
+      "wrong_run_ids": [],
+      "infra_run_ids": [
+        "20260422T224051Z_b4332799c75c",
+        "20260422T232847Z_b4332799c75c"
+      ],
+      "correct_streak": 24,
+      "total_correct_verifies": 24,
+      "wrong_verifies": 0,
+      "infra_verifies": 2,
+      "last_result": "correct",
+      "last_run_id": "20260422T235337Z_d430d9d1979d",
+      "last_verified_at_utc": "2026-04-22T23:59:26.868748+00:00",
+      "report": {
+        "verification_report": {
+          "summary": "Read in textual order, the supplied proof is correct in the standing classical real orthogonal/symplectic setting referenced by the statement. It uses proposition prop:slice_geometric_partition_classification to realize exactly the admissible signed diagrams on slice points of ordinary partition lambda_geom, applies lemma lem:lambda_geom_points_are_maximal to show those realized orbits are preceq-maximal, and conversely uses the geometric-partition hypothesis together with lemmas lem:maximal_orbits_vs_open_subsets and lem:open_in_S_gives_open_in_slice to recover a slice point in any maximal orbit and force its signed diagram to lie in A(D_0,r).",
+          "critical_errors": [],
+          "gaps": [],
+          "checked_items": [
+            "proof paragraph 1",
+            "proof paragraph 2",
+            "proof paragraph 3",
+            "proof paragraph 4"
+          ],
+          "external_reference_checks": [
+            "No theorem, lemma, or definition from an external paper is explicitly cited in the supplied markdown proof, so search_arxiv_theorems and web fallback were not required."
+          ],
+          "notes": "Dependency closure is satisfied for the cited internal results: each cited proposition or lemma appears in Dependency_context and is used according to its displayed statement."
+        },
+        "verdict": "correct",
+        "repair_hints": ""
+      }
+    },
+    "20ab765e4e085ce54516ddc4bdd3c47e1b5d363ac358f8783fca27b1dd191117": {
+      "index": 28,
+      "title": "# theorem thm:main",
+      "label": "thm:main",
+      "statement": "# Real Nilpotent Orbit Induction: General Signed-Diagram Problem\n\nThis file formulates the signed-diagram part of the real induced-orbit problem. The goal is to obtain an algorithmic description of the `\\preceq`-maximal real induced orbits in terms of signed Young diagrams, in the full scope of the problem as stated here.\n\n## Setup\n\nLet $F=\\mathbb{R}$, and let $(V,\\langle\\cdot,\\cdot\\rangle)$ be a real formed space of parity $\\epsilon\\in\\{+1,-1\\}$:\n\n- if $\\epsilon=+1$, then $G=\\mathrm{Isom}(V)\\cong O(p,q)$ for a symmetric form of signature $(p,q)$;\n- if $\\epsilon=-1$, then $G=\\mathrm{Isom}(V)\\cong Sp(2n,\\mathbb R)$ for a non-degenerate alternating form.\n\nLet $X\\subset V$ be a totally isotropic subspace of dimension $r\\ge 1$, let\n$$\nV_0=X^\\perp/X,\n$$\nand let $G_0=\\mathrm{Isom}(V_0)$. The stabilizer $P=\\operatorname{Stab}_G(X)$ is a maximal parabolic with Levi factor\n$$\nL\\cong GL(X)\\times G_0\n$$\nand unipotent radical with Lie algebra $\\mathfrak u$.\n\nLet $\\mathcal O_0$ be a real nilpotent orbit of $G_0$, let $D_0$ be its admissible signed Young diagram, and let $\\lambda_0$ be the underlying ordinary partition.\n\nDefine\n$$\n\\operatorname{Ind}_P^G(\\mathcal O_0):=\\overline{\\,G\\cdot(\\mathcal O_0+\\mathfrak u)\\,}.\n$$\n\nDefine the closure order on real nilpotent orbits by\n$$\n\\mathcal O' \\preceq \\mathcal O\n\\quad\\Longleftrightarrow\\quad\n\\mathcal O' \\subseteq \\overline{\\mathcal O}.\n$$\n\n## Signed Young Diagrams\n\nReal nilpotent orbits are parameterized by admissible signed Young diagrams.\n\nA signed Young diagram consists of:\n\n- an ordinary partition;\n- an alternating sign pattern on each row;\n- the leftmost sign on each row.\n\nAdmissibility is:\n\n- for $O(p,q)$:\n  - even row lengths occur in `$+/-$' pairs;\n  - odd row lengths carry the free sign data;\n  - the total numbers of `$+$' and `$-$' boxes are $p$ and $q$;\n\n- for $Sp(2n,\\mathbb R)$:\n  - odd row lengths occur in `$+/-$' pairs;\n  - even row lengths carry the free sign data;\n  - the total numbers of `$+$' and `$-$' boxes are both $n$.\n\nTwo signed Young diagrams are regarded as the same if they differ only by permuting rows of the same length and sign type.\n\n## Given\n\nYou may take the underlying geometric partition as known:\n$$\n\\lambda_{\\mathrm{geom}}=\\operatorname{collapse}_X(\\lambda_0+(2^r)),\n$$\nwhere the target-type collapse is:\n\n- $C$ in the symplectic case;\n- $B$ in the odd orthogonal case;\n- $D$ in the even orthogonal case.\n\nThus every `\\preceq`-maximal real induced orbit lies over the fixed partition $\\lambda_{\\mathrm{geom}}$.\n\n## Main Problem\n\nGive a general algorithm that takes as input:\n\n- the family (`symplectic`, `odd orthogonal`, or `even orthogonal`);\n- the input signed Young diagram $D_0$;\n- the integer $r$;\n\nand outputs exactly the admissible signed Young diagrams that occur as `\\preceq`-maximal real induced orbits in\n$$\n\\operatorname{Ind}_P^G(\\mathcal O_0).\n$$\n\nThe algorithm must genuinely depend on the input signed Young diagram $D_0$, not merely on the underlying partition $\\lambda_0$ and final admissibility.\n\nThe goal is an algorithmic theorem for the problem as stated here, not a low-rank example and not a special-case classification substituted in place of the main problem.\n\n## Proof Standard\n\nYour proof must be down to earth and as self-contained as possible.\n\nYou may freely use only standard classical mathematics without proof. Examples include:\n\n- Jordan normal form;\n- basic linear algebra over $\\mathbb R$ and $\\mathbb C$;\n- basic properties of orthogonal and symplectic forms;\n- the standard parametrization of real nilpotent orbits by admissible signed Young diagrams, provided you restate the exact version you use.\n\nIf you use any result that is not a standard classical fact, then you must do one of the following:\n\n1. prove it in the special case needed here; or\n2. reduce the argument to a statement that is proved directly in this file.\n\nIn particular:\n\n- do not treat a specialized modern theorem as a black box;\n- do not cite a family-specific induction algorithm unless you also supply a self-contained proof of the part you need;\n- do not rely on a theorem merely because it appears relevant in the literature;\n- if a statement is only proved in a restricted range or family, you must say so explicitly and restrict the conclusion accordingly;\n- if you inspect an external theorem, you must inspect its proof before relying on it;\n- if the external proof is incomplete, sketchy, or depends on nonstandard unproved inputs, then you may not rely on that theorem as established.\n\n## What You Should Do\n\nAnalyze the problem above. The target is an algorithmic answer to the stated problem itself.\n\nIf you cannot prove a full answer to the stated theorem, you must say exactly where the proof breaks and why. Do not replace the main goal by a low-rank special case, and do not substitute a weak counterexample-only result for the requested theorem.\n\n## Important Scope Boundary\n\n- Do not downgrade the target to a special case unless you explicitly label it as a failed attempt.\n- Do not weaken the problem by silently replacing it with an easier nearby question.\n- Do not claim a full answer unless every step is justified directly in the draft.\n- Multiplicity questions are excluded.",
+      "proof": "The `Given` paragraph of the problem statement supplies exactly the\ngeometric-partition hypothesis recorded at the start of theorem\n`thm:recursive_signed_induction`. Applying that theorem in the present\northogonal/symplectic setup gives the requested algorithmic description of the\n\\(\\preceq\\)-maximal real induced orbits. Hence it solves the main problem as\nstated.",
+      "statement_key": "5fe9bd69098189e6fb4d9bf4d7b304b0c1577269b4993c0e57a6eb4f482cc71a",
+      "verification_key": "20ab765e4e085ce54516ddc4bdd3c47e1b5d363ac358f8783fca27b1dd191117",
+      "dependency_indices": [
+        27
+      ],
+      "dependency_statement_keys": [
+        "d843bd509071b238639127c0248ab2ed5e40bc147484b7849e64ddc4554efb3e",
+        "446f715cc78ebd15f15470dbf63d6e5162a671a2b982955c6d9578cd9ba5aa40",
+        "7708979502d93c487bb20a7a40f1666362868a84cc2be08adb6177187f290897",
+        "58c43ae19eed5e330cf08598fb9e09c02aa74e7674e052b461fb12c1b1d56cd2",
+        "bb1f954d7434b0dc103428723570a48bbc479c93854c51718c1e51f3707ef189",
+        "e07b5000e8ee0d7c50602cd16609ccd2b535a36d7a3a01fd53ca772aafba3b26",
+        "9599afa37cbdcebba91b250e3ffe4ca85c7dc25a1f55e67a34e7d065bc504f3c",
+        "f7f367eabeb40890ee7a3711ea513b486202c4f0ebddc1e0f6c1f35728ca0e13",
+        "52fd2b16ea461fe753ba34023a6842e460701302d49df8786d4f101e00b252d5",
+        "0f842b25ba7189dfb8205c976eeea6479eb1175e555233b2b70d1e282a249d74",
+        "a44b05f10b87f5dd202f70d73bcdd162fa39e4161644682e3fc8574dc440bb7e",
+        "20e13cd8ddeff5937763bdc738cd91e99d36f7f0fd11480a6c7e3f74a1057d6d",
+        "bfb5453f9ae89e8b987b7cfe8fa3aaa9b5b97c8d602bed34c1d74985f682e545",
+        "cb14538f3d1d3185fd7b3e54468da80c9117b25adb084e272b8092e539a8935d",
+        "ebeb776e7bb8b31c4d7d2f865b73c3ab689022bb30a9522e98e7cb0894eb5a67",
+        "7e0960ae9d159c77408f70afebd5253b51a71b384abca3fdabf799a0f6f6d1ed",
+        "2358742f0da84697ce8b99349c63386e6205d376a0e7dc65000c45b2fa6b7336",
+        "e16e777342e3084094dcd2bff7c338cfceb79186f7b89012a769f407e9ad2aa5",
+        "07cf020a7f9e2b1bb50f4ef42d1909826a78a64b8386ece330166407d3e1e494",
+        "59d8feffc79ec687ff34f9e0d4320ef4e39a97f7cda75628c878388505599f9b",
+        "15553e48a78e9c034b9589f81e6c15033c8ef35eea0100c388ca100b08c2ea56",
+        "fba16c64d9f4ab889cf28429e651d21d05b8c89996bfc0160513a638251a02e3",
+        "34a6378c55b18b5769604d6e0ab2c7ea279c4bc6fa1bec6e70f6c90a978b6ab3",
+        "a1856dcaa581cc6b15abce9ef0450bca5f8c88ad65e15f45511005ad71172e09",
+        "b4332799c75c24b57b78c9063d6150567ce80b567b0ccb6487f3de85fc880d0e"
+      ],
+      "correct_run_ids": [
+        "20260422T142558Z_5fe9bd690981",
+        "20260422T143110Z_5fe9bd690981",
+        "20260422T143621Z_5fe9bd690981",
+        "20260422T144236Z_5fe9bd690981",
+        "20260422T145143Z_5fe9bd690981",
+        "20260422T145619Z_5fe9bd690981",
+        "20260422T150015Z_5fe9bd690981",
+        "20260422T151108Z_5fe9bd690981",
+        "20260422T152040Z_5fe9bd690981",
+        "20260422T161602Z_5fe9bd690981",
+        "20260422T161903Z_5fe9bd690981",
+        "20260422T162334Z_5fe9bd690981",
+        "20260422T173110Z_5fe9bd690981",
+        "20260422T222755Z_5fe9bd690981",
+        "20260422T223814Z_5fe9bd690981",
+        "20260422T224851Z_5fe9bd690981",
+        "20260422T225452Z_5fe9bd690981",
+        "20260422T230452Z_5fe9bd690981",
+        "20260422T233417Z_20ab765e4e08",
+        "20260422T234033Z_20ab765e4e08",
+        "20260422T234921Z_20ab765e4e08"
+      ],
+      "wrong_run_ids": [],
+      "infra_run_ids": [
+        "20260422T153302Z_5fe9bd690981",
+        "20260422T235808Z_20ab765e4e08"
+      ],
+      "correct_streak": 21,
+      "total_correct_verifies": 21,
+      "wrong_verifies": 0,
+      "infra_verifies": 2,
+      "last_result": "infrastructure_error",
+      "last_run_id": "20260422T235808Z_20ab765e4e08",
+      "last_verified_at_utc": "2026-04-22T23:59:26.869623+00:00",
+      "report": {
+        "verification_report": {
+          "summary": "The supplied proof is correct. Read in textual order, it uses only one dependency: theorem thm:recursive_signed_induction, which is present in the supplied Dependency_context. The Given paragraph supplies exactly that theorem's geometric-partition hypothesis, and the theorem's recursive definition of A(D_0,r) gives the requested family- and signed-diagram-dependent algorithm for the preceq-maximal real induced orbits. No external-paper citation appears in the proof, so the external-reference check is vacuous.",
+          "critical_errors": [],
+          "gaps": []
+        },
+        "verdict": "correct",
+        "repair_hints": ""
+      }
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "blueprint_path": "/Users/hoxide/mycodes/Rethlas/agents/generation/results/real_induced_orbit_problem_B_general/section_blueprint.md",
+  "theorem_library_path": "/Users/hoxide/mycodes/Rethlas/agents/generation/results/real_induced_orbit_problem_B_general/theorem_library.json",
+  "accepted_current_count": 28,
+  "accepted_library_count": 28,
+  "accepted_dependency_issues": [],
+  "duplicate_title_issues": [],
+  "duplicate_label_issues": [],
+  "stale_accepted_entries": []
+}

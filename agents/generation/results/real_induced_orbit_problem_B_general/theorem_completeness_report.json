@@ -1,0 +1,322 @@
+{
+  "theorem_library_path": "/Users/hoxide/mycodes/Rethlas/agents/generation/results/real_induced_orbit_problem_B_general/theorem_library.json",
+  "verifier_results_path": "/Users/hoxide/mycodes/Rethlas/agents/verification/results",
+  "target_label": "thm:main",
+  "target_title": "",
+  "validated_statement_keys": [
+    "07cf020a7f9e2b1bb50f4ef42d1909826a78a64b8386ece330166407d3e1e494",
+    "0f842b25ba7189dfb8205c976eeea6479eb1175e555233b2b70d1e282a249d74",
+    "15553e48a78e9c034b9589f81e6c15033c8ef35eea0100c388ca100b08c2ea56",
+    "20e13cd8ddeff5937763bdc738cd91e99d36f7f0fd11480a6c7e3f74a1057d6d",
+    "2358742f0da84697ce8b99349c63386e6205d376a0e7dc65000c45b2fa6b7336",
+    "34a6378c55b18b5769604d6e0ab2c7ea279c4bc6fa1bec6e70f6c90a978b6ab3",
+    "446f715cc78ebd15f15470dbf63d6e5162a671a2b982955c6d9578cd9ba5aa40",
+    "52fd2b16ea461fe753ba34023a6842e460701302d49df8786d4f101e00b252d5",
+    "58c43ae19eed5e330cf08598fb9e09c02aa74e7674e052b461fb12c1b1d56cd2",
+    "59d8feffc79ec687ff34f9e0d4320ef4e39a97f7cda75628c878388505599f9b",
+    "5fe9bd69098189e6fb4d9bf4d7b304b0c1577269b4993c0e57a6eb4f482cc71a",
+    "7708979502d93c487bb20a7a40f1666362868a84cc2be08adb6177187f290897",
+    "7e0960ae9d159c77408f70afebd5253b51a71b384abca3fdabf799a0f6f6d1ed",
+    "9599afa37cbdcebba91b250e3ffe4ca85c7dc25a1f55e67a34e7d065bc504f3c",
+    "a1856dcaa581cc6b15abce9ef0450bca5f8c88ad65e15f45511005ad71172e09",
+    "a44b05f10b87f5dd202f70d73bcdd162fa39e4161644682e3fc8574dc440bb7e",
+    "b4332799c75c24b57b78c9063d6150567ce80b567b0ccb6487f3de85fc880d0e",
+    "bb1f954d7434b0dc103428723570a48bbc479c93854c51718c1e51f3707ef189",
+    "bfb5453f9ae89e8b987b7cfe8fa3aaa9b5b97c8d602bed34c1d74985f682e545",
+    "cb14538f3d1d3185fd7b3e54468da80c9117b25adb084e272b8092e539a8935d",
+    "d843bd509071b238639127c0248ab2ed5e40bc147484b7849e64ddc4554efb3e",
+    "e07b5000e8ee0d7c50602cd16609ccd2b535a36d7a3a01fd53ca772aafba3b26",
+    "e16e777342e3084094dcd2bff7c338cfceb79186f7b89012a769f407e9ad2aa5",
+    "ebeb776e7bb8b31c4d7d2f865b73c3ab689022bb30a9522e98e7cb0894eb5a67",
+    "f7f367eabeb40890ee7a3711ea513b486202c4f0ebddc1e0f6c1f35728ca0e13",
+    "fba16c64d9f4ab889cf28429e651d21d05b8c89996bfc0160513a638251a02e3"
+  ],
+  "entry_count": 26,
+  "error_count": 24,
+  "warning_count": 0,
+  "entries": [
+    {
+      "statement_key": "07cf020a7f9e2b1bb50f4ef42d1909826a78a64b8386ece330166407d3e1e494",
+      "title": "# lemma lem:recursive_outputs_have_geometric_partition",
+      "label": "lem:recursive_outputs_have_geometric_partition",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "0f842b25ba7189dfb8205c976eeea6479eb1175e555233b2b70d1e282a249d74",
+      "title": "# lemma lem:highest_degree_form",
+      "label": "lem:highest_degree_form",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "15553e48a78e9c034b9589f81e6c15033c8ef35eea0100c388ca100b08c2ea56",
+      "title": "# lemma lem:lambda_geom_points_are_maximal",
+      "label": "lem:lambda_geom_points_are_maximal",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "20e13cd8ddeff5937763bdc738cd91e99d36f7f0fd11480a6c7e3f74a1057d6d",
+      "title": "# lemma lem:highest_degree_power_formula",
+      "label": "lem:highest_degree_power_formula",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "2358742f0da84697ce8b99349c63386e6205d376a0e7dc65000c45b2fa6b7336",
+      "title": "# proposition prop:highest_degree_reduction",
+      "label": "prop:highest_degree_reduction",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "34a6378c55b18b5769604d6e0ab2c7ea279c4bc6fa1bec6e70f6c90a978b6ab3",
+      "title": "# lemma lem:first_step_residual_collapse",
+      "label": "lem:first_step_residual_collapse",
+      "accepted_verification_key": "651f5e61de2175e2a6c46f77a8f3a01a20226e013c8d190df9127d4b209bcba8",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "accepted_verification_key has no succeeded+correct verifier run"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "446f715cc78ebd15f15470dbf63d6e5162a671a2b982955c6d9578cd9ba5aa40",
+      "title": "# lemma lem:signed_chain_model",
+      "label": "lem:signed_chain_model",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "52fd2b16ea461fe753ba34023a6842e460701302d49df8786d4f101e00b252d5",
+      "title": "# proposition prop:local_package_moves",
+      "label": "prop:local_package_moves",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "58c43ae19eed5e330cf08598fb9e09c02aa74e7674e052b461fb12c1b1d56cd2",
+      "title": "# lemma lem:open_in_S_gives_open_in_slice",
+      "label": "lem:open_in_S_gives_open_in_slice",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "59d8feffc79ec687ff34f9e0d4320ef4e39a97f7cda75628c878388505599f9b",
+      "title": "# lemma lem:uniform_recursive_outputs_have_geometric_partition",
+      "label": "lem:uniform_recursive_outputs_have_geometric_partition",
+      "accepted_verification_key": "b43e7d4e0065cb0ff9df4cfb34f876db99ff6f1e75f44522ea4a1125aebf4097",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "accepted_verification_key has no succeeded+correct verifier run"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "5fe9bd69098189e6fb4d9bf4d7b304b0c1577269b4993c0e57a6eb4f482cc71a",
+      "title": "# theorem thm:main",
+      "label": "thm:main",
+      "accepted_verification_key": "20ab765e4e085ce54516ddc4bdd3c47e1b5d363ac358f8783fca27b1dd191117",
+      "correct_run_count_for_accepted_key": 21,
+      "errors": [],
+      "warnings": []
+    },
+    {
+      "statement_key": "7708979502d93c487bb20a7a40f1666362868a84cc2be08adb6177187f290897",
+      "title": "# lemma lem:block_form_for_x0_plus_u",
+      "label": "lem:block_form_for_x0_plus_u",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "7e0960ae9d159c77408f70afebd5253b51a71b384abca3fdabf799a0f6f6d1ed",
+      "title": "# lemma lem:package_subspace_middle_projection",
+      "label": "lem:package_subspace_middle_projection",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "9599afa37cbdcebba91b250e3ffe4ca85c7dc25a1f55e67a34e7d065bc504f3c",
+      "title": "# lemma lem:alternating_radical_package_move",
+      "label": "lem:alternating_radical_package_move",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "a1856dcaa581cc6b15abce9ef0450bca5f8c88ad65e15f45511005ad71172e09",
+      "title": "# proposition prop:slice_geometric_partition_classification",
+      "label": "prop:slice_geometric_partition_classification",
+      "accepted_verification_key": "a45d357af595f37f0b223e23c6c4fd7e332a36ee8ed0221bb0561da33312c67b",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "accepted_verification_key has no succeeded+correct verifier run"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "a44b05f10b87f5dd202f70d73bcdd162fa39e4161644682e3fc8574dc440bb7e",
+      "title": "# lemma lem:highest_degree_tail_clearing",
+      "label": "lem:highest_degree_tail_clearing",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "b4332799c75c24b57b78c9063d6150567ce80b567b0ccb6487f3de85fc880d0e",
+      "title": "# theorem thm:recursive_signed_induction",
+      "label": "thm:recursive_signed_induction",
+      "accepted_verification_key": "d430d9d1979d10cf52c49f1c2ae74e54ea25bd606610c79f3da18ce6a3dfa6e7",
+      "correct_run_count_for_accepted_key": 24,
+      "errors": [],
+      "warnings": []
+    },
+    {
+      "statement_key": "bb1f954d7434b0dc103428723570a48bbc479c93854c51718c1e51f3707ef189",
+      "title": "# lemma lem:symmetric_package_move",
+      "label": "lem:symmetric_package_move",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "bfb5453f9ae89e8b987b7cfe8fa3aaa9b5b97c8d602bed34c1d74985f682e545",
+      "title": "# lemma lem:highest_degree_general_package_moves",
+      "label": "lem:highest_degree_general_package_moves",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "cb14538f3d1d3185fd7b3e54468da80c9117b25adb084e272b8092e539a8935d",
+      "title": "# lemma lem:package_complement",
+      "label": "lem:package_complement",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "d843bd509071b238639127c0248ab2ed5e40bc147484b7849e64ddc4554efb3e",
+      "title": "# lemma lem:maximal_orbits_vs_open_subsets",
+      "label": "lem:maximal_orbits_vs_open_subsets",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "e07b5000e8ee0d7c50602cd16609ccd2b535a36d7a3a01fd53ca772aafba3b26",
+      "title": "# lemma lem:alternating_nondegenerate_package_move",
+      "label": "lem:alternating_nondegenerate_package_move",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "e16e777342e3084094dcd2bff7c338cfceb79186f7b89012a769f407e9ad2aa5",
+      "title": "# lemma lem:real_orbits_in_fixed_complex_orbit",
+      "label": "lem:real_orbits_in_fixed_complex_orbit",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "ebeb776e7bb8b31c4d7d2f865b73c3ab689022bb30a9522e98e7cb0894eb5a67",
+      "title": "# lemma lem:package_subspace_endpoints",
+      "label": "lem:package_subspace_endpoints",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "f7f367eabeb40890ee7a3711ea513b486202c4f0ebddc1e0f6c1f35728ca0e13",
+      "title": "# lemma lem:zero_row_package_moves",
+      "label": "lem:zero_row_package_moves",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    },
+    {
+      "statement_key": "fba16c64d9f4ab889cf28429e651d21d05b8c89996bfc0160513a638251a02e3",
+      "title": "# lemma lem:maximal_partition_forces_maximal_highest_degree_package",
+      "label": "lem:maximal_partition_forces_maximal_highest_degree_package",
+      "accepted_verification_key": "",
+      "correct_run_count_for_accepted_key": 0,
+      "errors": [
+        "missing accepted_verification_key"
+      ],
+      "warnings": []
+    }
+  ],
+  "complete": false
+}
