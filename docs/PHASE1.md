@@ -110,6 +110,9 @@ Recommended helper infrastructure:
 - `system`: each stub subcommand (`rethlas <cmd> --help`) exits 0 with
   a recognisable placeholder (prevents M0 from accidentally shipping
   a broken entry point)
+- `system`: `rethlas` with **no subcommand** prints help to stderr
+  and exits with code **1** (argparse convention — a missing
+  required subcommand is an error, not a successful help display)
 
 **Exit**
 
@@ -149,8 +152,27 @@ Recommended helper infrastructure:
 
 **Tests**
 
-- `unit`: config parses valid file and rejects invalid values
+- `unit`: config parses a valid file with all known fields, and
+  rejects each of these specific invalid inputs (ARCHITECTURE §2.4):
+  - `desired_pass_count = 0` (must be ≥ 1)
+  - `generator_workers = -1`
+  - `verifier_workers = 0`
+  - `codex_silent_timeout_seconds = 30` (below 60 s floor)
+  - `bind = "127.0.0.1"` (missing port)
+  - `bind = "0.0.0.0:70000"` (port out of range)
+  - unknown field (e.g. `[scheduling] bogus_key = 42`) → startup
+    warning logged, field value ignored (not fail)
+  - malformed TOML syntax → exit code 4 with line-number error
+  - any out-of-range value above → exit code 4 with field-name
+    error
 - `unit`: event filename/body round-trip
+- `unit`: **atomic event write helper** invokes, in order: open
+  `.tmp` for write → write bytes → `fsync(tmp_fd)` → close →
+  `rename(tmp, canonical)` → open parent dir → `fsync(dir_fd)` →
+  close (ARCHITECTURE §9.1 G3). Use `unittest.mock` on `os.fsync` /
+  `os.rename` to assert both the call sequence and that both
+  fsyncs actually happen; without the directory fsync an event
+  can be "written but nameless" after a kernel / power crash.
 - `unit`: event-id allocation keeps producer-local monotonicity when wall clock repeats or steps backward
 - `unit`: `statement_hash` / `verification_hash` are stable across key order and newline normalization
 - `unit`: raw-byte `event_sha256` helper matches exact file bytes
@@ -245,7 +267,23 @@ Recommended helper infrastructure:
   - `hash_mismatch`
   - `kind_mutation`
   - `self_reference`
-- `integration`: `AppliedEvent.detail` and `event_sha256` populated correctly
+- `integration`: `AppliedEvent.detail` carries useful context per
+  reason code (ARCHITECTURE §5.2 detail-format spec):
+  - `cycle`: detail contains the cycle path
+    (`"thm:a → lem:b → thm:a"` style)
+  - `label_conflict`: detail names the conflicting label **and**
+    the winning `event_id`
+  - `hash_mismatch`: detail contains both the stale hash prefix
+    and the current hash prefix as **12 hex chars** each
+  - `ref_missing`: detail names the missing `\ref{}` target
+  - `hint_target_missing` / `hint_target_unreachable`: detail
+    names the target label and its observed `pass_count`
+  - `kind_mutation`: detail carries the old and new `kind` values
+  - `self_reference`: detail carries the offending label
+- `integration`: `AppliedEvent.event_sha256` equals
+  `sha256(raw bytes of the event file at apply time)` — test mutates
+  the file bytes between two apply calls of identical `event_id` and
+  asserts the hashes differ (feeds directly into linter category F)
 
 **Exit**
 
@@ -400,7 +438,21 @@ Recommended helper infrastructure:
   - `replaying`
   - `reconciling`
   - `ready`
-- `integration`: `projection_backlog` is correct
+- `integration`: `projection_backlog` equals
+  `count(files under events/) - count(AppliedEvent rows)`:
+  - fixture with 10 event files on disk and 7 already-applied
+    `AppliedEvent` rows → librarian reports
+    `projection_backlog = 3` in `librarian.json`
+  - after librarian catches up, `projection_backlog = 0`
+  - drop 3 new event files into `events/{date}/` → backlog
+    transiently shows ≥ 3 then returns to 0 after the live
+    watchdog path processes them
+- `integration`: **idle heartbeat cadence** — librarian rewrites
+  `librarian.json.updated_at` **every 30 s** even when `events/`
+  is quiet and no work is happening (ARCHITECTURE §6.5). Fixture
+  observes at least 3 heartbeat writes over a 90 s window with no
+  new events; consecutive `updated_at` gaps stay ≤ 32 s (allowing
+  small scheduler jitter).
 - `fault-injection`: interrupted rebuild leaves flag; next supervise-started librarian forces clean rebuild path
 - `fault-injection`: **`producers.toml` replay-time enforcement** —
   a canonical event file exists under `events/` whose `actor` or
@@ -470,7 +522,18 @@ Recommended helper infrastructure:
 
 **Tests**
 
-- `integration`: fake Codex output with valid `<node>` blocks produces exactly one `generator.batch_committed`
+- `integration`: fake Codex output with valid `<node>` blocks
+  produces exactly one `generator.batch_committed`; emitted event
+  body asserts every field required by ARCHITECTURE §3.5.1:
+  - `attempt_id` matches the `gen-{iso_ms}-{seq}-{uid}` pattern
+  - `target` equals the dispatch target and appears in `nodes[]`
+  - `mode ∈ {"fresh", "repair"}`
+  - each `nodes[i]` has `label`, `kind`, non-empty `statement`,
+    `proof`, `remark`, `source_note` (presence asserted for every
+    key; `source_note` non-empty iff `kind=external_theorem`)
+  - optional `cost` field: either absent, or has all four
+    subfields (`input_tokens`, `output_tokens`, `reasoning_tokens`,
+    `cost_usd`) plus `duration_seconds`
 - `integration`: decoder rejects each of the 11 failure modes per
   ARCHITECTURE §3.5.1 + §6.2. Each has a dedicated bad-fixture
   test and produces exactly one line in
@@ -514,7 +577,21 @@ Recommended helper infrastructure:
 
 **Tests**
 
-- `integration`: valid verdict JSON produces `verifier.run_completed`
+- `integration`: valid verdict JSON produces
+  `verifier.run_completed`; emitted event body asserts every field
+  required by ARCHITECTURE §3.5.1:
+  - `verdict ∈ {"accepted", "gap", "critical"}`
+  - `verification_hash` equals the value the wrapper computed from
+    Kuzu at dispatch time (`Node.verification_hash`)
+  - `verification_report` has all 5 required subfields (`summary`,
+    `checked_items`, `gaps`, `critical_errors`,
+    `external_reference_checks`) — keys present, lists may be
+    empty
+  - `repair_hint` present (may be empty string)
+  - consistency: `verdict=accepted` ⇒ `gaps=[]` AND
+    `critical_errors=[]`; `verdict=gap` ⇒ `gaps` non-empty;
+    `verdict=critical` ⇒ `critical_errors` non-empty
+  - optional `cost`: same shape check as M6
 - `integration`: malformed verdict JSON becomes `status = "crashed"` and no truth event
 - `integration`: pre-dispatch validation rejects stale/invalid dispatches with `precheck_failed`
 - `integration`: wrapper mirrors `AppliedEvent` outcome into runtime job file
@@ -556,9 +633,8 @@ Recommended helper infrastructure:
   - `librarian_starting`
 - `integration`: child restart policy
   - librarian restart once then coordinator exits on rapid re-crash
-  - dashboard restart three times then degrade
 - `integration`: child startup grace period does not mark a just-spawned but
-  still-initializing librarian/dashboard as down before the grace window expires
+  still-initializing librarian as down before the grace window expires
 - `integration`: startup cleanup removes zombie runtime state from prior crash
   - deletes stale `runtime/jobs/*.json`
   - deletes stale `runtime/state/coordinator.json` and
@@ -570,7 +646,7 @@ Recommended helper infrastructure:
 - `integration`: **graceful shutdown cascade on SIGTERM / SIGINT**
   (ARCHITECTURE §6.4 G6):
   - children are signalled in reverse dependency order
-    (dashboard → in-flight workers → librarian)
+    (in M8 scope: in-flight workers → librarian)
   - each child is given up to 10 s to exit cleanly before SIGKILL
   - in-flight wrappers write their terminal `status` and delete
     their job files before dying (no leftover
@@ -585,6 +661,11 @@ Recommended helper infrastructure:
   process-group cleanup kills all children; next
   `rethlas supervise` starts cleanly thanks to M5/M8 runtime
   cleanup (no zombie state visible)
+- `integration`: **coordinator tick cadence** — `coordinator.json`
+  is rewritten on **every loop tick** (ARCHITECTURE §6.4.2). With
+  a quiet workspace, fixture observes `updated_at` advancing in
+  consecutive snapshots; consecutive gaps stay well within the
+  dashboard staleness healthy window (60 s).
 - `integration`: **config no-hot-reload** (ARCHITECTURE §2.4) —
   start `rethlas supervise` with `generator_workers = 2`; while
   running, edit `rethlas.toml` on disk to `generator_workers = 4`;
@@ -612,6 +693,10 @@ Recommended helper infrastructure:
 - `dashboard/kuzu_reader.py`
 - `dashboard/templates/`
 - `cli/dashboard.py`
+- coordinator child-process integration for dashboard
+  - spawn dashboard subprocess
+  - monitor dashboard heartbeat
+  - restart-three-times-then-degrade policy
 
 **Tests**
 
@@ -652,6 +737,12 @@ Recommended helper infrastructure:
     `drift_alerts.jsonl`)
   Per §6.7.1.
 - `integration`: Kuzu-dependent endpoints return 503 + `Retry-After: 5` during rebuild
+- `integration`: coordinator child-management for dashboard
+  - dashboard restart three times then degrade
+  - dashboard startup grace period honored before first heartbeat
+  - `children.dashboard.status` reflected in `coordinator.json`
+- `integration`: graceful shutdown order with dashboard present is
+  dashboard → in-flight workers → librarian
 - `integration`: **staleness thresholds** — fixture sets
   `coordinator.json.updated_at` to various ages; dashboard returns
   liveness label `healthy` (≤ 60 s), `degraded` (> 60 s, ≤ 5 min),
