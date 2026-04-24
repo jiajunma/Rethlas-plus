@@ -764,8 +764,10 @@ authored state for the same label, but must preserve `kind`. They may change
 statement, proof, `remark`, and `source_note`, but never `kind`. If a different
 classification is desired, create a new node under a new label.
 
-No "goal" concept in the schema. What the user considers a goal is just
-a `kind=theorem` node; dashboard / user distinguishes via naming.
+No "goal" concept is stored in Phase I. What the user considers a goal is
+just a `kind=theorem` node; dashboard / user distinguish goals by naming
+and context, but coordinator's stop condition still ranges over **all**
+nodes in KB rather than a separately configured goal set.
 
 ### 5.2 Kuzu Node table
 
@@ -1642,14 +1644,17 @@ or verifier on a node, coordinator checks current-runtime job state for that
 target. If a live/in-flight job exists, skip this loop. Prevents racing
 attempts producing conflicting events on the same node.
 
-**At most one generator job in flight per workspace in Phase I.** A generator
-batch may create auxiliary nodes or revise shared definitions in addition to
-its nominal target, so its effective write set is not known until decode
-finishes. Workspace-wide generator serialization avoids overlapping batch
-write sets. Verifier jobs may still run concurrently on distinct targets.
+**At most two generator jobs in flight per workspace in Phase I.** Generator
+write scope is narrow (§6.2): a batch may touch only its own target label plus
+brand-new labels. With the existing "no concurrent same-target dispatch" rule,
+this makes generator-generator overlap tolerable in Phase I. The remaining race
+is that two concurrent generator batches may independently invent the same
+brand-new label; in that case one batch wins and the other is rejected at apply
+time with `label_conflict`. Verifier jobs may still run concurrently on
+distinct targets.
 
 **Cross-component write-set overlap is not prevented.** The "no
-concurrent same-target" and "one generator at a time" rules are not
+concurrent same-target" and "at most two generators at a time" rules are not
 enough to guarantee that a verifier's snapshot of a target's
 dependency chain remains valid for the entire verifier run. Concrete
 scenario (narrower after the §6.2 write-scope invariant, but still
@@ -1688,9 +1693,11 @@ verifier dispatch while a generator is in-flight, for two reasons:
 
 **Expected dashboard behavior:** a small steady-state rate of
 `AppliedEvent(apply_failed, reason=hash_mismatch)` during active
-workspaces is **normal, not a fault**. The linter does not treat these
-as anomalies. If the rate becomes large enough to hurt throughput,
-Phase II can revisit with an optimization pass.
+workspaces is **normal, not a fault**. With two concurrent generators,
+occasional `label_conflict` rejections on brand-new auxiliary labels are also
+possible and are treated as wasted work rather than corruption. The linter does
+not treat either pattern as an anomaly by itself. If either rate becomes large
+enough to hurt throughput, Phase II can revisit with an optimization pass.
 
 **Six safeguards against infinite loops / over-verification:**
 
@@ -2545,6 +2552,9 @@ Existing `common/codex_budget` slot mechanism caps concurrent Codex
 subprocesses. Coordinator acquires slot before dispatching; releases on
 completion.
 
+Within that budget, Phase I additionally caps generator concurrency at **2**
+per workspace (§6.4.1). Verifier jobs use the remaining available slots.
+
 ### 10.4 Repair rounds
 
 Phase I does **not** impose a hard repair budget. Proof-requiring
@@ -2843,3 +2853,21 @@ See `PHASE1.md` for the concrete task list.
     `60 s < age <= 5 min` degraded, `> 5 min` / missing down. Same
     thresholds for coordinator.json and librarian.json.
   - Phase I M6.3 (new) and M7.1-7.5 updated to cover the contract.
+- **2026-04-24 (evening review, generator concurrency 1 → 2)**:
+  - §6.4.1 / §10.3: raised generator in-flight cap from **1** to
+    **2** per workspace. Justified by the §6.2 write-scope invariant
+    (H7): a generator batch only touches its own target + brand-new
+    labels, so two concurrent batches on distinct targets cannot
+    corrupt each other's write sets. The remaining cross-batch race
+    is both batches independently inventing the same brand-new label;
+    resolved deterministically by `(iso_ms, seq, uid)` ordering +
+    `apply_failed(label_conflict)` for the loser (wasted work, not
+    corruption). Dashboard's "expected normal events" list extended
+    to include occasional `label_conflict` alongside
+    `hash_mismatch`.
+  - §5.1 "goal concept" paragraph sharpened: Phase I stop condition
+    ranges over **all** nodes, not a separately configured goal set;
+    "goal" is just user-side naming convention for `kind=theorem`.
+  - Phase I M6.1 updated to spell out the new concurrency rules
+    (no concurrent same-target, at most 2 generators, verifiers share
+    the remaining `codex_budget` slots).

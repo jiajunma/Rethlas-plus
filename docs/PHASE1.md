@@ -332,7 +332,12 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 - Respects `DESIRED_COUNT`; no hard repair cap in Phase I (repair rounds
   are advisory only — generator keeps being dispatched on count=-1 until
   hash escapes)
-- Skip nodes with in-flight runtime jobs (no concurrent dispatch)
+- Concurrency rules (ARCHITECTURE §6.4.1, §10.3):
+  - no two in-flight jobs targeting the same label (generator or
+    verifier)
+  - at most 2 generator jobs in flight per workspace
+  - verifier jobs may run concurrently on distinct targets within the
+    remaining `codex_budget` slots
 
 **M6.2** `coordinator/loop.py` — main loop
 - Read KB + runtime jobs
