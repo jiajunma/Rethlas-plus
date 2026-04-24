@@ -1,638 +1,626 @@
-# Phase I Task List
+# Phase I Implementation Plan
 
-**Status.** Draft. Concrete tasks to implement the Phase I architecture
-defined in `ARCHITECTURE.md`.
+**Status.** Draft aligned with the frozen `ARCHITECTURE.md`.
 
-Each task is independently testable. Tasks are grouped into milestones.
-Within a group, order follows dependencies.
+This file is the execution plan for Phase I. It is intentionally more
+implementation-oriented than the architecture document:
+
+- milestones are ordered by dependency;
+- every milestone has explicit tests;
+- milestone exits are hard gates, not vague progress markers.
+
+If this file and `ARCHITECTURE.md` diverge, fix one of them immediately.
 
 ---
 
 ## Goal
 
 A minimum viable Rethlas that can:
-- Accept user-authored events (definitions, external theorems, open problems)
-- Run Codex generator (fresh + repair modes)
-- Run Codex verifier (single-call, Codex internally uses 3 skills)
-- Project events into `dag.kz/` and `nodes/*.md` via librarian
-- Schedule dispatches via coordinator (count-based)
-- Show a linear HTML dashboard
-- Recover full state from events (`rethlas rebuild`)
+
+- initialize a workspace;
+- publish user truth events through CLI;
+- project `events/` into `dag.kz`, `AppliedEvent`, and `nodes/`;
+- run generator and verifier workers under coordinator supervision;
+- expose a read-only dashboard;
+- rebuild state from truth after crash or clone;
+- lint the workspace against Phase I invariants.
 
 **Explicitly out of scope for Phase I:**
-- Claude / consensus verification
-- Semantic embedding search
-- Cytoscape / interactive DAG
+
+- Claude / multi-backend consensus
+- semantic embedding search
+- Cytoscape / interactive DAG UI
 - Blueprint LaTeX export
-- Importer (external library reader)
-- Inducedorbit data migration
-- Clock skew detection / multi-machine concurrency
+- importer for external libraries
+- inducedorbit data migration
+- multi-machine concurrency
+- clock-skew detection
 
 ---
 
-## M0 — Repo restructure (no code change)
+## Delivery Principle
 
-**M0.1** `git mv agents/generation generator`  
-**M0.2** `git mv agents/verification verifier`  
-**M0.3** `git mv agents/common common`  
-**M0.4** `rm -rf agents/` (empty after moves)  
-**M0.5** Delete obsolete scripts that will be rewritten under event model:
-- `generator/scripts/run_with_recovery.py`
-- `generator/scripts/verify_sections.py`
-- `generator/scripts/verification_aggregation.py`
-- `generator/scripts/build_blueprint_from_theorem_library.py`
-- `generator/scripts/lint_theorem_library.py`
-- `generator/scripts/materialize_theorem_library_proofs.py`
-- `generator/scripts/validate_theorem_completeness.py`
+Phase I is correctness-first. No downstream milestone may rely on a component
+that lacks its own tests.
 
-`generator/scripts/show_run_status.py` — salvageable; decide at M2 when
-CLI is built.
+Test layers used throughout:
 
-**M0.6** Relocate problem-statement markdowns out of tool repo:
-- `generator/data/*.md` → ideally moved into the `inducedorbit` workspace
-  repo; Phase I can simply delete them from Rethlas if migration is
-  deferred.
+- `unit`: pure functions, schema validation, small state transitions
+- `integration`: filesystem + Kuzu + subprocess boundaries inside one process tree
+- `system`: full workspace runs through CLI entry points
+- `fault-injection`: crash / timeout / restart / stale-state scenarios
 
-**M0.7** Add top-level `docs/` (already exists with this file).
+Recommended test layout:
 
-**M0.8** Initial `pyproject.toml` declaring the `rethlas` package with
-`rethlas` CLI entry point.
-
-**M0.9** Create empty new top-level dirs: `coordinator/`, `librarian/`,
-`linter/`, `dashboard/`, `cli/`.
-
-**M0.10** `producers.toml` at repo root with Phase I truth-producer
-registry: `user`, `generator`, `verifier` (coordinator, librarian, linter
-are non-truth runtime components and need not register as truth
-producers).
-
-Milestone exit: repo builds (`pip install -e .`), `rethlas --help` shows
-stub subcommands.
-
----
-
-## M1 — Common infrastructure
-
-**M1.1** `common/events/` — event read/write/parse
-- Filename composition and parsing (16-hex `uid` per ARCHITECTURE §3.2)
-- YAML frontmatter parsing (for `.md`)
-- JSON parsing (for `.json`)
-- `.tmp` + atomic rename write helper
-- `event_id` allocation: `iso_ms = wall_clock_now()`,
-  `seq = per-producer-per-ms counter`, `uid = secrets.token_hex(8)`
-  (no cross-producer "sort after workspace max" check per
-  ARCHITECTURE §3.7.1)
-- Schema validation (required fields, types, filename ↔ body
-  consistency)
-
-**M1.2** `common/kb/types.py` — dataclasses for `Node`, `Edge`, `Event`,
-`Verdict`, `AppliedEvent`, `ApplyOutcome`
-
-**M1.3** `common/kb/interface.py` — `KnowledgeBase` Protocol
-- Node / edge reads per ARCHITECTURE §4.3
-- `AppliedEvent` reads: `applied_event_status(event_id)`,
-  `applied_event_reason(event_id)`, `list_apply_failed(since, limit)`
-- Writes (librarian-only): `apply_event(event) -> ApplyOutcome`,
-  `rebuild_from_events(events_dir)`
-
-**M1.4** `common/kb/kuzu_backend.py` — Kuzu implementation
-- Schema init: `Node` (including `repair_count INT DEFAULT 0`),
-  `DependsOn`, `ProjectionState`, `AppliedEvent` (per ARCHITECTURE §5.2)
-- All Protocol methods (note: `repair_count(label)` replaces the
-  previously planned `count_repair_attempts(label, hash)`)
-- Single-writer enforcement via Kuzu's built-in locking
-- `apply_event` wraps projection + `AppliedEvent` insert in one
-  Kuzu transaction (both commit or both roll back)
-
-**M1.5** `common/kb/factory.py` — `open_kb()` returning the one backend
-
-**M1.6** `common/kb/hashing.py` — `statement_hash()` and
-`verification_hash()` Merkle computation
-
-**M1.7** `common/runtime/codex_runner.py` — Popen + log mtime monitoring +
-process-group kill on 30-min stale
-- Based on existing `run_with_recovery.py` subprocess pattern
-- Uses `os.setsid` + `os.killpg` for process group management
-
-**M1.8** `common/config/` — minimal `rethlas.toml` loader (fields emerge
-as needed)
-
-**M1.9** Unit tests for event round-trip, KB Protocol contract, hash
-computation, codex runner.
-
-Milestone exit: `common/` packages importable; tests green.
-
----
-
-## M2 — Rethlas CLI skeleton
-
-**M2.1** `cli/main.py` — `rethlas` entry point with subcommands:
-- `rethlas init` (M3)
-- `rethlas supervise` (M6)
-- `rethlas dashboard` (M7)
-- `rethlas linter` (M8)
-- `rethlas rebuild` (M2.3 defines it; replays events via librarian)
-- `rethlas generator` (M4)
-- `rethlas verifier` (M5)
-- `rethlas status` (Phase II candidate; stub)
-
-**M2.2** `cli/init.py` — `rethlas init`
-- Refuses if `events/` or `rethlas.toml` already exist (per
-  ARCHITECTURE §6.4 one-shot CLI contract). `--force` allows
-  overwriting `rethlas.toml` only; never touches `events/`.
-- On fresh workspace: create `events/`, `knowledge_base/`, `runtime/`
-  skeleton and write a **fully annotated** `rethlas.toml` that lists
-  every known field with its default value and a one-line comment
-  per field (so the user discovers all tunable knobs just by opening
-  the file). Template:
-  ```toml
-  # Rethlas workspace config. See ARCHITECTURE.md §2.4 for the full
-  # field list and validation bounds.
-  [scheduling]
-  # Per-node pass_count goal; coordinator stops dispatching once all
-  # nodes reach this value (§10.1).
-  desired_pass_count       = 3
-  # Max concurrent generator workers (§10.3).
-  generator_workers        = 2
-  # Max concurrent verifier workers (§10.3).
-  verifier_workers         = 4
-  # Kill Codex subprocess if its log file mtime stalls this long
-  # (§7.4). Default 1800 = 30 min; raise for longer reasoning budgets.
-  codex_silent_timeout_seconds = 1800
-
-  [dashboard]
-  # HTTP bind address. Default loopback; no auth in Phase I (§6.7.1).
-  bind                     = "127.0.0.1:8765"
-  ```
-- Also write workspace `.gitignore` that matches ARCHITECTURE §2.2.
-
-**M2.3** `cli/rebuild.py` — `rethlas rebuild`
-- Refuses if `runtime/locks/supervise.lock` is held (supervise is
-  running); prints "stop supervise first" and exits non-zero
-- Takes the lock itself while running
-- Delete `knowledge_base/` and `runtime/` (but recreate `runtime/`
-  skeleton before releasing the lock so subsequent supervise can
-  start)
-- Invoke librarian in one-shot mode to replay all events including
-  repopulating `AppliedEvent` table
-
-Milestone exit: `rethlas init` creates a fresh workspace; `rethlas rebuild`
-runs (no-op with empty events).
-
----
-
-## M3 — Librarian (read events → write KB + nodes)
-
-**M3.1** `librarian/projector.py` — event projection logic
-- For each event type, update Kuzu atomic fields per ARCHITECTURE §5.4
-- Hash recomputation + BFS propagation (Merkle; statement changes only)
-- Use the `initial_count(kind, proof)` helper from §5.4 for every
-  node-rewriting event (`user.node_added`, `user.node_revised`,
-  `generator.batch_committed`):
-  - `kind ∈ {definition, external_theorem}` → `pass_count = 0`
-  - `kind ∈ {lemma, theorem, proposition}`, proof non-empty → `pass_count = 0`
-  - `kind ∈ {lemma, theorem, proposition}`, proof empty → `pass_count = -1`
-- `repair_count` transitions per §5.4:
-  - any node whose `statement_hash` changes (direct rewrite or Merkle
-    cascade) → `repair_count = 0`
-  - verifier gap/critical with hash match → `repair_count += 1`
-  - other events (accepted verdict, hint_attached, proof-only rewrite
-    that doesn't change statement_hash) → `repair_count` unchanged
-- verifier accepted + hash match → `pass_count += 1`; set `verification_report`
-- verifier gap/critical + hash match → `pass_count = -1`; set
-  `verification_report` and overwrite verifier section of `repair_hint`
-- verifier hash mismatch → record `AppliedEvent(apply_failed,
-  reason=hash_mismatch)`; no KB change
-- user.hint_attached:
-  - Structural admission: reject if `target.pass_count >= 1` at
-    admission time (event never reaches `events/`)
-  - Semantic apply: if target missing → `apply_failed(reason=hint_target_missing)`;
-    if target.count advanced to ≥ 1 between admission and apply →
-    `apply_failed(reason=hint_target_unreachable)`; otherwise append
-    a new user section to `repair_hint` with format
-    `\n---\n[user @ <iso_ms>]\n<hint body>`
-- verifier.run_completed(gap/critical) on hash match: overwrite the
-  **verifier section** of `repair_hint` (everything before the first
-  `---` line); preserve any user sections following it
-- Generator.batch_committed / user.node_revised whose write changes
-  `verification_hash` of a touched node: clear that node's
-  `repair_hint` **and** `verification_report` entirely (old content
-  applies to a stale hash)
-- No -1 propagation rule (strict-monotone dispatch handles it)
-- Counter-example = statement revision inside a normal
-  `generator.batch_committed` (no dedicated event)
-
-**M3.2** `librarian/validator.py` — split into two layers per §3.1.6
-- **Structural check** (admission-side helpers, also run defensively at
-  librarian as last line): schema completeness, actor/type registered,
-  label syntax, self-reference, batch-internal acyclicity. Failure on
-  canonical event = **workspace corruption**; halt projection.
-- **Semantic check** (librarian only, at apply time, against current
-  projection): label uniqueness, cycle introduction, `\ref{}` target
-  exists, hint target exists, verifier hash-match. Failure → record
-  `AppliedEvent(apply_failed, reason=<code>)`; no KB change; terminal.
-- Reason codes (must match §5.2): `label_conflict`, `cycle`,
-  `ref_missing`, `hint_target_missing`, `hash_mismatch`, `kind_mutation`,
-  `self_reference`.
-- Producer + type still matched against `producers.toml` as part of
-  structural check.
-
-**M3.3** `librarian/renderer.py` — node markdown file generation
-- Given a node label, query Kuzu and format markdown
-- Output location: `knowledge_base/nodes/{kind_prefix}_{sanitized_label}.md`
-
-**M3.4** `librarian/main.py` — long-running daemon
-- File watcher on `events/` (via `watchdog`)
-- Ordered event processing (stable sort by iso_ms, seq, uid per
-  ARCHITECTURE §3.7.1)
-- **Startup sequence** (per ARCHITECTURE §6.5):
-  1. Event replay: walk all `events/*` in order; skip any already in
-     `AppliedEvent`; apply the rest.
-  2. `nodes/` reconciliation: for every `pass_count >= 1` node in
-     Kuzu, diff on-disk `.md` vs rendered expected content; rewrite
-     divergent files and delete orphaned ones. Closes the crash
-     window between Kuzu commit and per-event re-render.
-- Rebuild is a CLI action (`rethlas rebuild`), not an event — librarian
-  exposes it via `librarian/cli.py`, never via a truth event (Phase I
-  truth producers are user/generator/verifier only)
-
-**M3.5** `librarian/cli.py` — `rethlas librarian [--rebuild | --daemon]`
-
-Milestone exit: manually drop a user event file in `events/`, run librarian,
-see dag.kz populated and nodes/*.md generated.
-
----
-
-## M4 — Generator (Codex, fresh + repair modes)
-
-**M4.1** Keep `generator/.agents/skills/` intact; update each skill's
-AGENTS.md instructions to require `<node>` block output format and
-`\ref{label}` conventions.
-
-**M4.2** Update `generator/.codex/config.toml`:
-- Remove `--dangerously-bypass-approvals-and-sandbox` (sandbox mode set at
-  invocation time)
-- MCP server path stays as `./mcp/server.py`
-
-**M4.3** Update `generator/AGENTS.md`:
-- Document Codex workspace: cwd = nodes/, read-only
-- Document output format: `<node>` blocks
-- Document `\ref{label}` convention
-- Document repair mode prompt format
-
-**M4.4** Update `generator/mcp/server.py` to match ARCHITECTURE §8.1:
-- Keep: `search_arxiv_theorems(query)`, `memory_init` / `memory_append`
-  / `memory_search`
-- Remove any stale tools that do not appear in §8.1 (e.g.,
-  `verify_proof_service`, `get_event`, `closure`) — those are not in
-  the Phase I generator toolset
-
-**M4.5** `generator/role.py` — new thin wrapper
-- Read dispatch parameters from coordinator (runtime job file / CLI
-  args): target label + mode + optional repair context refs. Dispatch
-  is **not** a truth event in Phase I (coordinator is not a truth
-  producer per ARCHITECTURE §3.5).
-- Assemble the Codex prompt per ARCHITECTURE §6.2 prompt composition,
-  including for `mode=repair`: target's `verification_report`,
-  current `repair_hint` (verifier section + any user sections), and
-  the current `repair_count` value as an advisory signal.
-- Invoke `codex exec` via `common/runtime/codex_runner`
-  - cwd = `<workspace>/knowledge_base/nodes/`
-  - `--sandbox read-only`
-- While Codex runs, **refresh the job file `updated_at` every 60 s**
-  (status stays `running`) so dashboard can distinguish "wrapper
-  healthy, Codex thinking" from "wrapper hung" (ARCHITECTURE §7.4
-  F4).
-- Parse stdout for `<node>` blocks
-- Decoder enforces per ARCHITECTURE §6.2 failure modes, including:
-  - label prefix matches kind (§3.5.2 mapping table)
-  - write-scope invariant: every batch label is either the batch's
-    target or absent from current KB (generator cannot modify any
-    other existing node)
-  - repair-must-change-hash (mode=repair) computed with staged-batch
-    resolution for any batch-internal deps
-- Stage the batch outside `events/` until fully validated, then atomically
-  publish exactly **one** `generator.batch_committed` truth event (per
-  ARCHITECTURE §3.7.2). No per-node truth events, no `attempt_started` /
-  `attempt_failed` truth events.
-- Poll `AppliedEvent` after publish to capture
-  `applied / apply_failed(reason)` into the runtime job file.
-- Runtime-only artifacts (pid, codex log path, crash info) go to
-  `runtime/jobs/{job_id}.json` and `runtime/logs/{job_id}.codex.log`.
-  Decoder rejections are appended to `runtime/state/rejected_writes.jsonl`.
-
-**M4.6** `cli/generator.py` — `rethlas generator --target <label>
---mode {fresh|repair}` invokes `generator/role.py`
-
-Milestone exit: `rethlas generator --target lem:test --mode fresh` runs
-Codex, writes events. Librarian projects them into KB + nodes/.
-
----
-
-## M5 — Verifier (Codex, single-call, original Rethlas pattern)
-
-**M5.1** Keep `verifier/.agents/skills/` intact (3 skills:
-check-referenced-statements, verify-sequential-statements,
-synthesize-verification-report). Codex uses them internally via
-multi-agent feature.
-
-**M5.2** Keep `verifier/.codex/config.toml` multi-agent setup.
-
-**M5.3** Update `verifier/AGENTS.md`:
-- Document cwd = nodes/, read-only sandbox
-- Document output format: final JSON with verdict ∈ {accepted, gap, critical}
-- Document `resolve-reference` skill: label `:` → `_` for cat-ing nodes/*.md
-
-**M5.4** Verifier has no Phase I MCP tools (per ARCHITECTURE §8). If
-existing `verifier/.codex/config.toml` registers an MCP server, remove
-the registration. Keep `verifier/mcp/` directory for future Phase II use
-but don't launch an MCP server.
-
-**M5.5** `verifier/role.py` — single `codex exec` invocation
-- Read dispatch parameters from coordinator (runtime job file / CLI
-  args): target label. Dispatch is not a truth event in Phase I.
-- Run full pre-dispatch validation per ARCHITECTURE §5.5.2 (hash +
-  all other dispatch conditions); on failure, write
-  `status = "precheck_failed"` with detail and exit.
-- Build minimal prompt: target label + statement + proof
-- While Codex runs, refresh job file `updated_at` every 60 s
-  (ARCHITECTURE §7.4 F4).
-- `codex exec` once; parse verdict JSON; on parse failure write
-  `status = "crashed"` with `detail = "verdict parse failed: ..."`
-  and exit (no retry — §7.5).
-- Emit `verifier.run_completed` with verdict, verification_hash,
-  verification_report, repair_hint
-- Poll `AppliedEvent` after publish; mirror outcome in job file.
-
-**M5.6** `cli/verifier.py` — `rethlas verifier --target <label>`
-
-Milestone exit: `rethlas verifier --target lem:test` emits verdict event.
-Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
-
----
-
-## M6 — Coordinator
-
-**M6.1** `coordinator/policy.py` — pure decision function
-- Given KB state + runtime job state, return list of dispatches
-- Count-based filtering and priority per §10 of ARCHITECTURE
-- Respects `DESIRED_COUNT`; no hard repair cap in Phase I (repair rounds
-  are advisory only — generator keeps being dispatched on count=-1 until
-  hash escapes)
-- Concurrency via two independent worker pools (ARCHITECTURE §10.3):
-  - generator pool size = `rethlas.toml [scheduling] generator_workers`
-    (default 2)
-  - verifier pool size = `rethlas.toml [scheduling] verifier_workers`
-    (default 4)
-  - per-tick dispatch loops are independent for each pool — no shared
-    slot contention or cross-pool precedence
-  - the "no concurrent same-target dispatch" rule applies across
-    pools (a target in flight in one pool blocks dispatch in the
-    other)
-
-**M6.2** `coordinator/loop.py` — main loop
-- Read KB + runtime jobs
-- Compute dispatches via policy (two independent pools)
-- For each dispatch: check pool has capacity, launch wrapper
-  subprocess with env `RETHLAS_WORKSPACE=<abs>` + positional
-  arg `job_id`, record runtime job file under
-  `runtime/jobs/{job_id}.json` per ARCHITECTURE §6.7.1 schema
-- Monitor in-flight dispatches via Codex log mtime; compare against
-  `rethlas.toml [scheduling] codex_silent_timeout_seconds` (default
-  1800). On expiry: kill process group; write
-  `status = "timed_out"` to the job file, then delete it
-- Maintain per-target sliding window of recent job outcomes
-  (§6.7.1 / §7.4 / §7.5). Surface to Dashboard Human Attention on
-  3 consecutive `crashed` (unstable) or 3 consecutive
-  `timed_out` (frozen)
-- Orphan reaper: each loop tick scan `runtime/jobs/*.json` for files
-  whose pid is not alive and `updated_at` older than 5 minutes;
-  write `status = "orphaned"` and delete
-- Check global stop condition: all nodes (including definitions and
-  external_theorems) have `pass_count >= DESIRED_COUNT` — matches
-  ARCHITECTURE §10.1 / §6.4
-
-**M6.3** `coordinator/status_writer.py` — publish
-`runtime/state/coordinator.json` per ARCHITECTURE §6.4.2 schema. Called
-at the end of every loop tick (atomic `.tmp` + rename). Fields include
-`idle_reason_code` from the §6.4.2 enumeration.
-
-**M6.4** `coordinator/children.py` — long-running child daemon
-management (per ARCHITECTURE §6.4 merged supervisor role):
-- Acquire advisory `runtime/locks/supervise.lock` via `flock`; exit
-  non-zero if already held (prints holder pid)
-- Launch `librarian` subprocess + `dashboard` subprocess (each own
-  pid/pgid)
-- Monitor each child's heartbeat + process liveness; log + restart-once
-  policy on crash
-- Graceful shutdown: SIGTERM in reverse dependency order
-  (dashboard → workers → librarian), 10 s wait, SIGKILL remnants, then
-  release lock and exit
-- Populate `children` field of `runtime/state/coordinator.json` each
-  tick
-
-**M6.5** `cli/supervise.py` — `rethlas supervise` delegates to the
-coordinator process entry. No separate supervisor module — coordinator
-is the workspace-singleton parent (ARCHITECTURE §6.4, invariant 5).
-
-Milestone exit: `rethlas supervise` in a workspace with some user events
-drives the generator-verifier loop autonomously; a second `rethlas
-supervise` in the same workspace fails with "lock held by pid N".
-
----
-
-## M7 — Dashboard (Phase I linear)
-
-Implements the read-only observability layer per ARCHITECTURE §6.7
-and the runtime interface contract §6.7.1.
-
-**M7.1** `dashboard/server.py` — FastAPI app, all endpoints per
-ARCHITECTURE §6.7 "Pages":
-- `GET /` — HTML overview (coordinator health + scheduling state +
-  active jobs + human attention + affected theorems)
-- `GET /api/coordinator` — raw `runtime/state/coordinator.json`
-- `GET /api/overview` — JSON backing main page (Kuzu + runtime joined)
-- `GET /api/theorems` — enriched theorem list with derived status
-  vocabulary (§6.7)
-- `GET /api/active` — enumerates `runtime/jobs/*.json`
-- `GET /api/attention` — nodes needing human intervention (user-blocked
-  definitions, high `repair_count` proof-requiring nodes, drift alerts)
-- `GET /api/rejected` — merges `runtime/state/rejected_writes.jsonl`,
-  recent `AppliedEvent(status=apply_failed)` rows, and
-  `runtime/state/drift_alerts.jsonl`
-- `GET /api/events?limit=N&actor=&type=` — reverse-chronological walk
-  of `events/` per §6.7.1 "/api/events query strategy"
-- `GET /api/node/{label}` — full node info (Kuzu node + related events)
-- `GET /events/stream` — SSE per §6.7.1 envelope schema
-
-**M7.2** `dashboard/state_watcher.py` — file-watching layer
-- `watchdog` on `events/**/*.json`, `runtime/jobs/*.json`,
-  `runtime/state/*.json`
-- Fans out file notifications as typed SSE envelopes per §6.7.1
-- Applies dashboard staleness thresholds (60 s `degraded`, 5 min
-  `down`) to coordinator / librarian liveness classification
-
-**M7.3** `dashboard/kuzu_reader.py` — read-only Kuzu access via
-`common/kb`. Handles `rebuild_in_progress` by returning a 503-able
-sentinel so M7.1 endpoints can short-circuit.
-
-**M7.4** `dashboard/templates/` — minimal HTML (vanilla, no React)
-- Uses fetch + SSE from JS
-- Renders linear sections from §6.7: Coordinator Health, Current
-  Scheduling State, Active Jobs, Human Attention, Affected Theorems
-
-**M7.5** `cli/dashboard.py` — `rethlas dashboard [--bind HOST:PORT]`
-- Default bind `127.0.0.1:8765`
-- Non-loopback binds log a startup warning (no auth in Phase I)
-- Config fallback: `rethlas.toml [dashboard] bind`
-
-Milestone exit: browser at `localhost:8765` shows workspace state;
-during `rethlas rebuild` Kuzu-dependent endpoints return 503 with
-`Retry-After: 5`; coordinator / librarian JSON age is reflected as
-healthy / degraded / down badges.
-
----
-
-## M8 — Linter (minimal)
-
-**M8.1** `linter/checks.py` — categories A + B + C + D + E checks
-- **A**: event filename ↔ JSON body consistency; unique event_ids;
-  referenced event_ids exist
-- **B**: no cycles in Kuzu; label uniqueness; kind-field consistency;
-  label prefix matches kind per ARCHITECTURE §3.5.2
-- **C**: `pass_count` audit (§5.5.1) — recompute `audit_count` from
-  event stream, assert matches `Node.pass_count`
-- **D**: `repair_count` audit — recompute gap/critical verdicts per
-  label since the most recent `statement_hash`-changing event (direct
-  rewrite or Merkle cascade from upstream statement change), assert
-  matches `Node.repair_count`
-- **E**: `nodes/` ↔ Kuzu consistency — for every Kuzu Node with
-  `pass_count >= 1`, assert the corresponding `nodes/*.md` file
-  exists and its content equals the librarian-render of current Kuzu
-  fields; for every `nodes/*.md` file, assert the label is present
-  in Kuzu at `pass_count >= 1`. `--repair-nodes` flag rewrites
-  divergent files and deletes orphaned ones.
-- **F**: `events/` ↔ `AppliedEvent` inventory — for every row in
-  `AppliedEvent`, assert the corresponding event file exists in
-  `events/` and its SHA-256 matches `AppliedEvent.event_sha256`; for
-  every file in `events/`, assert an `AppliedEvent` row exists with
-  matching hash (or the file is newer than the most recent
-  librarian startup and is thus legitimately un-applied). Any
-  mismatch indicates `events/` has been edited / deleted / reverted
-  outside Rethlas; reported but no auto-repair (requires `rethlas
-  rebuild`).
-
-**M8.2** `linter/main.py` — one-shot run
-- Refuses if `runtime/locks/supervise.lock` is held (per ARCHITECTURE
-  §6.6). `--allow-concurrent` overrides and annotates report header
-  with "transient drift may appear".
-- Load events, rebuild KB in memory (or query existing), run checks
-- Report results via stdout / JSON to `runtime/state/linter_report.json`
-  (linter is NOT a truth producer per ARCHITECTURE §6). Exit non-zero on
-  any violation so CI can gate on it.
-
-**M8.3** `cli/linter.py` — `rethlas linter [--mode fast]
-[--allow-concurrent] [--repair-nodes]`
-
-Milestone exit: `rethlas linter` reports zero violations on a clean
-workspace; flags injected errors in test cases.
-
----
-
-## M9 — End-to-end smoke test
-
-**M9.1** Fixture: a tiny workspace with
-- One `user.node_added` event (`kind: definition`, starts at count=0)
-- One `user.node_added` event (`kind: theorem`, empty proof, starts at
-  count=-1; statement references the definition via `\ref{def:...}`)
-
-**M9.2** `rethlas supervise` in this fixture:
-- Coordinator parallel dispatches:
-  - Verifier on the definition (count=0, no deps, strict monotone vacuous)
-  - Generator on the theorem (count=-1)
-- Definition verified, count increments; eventually reaches DESIRED=3
-- Generator produces theorem's proof (+ maybe sub-lemmas)
-- Librarian projects → dag.kz + nodes/
-- Theorem now has proof, count=0
-- Coordinator can dispatch verifier on theorem only when
-  definition.count > theorem.count (strict monotone)
-  - theorem.count=0 needs def.count ≥ 1 → OK once def verified once
-  - theorem.count=1 needs def.count ≥ 2 → OK once def verified twice
-  - ... until both hit DESIRED=3
-- Supervise loop idles (global stop condition: all nodes count ≥ DESIRED)
-
-**M9.3** Kill supervise, `rm -rf knowledge_base/`, restart.
-- Librarian re-projects from events → same KB state
-- Coordinator continues
-
-Milestone exit: smoke test script green.
-
----
-
-## Task numbering summary
-
-```
-M0 — Repo restructure (10 tasks)
-M1 — Common infrastructure (9 tasks)
-M2 — CLI skeleton (3 tasks)
-M3 — Librarian (5 tasks)
-M4 — Generator (6 tasks)
-M5 — Verifier (6 tasks)
-M6 — Coordinator (5 tasks)
-M7 — Dashboard (5 tasks)
-M8 — Linter (3 tasks)
-M9 — End-to-end (3 tasks)
+```text
+tests/
+├── unit/
+├── integration/
+├── system/
+└── fixtures/
 ```
 
-Total: ~55 concrete tasks.
+Recommended helper infrastructure:
+
+- fake clock / deterministic timestamp helper
+- fake Codex runner that returns scripted stdout/stderr/log behavior
+- temporary workspace fixture
+- temporary Kuzu workspace fixture
+- helper to write event files with exact byte content for `event_sha256` tests
 
 ---
 
-## Dependencies
+## Milestones
 
-```
-M0 ──▶ M1 ──▶ M2 ──▶ M3 ──▶ M4 ──▶ M5 ──▶ M6 ──┬──▶ M7
-                                                └──▶ M8 ──▶ M9
-```
+## M0 — Repo And Package Scaffold
 
-- M1 is the foundation; everything depends on it
-- M3 (librarian) must precede anything that writes KB
-- M4 and M5 (agents) can be parallelized once M3 is done
-- M7 and M8 can be parallelized once M6 is done
+**Deliverables**
 
----
+- Move `agents/generation` → `generator`
+- Move `agents/verification` → `verifier`
+- Move `agents/common` → `common` if still present
+- Create top-level packages:
+  - `coordinator/`
+  - `librarian/`
+  - `dashboard/`
+  - `linter/`
+  - `cli/`
+- Add `pyproject.toml` with `rethlas` entry point
+- Add root `producers.toml`
 
-## Phase I "done" criteria
+**Tests**
 
-- [ ] Workspace can be created (`rethlas init`)
-- [ ] User can drop a definition / external_theorem / theorem as an
-      event file
-- [ ] Librarian projects it; nodes/*.md and dag.kz populated
-- [ ] `rethlas supervise` drives generator + verifier loop
-- [ ] All nodes reach pass_count >= DESIRED_COUNT = 3
-- [ ] Dashboard at port 8765 shows current state
-- [ ] Linter reports consistency (event-stream integrity + KB invariants)
-- [ ] `rm -rf knowledge_base/; rethlas rebuild` reconstructs full state
-      (including the `AppliedEvent` table)
-- [ ] Librarian records an `AppliedEvent` row (applied or apply_failed)
-      for every event it decides on; `AppliedEvent` and `dag.kz/`
-      mutations commit together or roll back together
-- [ ] CLI (`rethlas add-node` etc.) reports `applied` vs
-      `apply_failed(reason)` by polling `AppliedEvent` after publish
-- [ ] Linter audits `pass_count` against event-stream replay (§5.5.1)
+- `unit`: import smoke for all top-level packages
+- `system`: `rethlas --help` shows the expected subcommands
+
+**Exit**
+
+- Editable install works
+- CLI binary resolves
 
 ---
 
-## Not in Phase I (parking lot)
+## M1 — Core Model, Config, Event IO
 
-- Claude adapter
-- Audit mode / consensus verification
-- `search_relevant` semantic search MCP tool
-- Cytoscape.js interactive DAG in dashboard
-- Blueprint LaTeX export (`rethlas export --blueprint`)
-- Importer for external libraries
-- Inducedorbit data migration
-- Linter category C (full projection drift)
-- Clock skew / multi-machine
-- `common/mcp/` shared module (each agent keeps its own)
-- `adapters/codex/` nesting (flat structure for Phase I)
+**Deliverables**
+
+- `common/config/`
+  - parse full `rethlas.toml`
+  - validate bounds for:
+    - `desired_pass_count`
+    - `generator_workers`
+    - `verifier_workers`
+    - `codex_silent_timeout_seconds`
+    - dashboard bind
+- `common/events/`
+  - filename parse/format
+  - `.json` truth event parse/format
+  - event-id allocation
+  - atomic write helper (`.tmp` + rename)
+  - event byte hashing helper for `AppliedEvent.event_sha256`
+- `common/kb/types.py`
+  - `Node`
+  - `Event`
+  - `AppliedEvent`
+  - `ApplyOutcome`
+  - runtime dataclasses where useful
+- `common/kb/hashing.py`
+  - deterministic `statement_hash`
+  - deterministic `verification_hash`
+
+**Tests**
+
+- `unit`: config parses valid file and rejects invalid values
+- `unit`: event filename/body round-trip
+- `unit`: event-id allocation keeps producer-local monotonicity when wall clock repeats or steps backward
+- `unit`: `statement_hash` / `verification_hash` are stable across key order and newline normalization
+- `unit`: raw-byte `event_sha256` helper matches exact file bytes
+
+**Exit**
+
+- All pure model/config/hash/event helpers are tested and stable
+
+**Checkpoint A**
+
+- Truth serialization and hash identity are frozen enough that Kuzu projection can be built on top without churn
+
+---
+
+## M2 — Kuzu Backend And Projection Semantics
+
+**Deliverables**
+
+- `common/kb/interface.py`
+  - read API for nodes / edges / closures
+  - `repair_count(label)`
+  - `AppliedEvent` queries
+- `common/kb/kuzu_backend.py`
+  - schema init for:
+    - `Node`
+    - `DependsOn`
+    - `ProjectionState`
+    - `AppliedEvent` (including `detail` and `event_sha256`)
+  - transactional apply path
+  - rebuild path
+- `librarian/projector.py`
+  - all `pass_count` semantics
+  - all `repair_count` semantics
+  - Merkle propagation
+  - `repair_hint` overwrite/append/clear rules
+- `librarian/validator.py`
+  - structural checks
+  - semantic checks
+  - `apply_failed(reason, detail)` mapping
+
+**Tests**
+
+- `integration`: schema init creates all required tables/columns
+- `integration`: `AppliedEvent` and KB mutations commit/rollback together
+- `integration`: replaying the same event twice is idempotent
+- `integration`: replay determinism under restart boundaries
+  - apply event stream in one pass
+  - apply the same stream split across multiple restarts
+  - final `Node`, `DependsOn`, `AppliedEvent`, and rendered `nodes/`
+    outputs must be identical
+- `integration`: `pass_count` transitions for:
+  - user add/revise
+  - generator batch
+  - verifier accepted
+  - verifier gap/critical
+  - verifier hash mismatch
+- `integration`: `repair_count` transitions for:
+  - repeated wrong verdicts on same statement
+  - proof-only rewrite
+  - statement rewrite
+  - upstream statement change causing cascade reset
+- `integration`: `repair_hint` behavior:
+  - verifier section overwrite
+  - user section append
+  - hash-changing rewrite clears hint/report
+- `integration`: `apply_failed` reasons:
+  - `label_conflict`
+  - `cycle`
+  - `ref_missing`
+  - `hint_target_missing`
+  - `hint_target_unreachable`
+  - `hash_mismatch`
+  - `kind_mutation`
+  - `self_reference`
+- `integration`: `AppliedEvent.detail` and `event_sha256` populated correctly
+
+**Exit**
+
+- `KB = f(events/)` works deterministically for all Phase I event kinds
+
+**Checkpoint B**
+
+- Truth → projection semantics are stable and audited enough for daemonization
+
+---
+
+## M3 — Workspace CLI And User Publish Path
+
+**Deliverables**
+
+- `cli/main.py`
+- `cli/init.py`
+- user publishing commands:
+  - `rethlas add-node`
+  - `rethlas revise-node`
+  - `rethlas attach-hint`
+- `cli/rebuild.py`
+  - writes `runtime/state/rebuild_in_progress.flag` before the
+    destructive step (delete `knowledge_base/`), deletes the flag on
+    successful completion; on crash the flag lingers so that the
+    next supervise's librarian can detect and force-rerun rebuild
+    (ARCHITECTURE §6.5 / §11.2)
+- workspace `.gitignore`
+- annotated `rethlas.toml` template
+
+**Tests**
+
+- `system`: `rethlas init` on empty workspace creates expected tree
+- `system`: `rethlas init --force` overwrites config only, never `events/`
+- `system`: user publish CLI writes canonical event file
+- `integration`: publish CLI polls `AppliedEvent` and reports:
+  - `applied`
+  - `apply_failed(reason)`
+  - timeout while supervise not running
+  - timeout while supervise running but librarian behind
+- `system`: `rethlas rebuild` refuses while `supervise.lock` is held
+- `system`: `rethlas rebuild` takes lock when running standalone
+- `fault-injection`: `rethlas rebuild` killed after it writes the flag
+  but before deleting it — the flag persists on disk; pairs with the
+  M4 test below that catches the flag on next startup and re-runs
+  rebuild before accepting normal work
+
+**Exit**
+
+- Workspace lifecycle and user truth publication work end-to-end through CLI
+
+---
+
+## M4 — Librarian Daemon, Replay, Reconciliation, Rebuild
+
+**Deliverables**
+
+- `librarian/main.py`
+  - event watcher
+  - ordered replay
+  - startup replay
+  - startup `nodes/` reconciliation
+  - `librarian.json`
+- `librarian/renderer.py`
+- `librarian/cli.py`
+- rebuild flag handling:
+  - `runtime/state/rebuild_in_progress.flag`
+  - startup forced rebuild path after interrupted rebuild
+
+**Tests**
+
+- `unit`: `renderer.render(node)` produces **byte-identical** output
+  across repeated invocations on the same `Node` — stable YAML key
+  order, `depends_on` ASCII-sorted, Unix `\n` line endings, UTF-8
+  NFC normalization, trailing newline (ARCHITECTURE §4.2 rendering
+  contract). Without this, startup reconciliation + linter E would
+  flap every run.
+- `integration`: startup replay processes unseen events and skips already-decided ones
+- `integration`: crash window after Kuzu commit but before render is healed by startup reconciliation
+- `integration`: orphan `nodes/*.md` files are deleted by reconciliation
+- `integration`: `librarian.json.startup_phase` transitions:
+  - `replaying`
+  - `reconciling`
+  - `ready`
+- `integration`: `projection_backlog` is correct
+- `fault-injection`: interrupted rebuild leaves flag; next supervise-started librarian forces clean rebuild path
+- `system`: Kuzu-dependent dashboard endpoints must become 503 while `rebuild_in_progress`
+
+**Exit**
+
+- Librarian can recover projection state from truth and repair stale `nodes/`
+
+**Checkpoint C**
+
+- Recoverability from truth is real, not just conceptual
+
+---
+
+## M5 — Runtime Substrate And Job Lifecycle
+
+**Deliverables**
+
+- `common/runtime/codex_runner.py`
+- runtime job schema helpers
+- runtime log helpers
+- wrapper heartbeat updater
+- timeout handling
+- orphan reaper helpers
+- sliding-window outcome tracking helpers
+
+**Tests**
+
+- `integration`: wrapper heartbeat updates `runtime/jobs/{job_id}.json.updated_at` every 60 s
+- `integration`: log mtime timeout marks `timed_out`
+- `integration`: orphaned job file is detected and cleaned
+- `integration`: terminal statuses write then delete job files in the documented order
+- `integration`: startup runtime cleanup removes stale job files and stale coordinator/librarian snapshots but preserves JSONL histories and logs
+- `integration`: spawning a fake wrapper via the runtime helper passes
+  `RETHLAS_WORKSPACE=<abs path>` env var and the `job_id` positional
+  argument; any other env vars present at coordinator spawn time
+  (e.g. a stubbed `OPENAI_API_KEY`) flow through unchanged to the
+  wrapper process (ARCHITECTURE §6.7.1 job lifecycle step 1)
+- `unit`: consecutive outcome window logic for:
+  - `crashed`
+  - `timed_out`
+  - repeated same-reason `apply_failed`
+
+**Exit**
+
+- Runtime observability and cleanup semantics are stable enough for real workers
+
+---
+
+## M6 — Generator Worker
+
+**Deliverables**
+
+- `generator/role.py`
+- updated `generator/AGENTS.md`
+- updated `generator/.codex/config.toml`
+- updated `generator/mcp/server.py` to exact Phase I toolset
+- decoder with full batch validation
+
+**Tests**
+
+- `integration`: fake Codex output with valid `<node>` blocks produces exactly one `generator.batch_committed`
+- `integration`: decoder rejects:
+  - malformed block
+  - wrong prefix/kind pairing
+  - existing non-target label
+  - unresolved `\ref{}`
+  - repair-no-op hash
+- `integration`: batch-internal topological hashing works
+- `integration`: staged publish is atomic
+- `integration`: wrapper pre-dispatch validation returns `precheck_failed` without calling Codex when conditions drift
+- `integration`: decoder rejections append to `runtime/state/rejected_writes.jsonl`
+- `system`: `rethlas generator --target ... --mode fresh|repair` works in a temp workspace with fake Codex
+
+**Exit**
+
+- Generator worker is deterministic around decode/publish/runtime bookkeeping
+
+---
+
+## M7 — Verifier Worker
+
+**Deliverables**
+
+- `verifier/role.py`
+- updated `verifier/AGENTS.md`
+- pruned verifier MCP usage per architecture
+
+**Tests**
+
+- `integration`: valid verdict JSON produces `verifier.run_completed`
+- `integration`: malformed verdict JSON becomes `status = "crashed"` and no truth event
+- `integration`: pre-dispatch validation rejects stale/invalid dispatches with `precheck_failed`
+- `integration`: wrapper mirrors `AppliedEvent` outcome into runtime job file
+- `system`: `rethlas verifier --target ...` works with fake Codex
+
+**Exit**
+
+- Verifier worker obeys the runtime/job contract and truth contract
+
+---
+
+## M8 — Coordinator / Supervise
+
+**Deliverables**
+
+- merged coordinator+supervisor implementation
+- worker-pool dispatch loop
+  - dispatch is vacancy-driven (pool / pull model), not a persistent queue
+- `coordinator.json`
+- child daemon management
+- startup cleanup
+- startup dispatch gate
+
+**Tests**
+
+- `integration`: second `rethlas supervise` in same workspace fails on `supervise.lock`
+- `integration`: startup dispatch gate suppresses workers until librarian reports `startup_phase = ready` and `rebuild_in_progress = false`
+- `integration`: no concurrent same-target dispatch across both pools
+- `integration`: two independent pools dispatch up to:
+  - `generator_workers`
+  - `verifier_workers`
+- `integration`: `idle_reason_code` transitions cover:
+  - `all_done`
+  - `user_blocked`
+  - `generation_dep_blocked`
+  - `verification_dep_blocked`
+  - `in_flight_only`
+  - `corruption_or_drift`
+  - `librarian_starting`
+- `integration`: child restart policy
+  - librarian restart once then coordinator exits on rapid re-crash
+  - dashboard restart three times then degrade
+- `integration`: child startup grace period does not mark a just-spawned but
+  still-initializing librarian/dashboard as down before the grace window expires
+- `integration`: startup cleanup removes zombie runtime state from prior crash
+- `integration`: consecutive `crashed`, `timed_out`, and same-reason `apply_failed` counters flow into Human Attention state
+- `system`: `rethlas supervise` can run a tiny workspace to steady state
+
+**Exit**
+
+- Coordinator is a correct singleton parent and pool-based dispatcher
+
+**Checkpoint D**
+
+- All long-running process and lock semantics are proven before dashboard depends on them
+
+---
+
+## M9 — Dashboard
+
+**Deliverables**
+
+- `dashboard/server.py`
+- `dashboard/state_watcher.py`
+- `dashboard/kuzu_reader.py`
+- `dashboard/templates/`
+- `cli/dashboard.py`
+
+**Tests**
+
+- `integration`: `/api/coordinator` returns raw `coordinator.json`
+- `integration`: `/api/overview` joins runtime state + Kuzu correctly
+- `integration`: `/api/theorems` status vocabulary covers:
+  - `done`
+  - `verified`
+  - `needs_verification`
+  - `blocked_on_dependency`
+  - `needs_generation`
+  - `generation_blocked_on_dependency`
+  - `user_blocked`
+  - `in_flight`
+- `integration`: `/api/rejected` merges:
+  - `rejected_writes.jsonl`
+  - `AppliedEvent(status=apply_failed)`
+  - `drift_alerts.jsonl`
+- `integration`: golden JSON fixtures for:
+  - `/api/overview`
+  - `/api/theorems`
+  - `/api/node/{label}`
+  on representative fixture workspaces; outputs are reviewed and
+  snapshotted to catch accidental semantics drift
+- `integration`: `/api/events` reverse-chronological query strategy works
+- `integration`: SSE emits envelopes for:
+  - event file change
+  - job change
+  - state change
+  - applied-event change
+- `integration`: Kuzu-dependent endpoints return 503 + `Retry-After: 5` during rebuild
+- `system`: standalone `rethlas dashboard` refuses when supervise lock is held
+
+**Exit**
+
+- Dashboard is a correct read-only observability layer, not a scheduler shadow
+
+---
+
+## M10 — Linter
+
+**Deliverables**
+
+- `linter/checks.py`
+- `linter/main.py`
+- `cli/linter.py`
+
+**Tests**
+
+- `integration`: categories A-F each fail on targeted bad fixtures
+- `integration`: `--repair-nodes` fixes only category E issues
+- `integration`: linter refuses with live `supervise.lock` unless `--allow-concurrent`
+- `system`: JSON report is written and exit code is non-zero on violations
+
+**Exit**
+
+- Linter can independently detect projection drift, rendering drift, and event inventory drift
+
+---
+
+## M11 — System Validation And Fault Matrix
+
+**Deliverables**
+
+- scripted system tests for end-to-end correctness
+- scripted fault-injection tests for restart/recovery
+
+**Required scenarios**
+
+1. Fresh workspace:
+   - add definition
+   - add theorem with empty proof
+   - supervise drives theorem to `DESIRED_COUNT`
+2. User-supplied proof path:
+   - add theorem with proof
+   - verifier path starts at `pass_count = 0`
+3. Wrong verdict path:
+   - theorem goes to `-1`
+   - generator repairs
+   - verifier rechecks
+4. Upstream statement change:
+   - dependent `verification_hash` changes
+   - dependent `pass_count` resets per spec
+   - dependent `repair_count` resets
+5. Generator structural failure:
+   - repeated same-reason `apply_failed`
+   - dashboard attention entry appears
+6. Timeout/crash path:
+   - repeated `timed_out`
+   - repeated `crashed`
+   - dashboard attention entry appears
+7. Restart path:
+   - kill supervise
+   - restart
+   - stale runtime cleaned
+8. Rebuild crash path:
+   - simulate interrupted rebuild after flag written
+   - next supervise forces rebuild before normal work
+9. `nodes/` crash window:
+   - simulate Kuzu commit without render
+   - next startup reconciliation repairs files
+10. Inventory drift path:
+   - mutate event file after apply
+   - linter category F catches mismatch
+11. Replay determinism path:
+   - same fixture event stream replayed through multiple restart cuts
+   - final Kuzu state + `AppliedEvent` + `nodes/` bytes are identical
+12. Dashboard golden path:
+   - fixture workspace with active jobs, apply_failed rows, and mixed
+     theorem states
+   - `/api/overview`, `/api/theorems`, `/api/node/{label}` match
+     committed golden snapshots
+13. Cross-generator label race:
+   - two generator workers dispatched concurrently on distinct
+     proof-requiring targets, both inventing the **same** brand-new
+     auxiliary label
+   - first-to-apply wins; second gets
+     `apply_failed(reason=label_conflict)` with `detail` naming the
+     conflicting label and the winning event_id
+   - repeat with fresh dispatches three times; after the 3rd
+     consecutive `apply_failed(label_conflict)` on the losing
+     target, a Human Attention entry appears labelled
+     `"<kind> stuck on <label>: 3× label_conflict"` (ARCHITECTURE
+     §6.7, §7.5 consecutive-outcome rule extended to same-reason
+     apply_failed)
+
+**Exit**
+
+- Full system test suite passes on CI
+- Fault matrix demonstrates no correctness loss under crash/restart scenarios
+
+---
+
+## Test Gate Summary
+
+Phase I is not done until all of the following are green:
+
+- unit tests
+- integration tests
+- system tests
+- fault-injection tests
+- linter on a clean fixture workspace
+
+Minimum CI stages:
+
+1. `pytest tests/unit`
+2. `pytest tests/integration`
+3. `pytest tests/system`
+4. `pytest tests/system -k fault`
+5. `pytest tests/integration -k golden`
+6. `rethlas linter` against a golden clean fixture
+
+---
+
+## Phase I Done Criteria
+
+- [ ] `rethlas init` creates a valid workspace
+- [ ] user CLI publishes truth events and reports `applied` / `apply_failed`
+- [ ] librarian projects truth into `dag.kz`, `AppliedEvent`, and `nodes/`
+- [ ] coordinator runs as workspace singleton under `supervise.lock`
+- [ ] generator and verifier worker pools obey configured capacities
+- [ ] dashboard exposes all Phase I read-only endpoints
+- [ ] linter categories A-F are implemented
+- [ ] `rethlas rebuild` reconstructs projection state from truth
+- [ ] system/fault matrix passes in CI
+
+---
+
+## Notes
+
+- No dedicated skill in the current skill list cleanly covers “write a
+  software implementation plan from an architecture doc”, so this plan is
+  produced directly.
+- If architecture changes again, update this file immediately before any
+  implementation starts drifting.
