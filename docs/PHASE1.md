@@ -156,6 +156,9 @@ Milestone exit: `common/` packages importable; tests green.
   generator_workers        = 2
   # Max concurrent verifier workers (§10.3).
   verifier_workers         = 4
+  # Kill Codex subprocess if its log file mtime stalls this long
+  # (§7.4). Default 1800 = 30 min; raise for longer reasoning budgets.
+  codex_silent_timeout_seconds = 1800
 
   [dashboard]
   # HTTP bind address. Default loopback; no auth in Phase I (§6.7.1).
@@ -296,6 +299,10 @@ AGENTS.md instructions to require `<node>` block output format and
 - Invoke `codex exec` via `common/runtime/codex_runner`
   - cwd = `<workspace>/knowledge_base/nodes/`
   - `--sandbox read-only`
+- While Codex runs, **refresh the job file `updated_at` every 60 s**
+  (status stays `running`) so dashboard can distinguish "wrapper
+  healthy, Codex thinking" from "wrapper hung" (ARCHITECTURE §7.4
+  F4).
 - Parse stdout for `<node>` blocks
 - Decoder enforces per ARCHITECTURE §6.2 failure modes, including:
   - label prefix matches kind (§3.5.2 mapping table)
@@ -344,12 +351,18 @@ but don't launch an MCP server.
 **M5.5** `verifier/role.py` — single `codex exec` invocation
 - Read dispatch parameters from coordinator (runtime job file / CLI
   args): target label. Dispatch is not a truth event in Phase I.
-- Compute current `verification_hash` (pre-dispatch revalidation per
-  ARCHITECTURE §5.5.2)
+- Run full pre-dispatch validation per ARCHITECTURE §5.5.2 (hash +
+  all other dispatch conditions); on failure, write
+  `status = "precheck_failed"` with detail and exit.
 - Build minimal prompt: target label + statement + proof
-- `codex exec` once; parse verdict JSON
+- While Codex runs, refresh job file `updated_at` every 60 s
+  (ARCHITECTURE §7.4 F4).
+- `codex exec` once; parse verdict JSON; on parse failure write
+  `status = "crashed"` with `detail = "verdict parse failed: ..."`
+  and exit (no retry — §7.5).
 - Emit `verifier.run_completed` with verdict, verification_hash,
   verification_report, repair_hint
+- Poll `AppliedEvent` after publish; mirror outcome in job file.
 
 **M5.6** `cli/verifier.py` — `rethlas verifier --target <label>`
 
@@ -381,13 +394,17 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 - Read KB + runtime jobs
 - Compute dispatches via policy (two independent pools)
 - For each dispatch: check pool has capacity, launch wrapper
-  subprocess, record runtime job file under
+  subprocess with env `RETHLAS_WORKSPACE=<abs>` + positional
+  arg `job_id`, record runtime job file under
   `runtime/jobs/{job_id}.json` per ARCHITECTURE §6.7.1 schema
-  (schema, job_id, kind, target, mode, dispatch_hash, pid, pgid,
-  started_at, updated_at, status, log_path)
-- Monitor in-flight dispatches (via codex log mtime)
-- On timeout: kill process group; write `status = "timed_out"` to the
-  job file, then delete it
+- Monitor in-flight dispatches via Codex log mtime; compare against
+  `rethlas.toml [scheduling] codex_silent_timeout_seconds` (default
+  1800). On expiry: kill process group; write
+  `status = "timed_out"` to the job file, then delete it
+- Maintain per-target sliding window of recent job outcomes
+  (§6.7.1 / §7.4 / §7.5). Surface to Dashboard Human Attention on
+  3 consecutive `crashed` (unstable) or 3 consecutive
+  `timed_out` (frozen)
 - Orphan reaper: each loop tick scan `runtime/jobs/*.json` for files
   whose pid is not alive and `updated_at` older than 5 minutes;
   write `status = "orphaned"` and delete

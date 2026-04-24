@@ -165,12 +165,13 @@ Known sections in Phase I:
 
 ```toml
 [scheduling]
-desired_pass_count       = 3    # §10.1
-generator_workers        = 2    # §10.3
-verifier_workers         = 4    # §10.3
+desired_pass_count             = 3       # §10.1
+generator_workers              = 2       # §10.3
+verifier_workers               = 4       # §10.3
+codex_silent_timeout_seconds   = 1800    # §7.4 — log mtime staleness kill threshold
 
 [dashboard]
-bind                     = "127.0.0.1:8765"    # §6.7.1
+bind                           = "127.0.0.1:8765"    # §6.7.1
 ```
 
 - **Missing file**: all fields default as shown above.
@@ -190,6 +191,7 @@ Validation bounds:
 | `desired_pass_count` | integer, `>= 1` |
 | `generator_workers` | integer, `>= 1` |
 | `verifier_workers` | integer, `>= 1` |
+| `codex_silent_timeout_seconds` | integer, `>= 60` (floor prevents accidentally killing all in-flight Codex work) |
 | `bind` | string matching `HOST:PORT`; `PORT` in `[1, 65535]`; `HOST` any value parseable as IPv4, IPv6, or hostname |
 
 Reload semantics: `rethlas.toml` is read once at process startup
@@ -2447,8 +2449,18 @@ derived only from current node fields, dependency relations, and runtime jobs.
   librarian status, active job counts, recent event timestamp
 - **Current Scheduling State**: dispatchable counts, unfinished count,
   `idle_reason_code`, blocked-count summary, recent hash-mismatch rate
-- **Active Jobs**: all in-flight runtime jobs with target, kind, mode,
-  dispatch hash, started time, elapsed time, latest log age, and stale flag
+- **Active Jobs**: all in-flight runtime jobs with target, kind,
+  mode, dispatch hash, started time, elapsed time, wrapper heartbeat
+  age (`updated_at` freshness, §7.4 F4), and **color-graded Codex
+  log age** relative to the configured silent timeout T (default
+  1800 s):
+  - **green** (fresh): log age ≤ 5 min
+  - **yellow** (thinking): 5 min < log age ≤ min(T/2, 15 min)
+  - **orange** (silent long): min(T/2, 15 min) < log age < T
+  - **red** (will be killed shortly): log age ≥ T — coordinator
+    will SIGINT on next tick
+  This lets the operator distinguish "xhigh is reasoning" from
+  "something is stuck" without needing to memorize the timeout.
 - **Human Attention**: user-blocked nodes, repeated-no-progress repair episodes,
   drift alerts, admission failures
 - **Affected Theorems**: all `kind=theorem` nodes with current derived status,
@@ -2522,6 +2534,12 @@ Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
 - Targets with 3 consecutive `status = "crashed"` job outcomes —
   Codex is repeatedly producing unparseable output on that node
   (§7.5). Labelled `"<kind> unstable on <label>"`.
+- Targets with 3 consecutive `status = "timed_out"` job outcomes —
+  every dispatch exhausts `codex_silent_timeout_seconds` without
+  Codex producing a result (§7.4 F3). Labelled `"<kind> frozen on
+  <label>"`. Each timeout costs the configured silent window of
+  LLM budget, so surfacing promptly lets the operator intervene
+  (raise timeout, revise statement, attach hint, or pause).
 
 **Should remain useful even when services are partly down:**
 - If coordinator is down but Kuzu is readable, dashboard still renders the last
@@ -2874,16 +2892,40 @@ codex exec \
 
 ### 7.4 Liveness monitoring
 
-**Only signal:** mtime of Codex subprocess log file at
-`runtime/logs/{job_id}.codex.log`.
+**Codex subprocess signal:** mtime of Codex log file at
+`runtime/logs/{job_id}.codex.log`. Every token Codex streams updates
+mtime; during long silent reasoning (xhigh can sit quiet for 10–20
+minutes per §13.9), mtime stays put.
 
-**Rule:** If log mtime > 30 minutes old, coordinator sends SIGINT to the
-process group (`os.killpg`), waits 10s, then SIGKILL and marks the runtime
-job timed out.
+**Rule:** If log mtime > `codex_silent_timeout_seconds` (default
+1800 = 30 min, configurable via `rethlas.toml [scheduling]`, §2.4),
+coordinator sends SIGINT to the process group (`os.killpg`), waits
+10 s, then SIGKILL and marks the runtime job `timed_out`. The
+default tolerates typical xhigh silent-thinking bursts; operators
+running even longer reasoning workloads can raise the timeout.
 
-For **Codex subprocess liveness only**, Phase I adds no separate per-job
-heartbeat file beyond the runtime job record; log file mtime is the decisive
-liveness signal.
+**Wrapper heartbeat (separate signal).** Independently of log mtime,
+the wrapper updates its own `runtime/jobs/{job_id}.json`
+`updated_at` field **every 60 seconds** while Codex is running, even
+if `status` hasn't changed. This distinguishes "Codex is thinking
+silently, wrapper is healthy" from "wrapper itself crashed or
+hung". Dashboard reads both signals:
+
+- Fresh `updated_at` + stale log mtime ⇒ Codex is reasoning (normal
+  for long reasoning budget).
+- Fresh log mtime ⇒ Codex is actively producing output.
+- Stale `updated_at` AND stale log mtime ⇒ wrapper itself is
+  unhealthy; orphan reaper or coordinator's child-management logic
+  handles it.
+
+**Consecutive `timed_out` detection.** Parallel to the consecutive-
+`crashed` rule in §7.5, coordinator tracks per-target consecutive
+`timed_out` outcomes. After **3 consecutive** timeouts on the same
+target (same `kind`), dashboard surfaces
+`"<kind> frozen on <label>: 3 consecutive timeouts"` under Human
+Attention (§6.7). Operator intervention options: raise
+`codex_silent_timeout_seconds`, revise the node's statement, attach
+a user hint, or manually pause dispatch on that target (Phase II).
 
 ### 7.5 Permissions enforced vs convention
 
@@ -3354,12 +3396,17 @@ commits, but the runtime is **not** multi-master:
 - MCP adds tool-call overhead and indirection
 - Codex is agent SDK with native MCP support; we use it where it fits
 
-### 13.9 Why 30-min Codex log timeout
+### 13.9 Why 30-min Codex log timeout (default, configurable)
 
 - xhigh reasoning can legitimately think silently for 10+ minutes
 - Official Codex docs don't specify hard upper bound
-- 30 min is conservative empirical value used in existing inducedorbit runs
-- Simpler than multi-tier warnings (yellow/red thresholds)
+- 30 min is conservative empirical value used in existing
+  inducedorbit runs and is the Phase I **default**; operators with
+  longer reasoning budgets raise it via `rethlas.toml [scheduling]
+  codex_silent_timeout_seconds` (§2.4)
+- Phase I UI: dashboard color-grades log age so the user can watch
+  a long-thinking job progress without guessing when it will be
+  killed (§6.7)
 
 ### 13.10 Why signed count vs unsigned + separate wrong flag
 
@@ -3711,3 +3758,23 @@ See `PHASE1.md` for the concrete task list.
     inconsistency before it corrupts truth.
   - **E6**: §14 Open Items adds **orphan aux-node GC** as Phase II
     (accepted noise in Phase I).
+- **2026-04-24 (F1–F4, long Codex think time)**:
+  - **F1**: `codex_silent_timeout_seconds` (default 1800, floor 60)
+    added to `rethlas.toml [scheduling]` (§2.4). §7.4 rule
+    references the configured value, not hardcoded 30 min.
+  - **F2**: Dashboard Active Jobs section color-grades Codex log
+    age against the configured timeout T:
+    green (≤5 min) / yellow (≤ min(T/2, 15 min)) / orange (< T) /
+    red (≥ T). Operator can distinguish "thinking" from "stuck"
+    without memorizing the timeout.
+  - **F3**: Coordinator tracks consecutive `timed_out` outcomes
+    per target (parallel to consecutive `crashed` in C3). After 3
+    consecutive timeouts, surfaces `"<kind> frozen on <label>"`
+    under Dashboard Human Attention so the operator can intervene
+    before burning more LLM budget.
+  - **F4**: Wrapper refreshes `runtime/jobs/{job_id}.json`
+    `updated_at` **every 60 s** during the Codex run (status
+    stays `running`). Dashboard uses both signals together:
+    fresh wrapper heartbeat + stale log mtime ⇒ Codex is reasoning
+    silently (normal); stale wrapper heartbeat ⇒ wrapper itself
+    is unhealthy. PHASE1 M4.5 / M5.5 / M6.2 updated accordingly.
