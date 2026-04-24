@@ -601,6 +601,19 @@ see logically-impossible states mid-commit.
   observes at least 3 heartbeat writes over a 90 s window with no
   new events; consecutive `updated_at` gaps stay ≤ 32 s (allowing
   small scheduler jitter).
+- `integration`: **cross-batch cycle introduction caught at apply
+  time** (ARCHITECTURE §6.2 "Cross-batch cycle detection", §6.5
+  librarian apply). Fixture: workspace already contains an applied
+  chain `lem:a → lem:b → lem:c` (each `lem:x` `\ref`s `lem:(x+1)`
+  in its proof). A crafted `generator.batch_committed` event
+  targeting `lem:c` arrives whose `nodes[0]` revises `lem:c`'s
+  proof to `\ref{lem:a}` (closing `lem:a → lem:b → lem:c → lem:a`).
+  Decoder on the generator side cannot see this cycle (it is not
+  batch-internal — only `lem:c` is in the batch) and admits the
+  event. Librarian applies, runs Kuzu-native cycle check, records
+  `AppliedEvent(status=apply_failed, reason=cycle)` with detail
+  naming the cycle path; no KB change. Guards the decoder /
+  librarian split per ARCHITECTURE §3.1.
 - `fault-injection`: interrupted rebuild leaves flag; next supervise-started librarian forces clean rebuild path
 - `fault-injection`: **`producers.toml` replay-time enforcement** —
   a canonical event file exists under `events/` whose `actor` or
@@ -741,8 +754,13 @@ see logically-impossible states mid-commit.
   - self-reference (node `\ref{}`s itself)
   - unresolved `\ref{}` to a label that neither exists in KB nor
     appears in the same batch
-  - batch introduces a dependency cycle (within the batch, or
-    combined with current KB edges)
+  - batch introduces a **batch-internal** dependency cycle —
+    i.e. the cycle lies entirely among labels in the batch's own
+    `nodes[]` (ARCHITECTURE §6.2 batch-internal cycle detection).
+    Cross-batch cycles (batch edges that close a cycle through
+    existing KB edges) are **not** decoder's responsibility —
+    those are caught at apply time by librarian and surface as
+    `apply_failed(reason=cycle)`; see M4 cross-batch cycle test.
   - repair-must-change-hash — post-batch `verification_hash`
     equals the rejected `H_rejected` from the triggering verdict
 - `integration`: batch-internal topological hashing works; decoder

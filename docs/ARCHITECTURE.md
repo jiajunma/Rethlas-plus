@@ -1640,12 +1640,20 @@ decoder:
      (§3.5.2), kind is allowed, explicit `\ref{label}` references
      resolve (or will resolve by end of attempt)
   4. assemble the full node batch for this run
-  5. validate the staged batch against the current KB snapshot:
+  5. validate the staged batch against the decoder's local view
+     (nodes/*.md frontmatter + job file — no Kuzu access):
      - write-scope invariant: every batch label is either the batch's
-       target or absent from current KB
-     - kind immutability (for the target, which may already exist)
-     - cycle introduction against post-batch graph (see algorithm
-       below)
+       target or absent from `nodes/*.md` (best-effort; count<1
+       KB labels are invisible to the decoder — librarian's apply
+       is authoritative via `apply_failed(label_conflict)`, §6.5)
+     - kind immutability (for the target, which may already exist
+       in `nodes/*.md`)
+     - **batch-internal acyclicity** — the batch's own labels plus
+       their `\ref{}` edges form a DAG (see algorithm below). Note:
+       cycle introduction **across** the existing KB graph is the
+       librarian's responsibility per §3.1 (projection layer);
+       decoder does not attempt that check because it has no Kuzu
+       access.
      - repair-must-change-hash (mode=repair only), see below
   6. stage the admitted batch
   7. atomically publish one `generator.batch_committed`
@@ -1664,9 +1672,23 @@ nodes, each entering its own verify-or-regenerate cycle.
 - label prefix does not match `kind` (§3.5.2 mapping, e.g. `thm:foo` with `kind: lemma`) → reject
 - non-target existing label in `nodes[]` → reject (violates the
   write-scope invariant — generator can touch only the batch's target
-  or brand-new labels)
+  or brand-new labels). **Best-effort only**: decoder sees existing
+  labels via `nodes/*.md` (count ≥ 1), so this check misses any KB
+  label currently at `pass_count < 1` (e.g. a `user.node_added` def
+  still awaiting verifier). Those are caught at apply time by
+  librarian's Kuzu-authoritative label-uniqueness check
+  (`apply_failed(reason=label_conflict)`, §6.5). One wasted batch
+  per missed collision; no truth corruption.
 - placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
-- unresolved `\ref{}` to non-existent label (and not produced in same attempt) → reject
+- unresolved `\ref{}` — every `\ref{label}` must resolve in
+  **(batch labels ∪ labels present in `nodes/*.md`)**. This is
+  Kuzu-free by construction: generator's dep-readiness filter
+  (§10.2.2) requires existing deps to be at `pass_count ≥ 1`, so
+  every legitimate dep is rendered in `nodes/`; a `\ref{}` pointing
+  at a count<1 KB label would be a write-scope violation anyway
+  (generator must not reference unverified nodes). Failure →
+  reject the batch with `reason=ref_unresolved` and detail naming
+  the unresolved label.
 - **Repair-must-change-hash** (mode=repair only): decoder must verify
   that the repair target's **post-batch** `verification_hash` differs
   from the `verification_hash` carried by the most recent
@@ -1702,23 +1724,34 @@ topologically orders the included node states by their explicit `\ref{}`
 dependency edges before handing the batch to librarian. Librarian applies the
 batch in that order inside one batch transaction.
 
-**Cycle detection algorithm.** Admission needs to reject a batch if
-applying it would close a dependency cycle. Phase I algorithm:
+**Batch-internal cycle detection (decoder).** Decoder rejects a
+batch whose own labels form a cycle among themselves. Phase I
+algorithm (Kuzu-free — decoder has no Kuzu access per §4.1):
 
-1. Read the current `DependsOn` edge set from Kuzu (one query:
-   `MATCH (u)-[:DependsOn]->(v) RETURN u.label, v.label`).
-2. Build an in-memory directed graph from those edges.
-3. For each node in the staged batch, add out-edges for every
-   `\ref{label}` in its combined `statement` + `proof`. Batch
-   labels not yet in KB are added as new nodes.
-4. Run DFS / Tarjan on the post-batch graph; if any back-edge is
-   found → batch rejected at admission with reason `cycle` and
+1. Build an in-memory directed graph whose vertex set is exactly
+   the set of labels appearing in the batch's `nodes[]`.
+2. For each batch node, add an out-edge to every `\ref{label}`
+   appearing in its `statement` + `proof` **whose target is also a
+   batch label**. `\ref{}` targets that are not in the batch are
+   irrelevant here (they would either resolve in `nodes/` — an
+   existing dep — or fail the "unresolved `\ref{}`" check).
+3. Run DFS / Tarjan on this in-memory graph; if any back-edge is
+   found → batch rejected at decode time with reason `cycle` and
    detail naming the cycle path (e.g. `"cycle: thm:a → lem:b → thm:a"`).
 
-Librarian additionally runs Kuzu's native cycle check inside its
-apply transaction as defense-in-depth (on the rare canonical event
-that bypassed admission). That check is O(V+E) on current DAG and
-fails the whole event with `apply_failed(reason=cycle)` per §3.1.6.
+This catches the common case of a generator self-tangling its own
+batch (typically a repair attempt inventing a helper lemma that
+ends up circularly referencing the target).
+
+**Cross-batch cycle detection (librarian).** Cycles introduced
+across the KB graph — a batch `\ref{}` into existing nodes that,
+combined with the batch's new edges, closes a cycle through
+already-applied edges — are caught at **apply time** by
+librarian's Kuzu-native cycle check (§3.1 projection layer, §6.5).
+The result is `apply_failed(reason=cycle)` per §3.1.6; the
+generator wastes one batch but no cycle enters truth. This split
+of responsibilities (decoder: batch-internal; librarian:
+cross-batch) preserves the Kuzu-free worker invariant.
 
 **Prompt composition** (assembled by `role.py`):
 
