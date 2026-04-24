@@ -756,24 +756,38 @@ node events and generator batch commits.
 - Native Cypher query language
 - Good for graph queries (closure, cycles, recursion)
 - Python binding is first-class
-- Sole writer: librarian
-- Readers: coordinator, linter, dashboard, librarian, and the
-  generator / verifier Python `role.py` wrappers (for pre-dispatch
-  hash revalidation per §5.5.2 and for polling `AppliedEvent` after
-  publish per §9.1). The Codex subprocesses themselves never touch
-  Kuzu — only their Python wrappers do.
+- Sole writer: librarian. Librarian is **passive**: it applies an
+  event to Kuzu only when coordinator sends it an "apply event"
+  command (§6.5 / §6.4). Librarian itself does not watch `events/`.
+- Readers (direct Kuzu access): coordinator, dashboard, linter, and
+  the user CLI (for AppliedEvent polling in §9.1). Librarian is also
+  a reader of its own writes.
+- **Workers** (generator / verifier `role.py` wrappers) **do not
+  access Kuzu at all.** Workers are pure file-I/O: they read their
+  own `runtime/jobs/{job_id}.json` for pre-validated context
+  (target statement / proof / `dispatch_hash` / repair context /
+  dep `statement_hash`es), they read `nodes/*.md` for verified-dep
+  content, and they write events to `events/` + status updates to
+  their own job file. Pre-dispatch validation is coordinator's job
+  (§5.5.2); AppliedEvent polling on a worker's published event is
+  also coordinator's job (§6.7.1). This keeps workers trivial to
+  test and keeps Kuzu connections bounded to the long-running
+  daemons.
 
-**Concurrency model assumption.** Phase I assumes Kuzu's embedded
-mode provides **snapshot isolation** for concurrent readers against
-a single writer — i.e. a read transaction never observes partial
-state of an in-flight writer commit. If the version of Kuzu in use
-does not guarantee this, wrapper's pre-dispatch validation (§5.5.2)
-is the safety net: any apparent inconsistency (hash mismatch
-against current Node state) is caught and reported as
-`precheck_failed` before the worker does any expensive work. The
-hash-match gate in §5.5.0 provides the same backstop for verdict
-apply. So even if Kuzu isolation turns out to be weaker, correctness
-survives.
+**Concurrency model assumption.** Phase I's Kuzu requirements reduce
+to **single-writer / multi-reader (SWMR)** across OS processes:
+- One writer process (librarian) holds the Kuzu write connection.
+- Several reader processes (coordinator, dashboard, linter, user
+  CLI invocations) open read connections concurrently.
+- Workers do not open Kuzu at all.
+
+The design assumes Kuzu's embedded mode provides snapshot isolation
+for concurrent readers against a single writer — a read transaction
+never observes partial state of an in-flight writer commit. If the
+adopted Kuzu version does not guarantee this, the hash-match gate
+in §5.5.0 is the correctness backstop: stale verdicts or
+inconsistent read snapshots cannot advance `pass_count`. See PHASE1
+pre-M2 sanity check for the explicit validation step.
 
 ### 4.2 Per-node markdown files
 
@@ -798,6 +812,8 @@ and verifier read only these verified notes.
 label: lem:block_form_for_x0_plus_u
 kind: lemma
 pass_count: 2
+statement_hash: sha256:a7b2c912d4f1e380...
+verification_hash: sha256:1f8e22c0b6a94d17...
 depends_on:
   - def:primary_object
   - lem:normal_form_for_x0
@@ -816,6 +832,10 @@ depends_on:
 - `label`: the canonical label
 - `kind`: definition / external_theorem / lemma / theorem / proposition
 - `pass_count`: current integer count (always ≥ 1 for files in nodes/)
+- `statement_hash`: current `statement_hash` (§5.3); workers read this
+  from frontmatter when they need a dep's hash without touching Kuzu
+- `verification_hash`: current `verification_hash` (§5.3); exposed for
+  the same reason — workers are Kuzu-free (§4.1)
 - `depends_on`: list of dependency labels, derived from explicit `\ref{...}` occurrences
 
 **Semantics of `pass_count`:**
@@ -847,7 +867,8 @@ same bytes** for the same input. Rules:
   before write.
 - **Trailing newline**: the file ends with exactly one `\n`.
 - **YAML frontmatter key order (fixed)**: `label`, `kind`,
-  `pass_count`, `depends_on`. No other keys.
+  `pass_count`, `statement_hash`, `verification_hash`, `depends_on`.
+  No other keys.
 - **YAML value formatting**: scalars serialized via PyYAML with
   `default_flow_style=False`, `allow_unicode=True`,
   `sort_keys=False`; no comments.
@@ -1369,68 +1390,73 @@ The join is efficient because `AppliedEvent.event_id` is the primary key.
 Linter asserts `audit_repair_count(node) == Node.repair_count` for
 every node. Drift = librarian bug.
 
-#### 5.5.2 Pre-dispatch validation
+#### 5.5.2 Pre-dispatch validation (coordinator-owned)
 
-**Coordinator's policy runs one loop tick earlier than the worker's
-actual start.** Between the two moments, Kuzu may change (librarian
-applies a verdict, another worker publishes, Merkle cascade fires).
-Before the worker calls Codex, it must **re-verify that every dispatch
-condition still holds** against current Kuzu — not just the hash.
+Pre-dispatch validation is entirely **coordinator's** responsibility
+and happens **before** the worker subprocess is spawned. Workers do
+not access Kuzu (§4.1) and therefore cannot re-check anything;
+coordinator validates once, then serializes the validated context
+into `runtime/jobs/{job_id}.json` for the worker to trust.
 
-Pre-dispatch validation is done **by the wrapper** (generator /
-verifier `role.py`), right after its process starts, before launching
-Codex. Coordinator writes a snapshot (`dispatch_hash`, §6.7.1) into
-the job file so the wrapper has a point of comparison, but the
-wrapper re-reads Kuzu and is the final gate.
-
-**Conditions re-checked** (covering both pools; specifics depend on
-`job.kind`):
+**Conditions checked** by coordinator (covering both pools; specifics
+depend on `job.kind`):
 
 | Condition | Verifier | Generator |
 | --- | --- | --- |
 | target exists in Kuzu | ✓ | ✓ |
-| `node.verification_hash == dispatch_hash` | ✓ | ✓ |
+| `node.verification_hash == dispatch_hash` (coordinator's own snapshot from a moment earlier — self-consistency) | ✓ | ✓ |
 | `pass_count` in expected band (`[0, DESIRED_COUNT)` for verifier, `-1` for generator) | ✓ | ✓ |
 | strict-monotone dep condition | ✓ | — |
 | all deps at `pass_count >= 1` (so visible in `nodes/`) | — | ✓ |
 | kind == proof-requiring (lem/thm/prop) | ✓ (targets only) | ✓ |
-| no other in-flight job on the same target | ✓ | ✓ |
-| (repair mode only) most recent gap/critical verdict's `verification_hash` == `H_rejected` supplied in repair context | — | ✓ |
+| no other in-flight job on the same target (check `runtime/jobs/*.json`) | ✓ | ✓ |
+| (repair mode only) most recent gap/critical verdict's `verification_hash` is known and recorded as `H_rejected` | — | ✓ |
 
-If **any** condition fails, wrapper:
-1. Writes `status = "precheck_failed"` to its `runtime/jobs/{job_id}.json`
-   with `detail` naming the specific condition and observed value.
-2. Appends a line to `runtime/state/drift_alerts.jsonl` if the
-   failure is the hash mismatch (the "real drift" case — librarian
-   bug or corruption).
-3. Exits without calling Codex. Coordinator's next loop tick sees
-   terminal status, deletes the job file, frees the pool slot.
+If **any** condition fails, coordinator **does not write a job file
+at all** — the candidate is simply skipped. Coordinator logs the
+failure reason to `runtime/logs/supervise.log` so the operator can
+trace "why didn't target X get dispatched this tick". No
+`precheck_failed` job record exists (that status was removed; see
+§6.7.1).
+
+If all conditions pass, coordinator writes the initial job file with
+`status = "starting"` and every context a worker needs:
+- `target`, `mode`, `kind`
+- `dispatch_hash` (target's `verification_hash` at precheck time)
+- target's `statement` and `proof` text (so worker doesn't need to
+  reconstruct from Kuzu)
+- `dep_statement_hashes`: a map of `{dep_label: statement_hash}`
+  covering every label the target's content `\ref{}`s — lets
+  generator's decoder compute post-batch `verification_hash`
+  without reading Kuzu (§6.2 repair-must-change-hash)
+- for generator repair mode: `verification_report`, `repair_hint`,
+  `repair_count`, `H_rejected`
+
+After the job file is written, coordinator spawns the worker with
+`RETHLAS_WORKSPACE` env + `job_id` positional arg (§6.7.1). Worker
+reads the job file, trusts it, runs Codex, publishes its event,
+writes `status = "publishing"`, and exits. Coordinator observes the
+exit on the next tick, polls `AppliedEvent` for the published
+event_id, writes the final status (`applied` / `apply_failed`) back
+to the job file, and deletes it (§6.7.1).
+
+**Residual race.** Between coordinator's precheck read and the
+worker's eventual publish, librarian may apply a new event that
+changes the target's hash. Coordinator's snapshot becomes stale;
+the worker runs Codex against old state; the emitted verdict
+carries the stale hash; librarian's apply-time hash-match gate
+(§5.5.0 #5) catches it and records
+`apply_failed(hash_mismatch)`. One wasted worker run per race —
+accepted cost (H3), same as before the coordinator/worker
+split.
 
 **Purpose:**
-- Catches drift between `dispatch_hash` snapshot and current Kuzu
-  (librarian applied something between dispatch decision and worker
-  start — normal concurrency, not a bug).
-- Catches true drift between stored hash and actual content
-  (librarian bug, corruption, concurrent modification race).
-- Ensures worker always runs on a fresh, consistent state.
+- Catches drift between coordinator's precheck snapshot and the
+  moment the worker is about to call Codex.
+- Keeps workers file-only (no Kuzu binding, no imports of
+  `common/kb`).
 - Preserves the invariant that only librarian mutates `dag.kz/` and
   `pass_count`.
-
-Most of the time pre-dispatch validation passes and is a cheap no-op
-(one Kuzu read + a few field comparisons). When it fails due to
-normal concurrency, the "wasted" worker dispatch costs one spawned
-subprocess and one Kuzu read — no Codex invocation, no LLM tokens.
-When it fails due to corruption, the drift alert surfaces the bug to
-the operator. Both outcomes are cheap.
-
-**Record the snapshot too.** Coordinator's dispatch step still
-computes the current `verification_hash` and writes it into
-`runtime/jobs/{job_id}.json` as `dispatch_hash` (§6.7.1). This
-snapshot is the reference point for wrapper's re-check and the
-forensic anchor when triaging `apply_failed(hash_mismatch)` after a
-verdict has already been published. Coordinator's write is not a
-*gate* — the wrapper's gate is — but it's the **baseline** against
-which the wrapper compares.
 
 ### 5.6 Merkle cascade (statement changes only)
 
@@ -1720,13 +1746,32 @@ target node is typically NOT in `nodes/` (its `pass_count = -1`), so
 the prompt carries this context directly.
 
 Internal structure follows original Rethlas (`.agents/skills/`, `.codex/`,
-`mcp/`, `AGENTS.md`). Phase I adds a thin `role.py` that:
+`mcp/`, `AGENTS.md`). Phase I adds a thin `role.py` that is
+**Kuzu-free** — it performs only file I/O and subprocess
+orchestration, never imports `common/kb`:
 
-1. Reads runtime job / CLI dispatch parameters from coordinator
-2. Assembles minimal Codex prompt (target label + mode + optional hints)
-3. Launches Codex via `codex exec` (see §8 for args)
-4. Parses Codex stdout for `<node>` blocks
-5. Emits one `generator.batch_committed`
+1. Reads **only** `runtime/jobs/{job_id}.json` for the full
+   pre-validated context (target label, statement, proof,
+   `dispatch_hash`, `dep_statement_hashes` map, and for
+   `mode=repair` the `verification_report` / `repair_hint` /
+   `repair_count` / `H_rejected`) — coordinator populated these
+   during pre-dispatch validation (§5.5.2).
+2. Reads `knowledge_base/nodes/*.md` as needed for its own decoder
+   checks and for Codex's bash-based exploration. Dep
+   `statement_hash` lookups during decoder's repair-must-change-hash
+   use the `dep_statement_hashes` map from the job file first,
+   falling back to parsing `nodes/*.md` YAML frontmatter (§4.2)
+   for deps not pre-resolved.
+3. Assembles minimal Codex prompt (target label + mode + optional
+   hints from the job file).
+4. Launches Codex via `codex exec` (see §8 for args).
+5. Parses Codex stdout for `<node>` blocks; decoder applies every
+   check from this section's failure-modes list.
+6. Emits one `generator.batch_committed` by atomic file write into
+   `events/{date}/`, writes `status = "publishing"` to the job
+   file, and **exits**. Coordinator handles the rest of the
+   lifecycle (polling `AppliedEvent`, writing the final status
+   back to the job file, deleting it) — see §6.7.1.
 
 Skill output convention: Codex produces one or more `<node>` blocks:
 
@@ -1840,7 +1885,17 @@ seeing `critical` considers deeper rewrites or counter-example.
   theorems — they are strictly user-authored, require citation)
 
 Internal structure follows original Rethlas (`.agents/skills/`,
-`.codex/`, `mcp/`, `api/`, `AGENTS.md`).
+`.codex/`, `mcp/`, `api/`, `AGENTS.md`). Phase I's `role.py` is
+**Kuzu-free**, same discipline as the generator (§6.2): it reads
+`runtime/jobs/{job_id}.json` for coordinator-provided context
+(target label, statement, proof, and `dispatch_hash`), reads
+`nodes/*.md` for Codex's bash-based dep browsing, invokes
+`codex exec` once, parses the verdict JSON, and emits a
+`verifier.run_completed` truth event whose `verification_hash`
+equals the `dispatch_hash` from the job file. After writing
+`status = "publishing"` to the job file, the wrapper **exits**;
+coordinator polls `AppliedEvent` and writes the final status
+(§6.7.1).
 
 **Truth events emitted:**
 - `verifier.run_completed` (final verdict: accepted / gap / critical; includes `verification_hash`, `verification_report`, `repair_hint`)
@@ -2281,54 +2336,90 @@ generator batch could not enter truth.
 
 ### 6.5 Librarian
 
-Maintains `dag.kz` and `nodes/`. Single writer for both. Projects events
-into the derived state and records each decision in `AppliedEvent`.
+Maintains `dag.kz` and `nodes/`. Single Kuzu writer (§4.1). Librarian
+is **passive**: it does not watch `events/` on its own. Coordinator
+owns the `events/` watchdog (§6.4 / §6.7.1) and sends librarian an
+"apply this event file" command for each new file in
+`(iso_ms, seq, uid)` order. Librarian replies with the apply
+outcome (applied / apply_failed + reason + detail).
 
-Main loop:
+The command channel is a simple in-process queue (librarian is a
+child subprocess of coordinator, connected via a Unix-domain
+socket or stdio-pipe JSON-RPC; Phase I picks one in M4). Messages:
+
 ```
-watch events/ for new files
-for each new event file (sorted globally by (iso_ms, seq, uid)):
-    e = load_event(file)
+coordinator → librarian:   APPLY { event_id, path_to_event_file }
+librarian   → coordinator: APPLIED { event_id } | APPLY_FAILED { event_id, reason, detail }
+```
 
-    if e.event_id in AppliedEvent:
-        # idempotent replay — verify content hash matches; same hash
-        # means same event, skip. Different hash means rare uid
-        # collision or tampering — halt projection as workspace
-        # corruption (§3.1.6).
-        if AppliedEvent[e.event_id].event_sha256 != sha256(bytes(file)):
-            halt projection; corruption
+Coordinator may also command a full rebuild:
+
+```
+coordinator → librarian:   REBUILD { }       # triggers §11.2 rebuild path
+librarian   → coordinator: REBUILD_DONE { } | REBUILD_FAILED { error }
+```
+
+Apply loop (inside librarian, per received APPLY command):
+```
+receive APPLY(event_id, path)
+e = load_event(path)
+
+if e.event_id in AppliedEvent:
+    # idempotent replay — verify content hash matches; same hash
+    # means same event, skip. Different hash means rare uid
+    # collision or tampering — halt projection as workspace
+    # corruption (§3.1.6).
+    if AppliedEvent[e.event_id].event_sha256 != sha256(bytes(file)):
+        reply CORRUPTION
+        halt
+    reply APPLIED(event_id)   # treat as idempotent no-op
+    continue
+
+begin Kuzu transaction:
+    structural_ok, err = structural_check(e)
+    if not structural_ok:
+        abort transaction
+        reply CORRUPTION
+        halt
+
+    semantic_ok, reason, detail = semantic_check(e, current_projection)
+    event_hash = sha256(read_bytes(file))
+    if not semantic_ok:
+        insert AppliedEvent(e.event_id, status="apply_failed",
+                            reason=reason, detail=detail,
+                            event_sha256=event_hash,
+                            applied_at=now())
+        commit transaction
+        reply APPLY_FAILED(event_id, reason, detail)
         continue
 
-    begin Kuzu transaction:
-        structural_ok, err = structural_check(e)
-        if not structural_ok:
-            # admission should have caught this; its presence in canonical
-            # events/ means workspace corruption. Do not commit any change.
-            abort transaction
-            halt projection; surface corruption on dashboard / CLI
-            break
+    apply e to Kuzu:
+        update atomic fields
+        recompute affected hashes (BFS through dependents)
+        update pass_count per §5.4
+    insert AppliedEvent(e.event_id, status="applied",
+                        reason="", detail="",
+                        event_sha256=event_hash, applied_at=now())
+    commit transaction
 
-        semantic_ok, reason, detail = semantic_check(e, current_projection)
-        event_hash = sha256(read_bytes(file))
-        if not semantic_ok:
-            insert AppliedEvent(e.event_id, status="apply_failed",
-                                reason=reason, detail=detail,
-                                event_sha256=event_hash,
-                                applied_at=now())
-            commit transaction
-            continue                   # no KB change; terminal for e
-
-        apply e to Kuzu:
-            update atomic fields
-            recompute affected hashes (BFS through dependents)
-            update pass_count per §5.4
-        insert AppliedEvent(e.event_id, status="applied",
-                            reason="", detail="",
-                            event_sha256=event_hash, applied_at=now())
-        commit transaction
-
-        re-render nodes/*.md for each affected node (atomic writes)
+    re-render nodes/*.md for each affected node (atomic writes)
+    reply APPLIED(event_id)
 ```
+
+**Coordinator's side of the contract** (§6.4 / §6.7.1):
+- Coordinator watches `events/` via `watchdog` and, at startup,
+  walks the directory tree to find any not-yet-applied events.
+- For each new event file, in `(iso_ms, seq, uid)` order,
+  coordinator sends `APPLY(event_id, path)` to librarian and
+  awaits the reply. Serialisation is natural (one librarian
+  worker); coordinator need not handle reordering.
+- On `APPLIED` / `APPLY_FAILED`, coordinator updates dashboard-
+  facing state (fires an SSE `applied_event` envelope through the
+  dashboard's watcher — §6.7.1).
+- On `CORRUPTION`, coordinator stops sending further APPLY
+  commands, writes the event path into a corruption marker, and
+  surfaces the condition via `coordinator.json`
+  (`idle_reason_code = "corruption_or_drift"`).
 
 Key points:
 
@@ -2750,74 +2841,103 @@ dispatch mode (`fresh` / `repair`); for verifier it is `single` in
 Phase I.
 
 `dispatch_hash` is the target node's `verification_hash` as read from
-Kuzu at the moment coordinator enqueues this job. Defined for all
-pools and modes:
+Kuzu by coordinator during pre-dispatch validation (§5.5.2). Defined
+for all pools and modes:
 - `generator fresh`: target exists with empty proof; `verification_hash`
   is still well-defined (hash of statement_hash + empty proof).
 - `generator repair`: target's current `verification_hash` (i.e., the
   hash that the last gap/critical verdict rejected).
 - `verifier single`: target's current `verification_hash`.
 
-The field is a debugging / drift anchor: if the target's hash changes
-between dispatch and apply (concurrent generator touched it, or a
-Merkle cascade flipped it), the eventual `apply_failed(hash_mismatch)`
-on a verdict can be traced back to the original dispatch via this
-field.
+Verifier wrappers use this value as the `verification_hash` they put
+in the emitted `verifier.run_completed` event body — they never
+re-read Kuzu to recompute it. If the target's hash has drifted by
+the time librarian applies the verdict, the hash-match gate
+(§5.5.0 #5) yields `apply_failed(hash_mismatch)`.
 
 `status` enumeration (Phase I):
 - `starting` — coordinator wrote the file, wrapper has not yet started
-  the Codex subprocess
-- `precheck_failed` — wrapper's pre-dispatch validation (§5.5.2)
-  found a condition no longer holds (hash drift, pass_count
-  advanced, dep became blocked, etc.); wrapper exited without calling
-  Codex. `detail` names the failed condition.
-- `running` — Codex subprocess is live; wrapper is monitoring
-- `publishing` — Codex finished; wrapper is staging / publishing truth
-  event (brief)
-- `applied` — librarian has projected the resulting truth event with
-  `status = applied`
-- `apply_failed` — librarian projected with `status = apply_failed`
-  (reason carried in AppliedEvent row; wrapper mirrors the code here
-  for dashboard convenience)
-- `timed_out` — coordinator killed the process group due to
-  `log_mtime > 30 min`
-- `crashed` — subprocess exited non-zero before publishing
-- `orphaned` — coordinator's stuck-detection detected a job file whose
-  pid no longer exists and no terminal state was written
+  the Codex subprocess (coordinator writes this)
+- `running` — Codex subprocess is live; wrapper is monitoring (wrapper writes)
+- `publishing` — Codex finished; wrapper has emitted the truth event
+  and is about to exit (wrapper's **final** write; from here on
+  only coordinator updates the file)
+- `applied` — librarian applied the published event; coordinator
+  mirrors the AppliedEvent outcome here for dashboard convenience
+  (coordinator writes)
+- `apply_failed` — librarian recorded `apply_failed` for the
+  published event; reason carried in AppliedEvent row; coordinator
+  mirrors `reason` + `detail` here too (coordinator writes)
+- `timed_out` — coordinator killed the process group because the
+  Codex log file went stale past `codex_silent_timeout_seconds`
+  (coordinator writes)
+- `crashed` — wrapper subprocess exited non-zero **before** writing
+  `publishing`; coordinator detects on next tick (coordinator writes)
+- `orphaned` — coordinator's stuck-detection found a job file whose
+  `pid` is not alive and which never reached `publishing`
+  (coordinator writes)
+
+Note: there is **no `precheck_failed` status**. Pre-dispatch
+validation is entirely coordinator-owned (§5.5.2) and happens
+**before** a job file is created. A candidate that fails precheck
+simply never has a job file written; coordinator logs the reason
+to `runtime/logs/supervise.log` instead.
 
 `log_path` is redundant with `job_id` (always
 `runtime/logs/{job_id}.codex.log`) but stored explicitly so dashboard
 does not need to know the derivation rule.
 
-**Job file lifecycle:**
+**Job file lifecycle** (under the "workers are Kuzu-free" model,
+§4.1):
 
-1. Coordinator creates the file with `status = "starting"` (atomic
-   `.tmp` + rename) just before spawning the wrapper process. The
-   wrapper subprocess is spawned with:
-   - Full environment inheritance from the `rethlas supervise`
-     process (so user-configured API keys — `OPENAI_API_KEY`,
-     `ANTHROPIC_API_KEY`, `PATH`, `HOME`, proxy settings, etc. —
-     flow through to Codex unchanged).
-   - Additional env var `RETHLAS_WORKSPACE=<absolute path of
-     workspace root>` overlaid on top.
+1. **Coordinator pre-validates + creates the file** with
+   `status = "starting"` (atomic `.tmp` + rename). The file carries
+   every context the worker will need, since the worker cannot
+   touch Kuzu:
+   - `target`, `mode`, `kind`, `dispatch_hash`
+   - target's `statement` and `proof` text (read from Kuzu by
+     coordinator once, passed through)
+   - `dep_statement_hashes`: a `{dep_label: statement_hash}` map
+     for every dep the target's content references, so the
+     generator decoder can compute post-batch hashes without
+     consulting Kuzu (§6.2)
+   - for `mode=repair`: `verification_report`, `repair_hint`,
+     `repair_count`, `H_rejected`
+   Coordinator then spawns the wrapper subprocess with:
+   - Full environment inheritance from `rethlas supervise` (so
+     `OPENAI_API_KEY` / `PATH` / `HOME` / proxy settings flow
+     through to Codex).
+   - Additional env `RETHLAS_WORKSPACE=<absolute path>` overlaid.
    - Positional argument `job_id`.
-   The wrapper uses `RETHLAS_WORKSPACE` + `job_id` to locate
-   `knowledge_base/dag.kz`, `runtime/jobs/{job_id}.json`, and
-   `runtime/logs/{job_id}.codex.log` without having to inherit cwd
-   or re-discover the workspace. Operators configure API keys by
-   exporting them in the shell before invoking
-   `rethlas supervise`; Phase I does not attempt to read API keys
-   from `rethlas.toml` or any secret store.
-2. Wrapper updates `status` through the enumeration above as it
-   progresses. Every update is an atomic `.tmp` + rename.
-3. On clean terminal state (`applied` / `apply_failed`), the **wrapper**
-   writes the final status and then deletes the job file.
-4. On `timed_out`, **coordinator**'s liveness monitor writes the final
-   status and deletes the file after sending SIGINT/SIGKILL.
-5. **Orphan reaper:** coordinator, on each loop tick, scans
-   `runtime/jobs/*.json` for files whose `pid` is not alive and whose
-   `updated_at` is older than 5 minutes, writes `status = "orphaned"`,
-   and deletes. This is the backstop for wrapper crashes.
+   Operators configure API keys by exporting them in the shell
+   before invoking `rethlas supervise`; Phase I does not read API
+   keys from `rethlas.toml` or any secret store.
+2. **Wrapper** reads the job file, transitions `status` to
+   `"running"`, runs Codex, emits the truth event via atomic file
+   write into `events/`, transitions `status` to `"publishing"`,
+   and **exits**. Wrapper also refreshes `updated_at` every 60 s
+   while Codex is running (§7.4 F4). Wrapper never polls Kuzu or
+   `AppliedEvent`.
+3. **Coordinator** observes the wrapper's exit on its next tick
+   (pid no longer alive, `status = "publishing"` on disk). It then
+   polls `kb.applied_event_record(event_id)` for the event the
+   wrapper published, writes the final `status`
+   (`applied` / `apply_failed` with `reason` + `detail`) back to
+   the job file, and deletes it. This is where the AppliedEvent →
+   job-file mirroring happens.
+4. **Timeout path:** coordinator's Codex-log-mtime monitor kills
+   the process group, writes `status = "timed_out"` to the job
+   file, and deletes it.
+5. **Crash path:** if wrapper exits before writing `"publishing"`
+   (parse error, subprocess crash, etc.), coordinator writes
+   `status = "crashed"` with `detail` containing a short error
+   summary and deletes the file.
+6. **Orphan reaper:** each loop tick scans `runtime/jobs/*.json`
+   for files whose `pid` is not alive AND whose `updated_at` is
+   older than 5 minutes AND whose `status` has never progressed
+   past `"starting"` or `"running"`. Writes `status = "orphaned"`
+   and deletes. This is the backstop for kernel-level wrapper
+   failures.
 
 Dashboard reads job files directly; they are transient, so dashboard
 never treats a job file as authoritative beyond what
@@ -3188,16 +3308,31 @@ truth-event producer (admission layer, pre-publish):
   fsync(dir_fd)                              # directory entry hits disk
   close(dir_fd)
 
-producer (or CLI wrapper) then optionally polls the librarian for fate:
+
+# --- User CLI path ---------------------------------------------
+# `rethlas add-node` / `revise-node` / `attach-hint` are publishers
+# that directly read Kuzu for their own feedback (user CLI is not a
+# worker; §4.1 allows user CLI to read AppliedEvent):
+user CLI polls librarian for fate:
   loop until timeout (30 s):
     status = kb.applied_event_status(event_id)
     if status != "not_found": return (status, reason)
-  # timeout reached
   if supervise_lock_held():
     return "queued, librarian slow; will apply when caught up" (exit 0)
   else:
     return "queued, but supervise not running; start `rethlas supervise`
             to apply" (exit 0)
+
+# --- Worker wrapper path ---------------------------------------
+# generator / verifier `role.py` are Kuzu-free (§4.1). They never
+# poll AppliedEvent. Instead:
+worker wrapper after publishing:
+  write status="publishing" to runtime/jobs/{job_id}.json
+  exit
+# Coordinator on its next tick notices the exit, polls
+# `kb.applied_event_record(event_id)` itself, and writes the final
+# status (applied / apply_failed with reason + detail) back into
+# the job file before deleting it (§6.7.1 step 3).
 ```
 
 User-CLI feedback contract (D2). The event is "truth as soon as it's
@@ -3238,12 +3373,17 @@ Notes:
 - **User**: publishes through helper CLI commands (`rethlas add-node`,
   `rethlas revise-node`, `rethlas attach-hint`, etc.). Manual drafting may
   happen outside `events/`, but direct hand-drops into canonical `events/`
-  are unsupported in Phase I. CLI blocks briefly polling
-  `AppliedEvent` to report `applied` / `apply_failed(reason)` to the
-  user.
-- **Generator / verifier**: their wrapper code (Python, NOT Codex) writes truth events. Codex subprocess is read-only sandboxed; it outputs to stdout which the wrapper captures and converts to truth events.
-  Wrapper polls `AppliedEvent` after publish and records the outcome
-  in the runtime job file for coordinator / dashboard visibility.
+  are unsupported in Phase I. The user CLI reads Kuzu (specifically
+  `AppliedEvent`) for its own feedback — user CLI is a publisher, not a
+  worker, and §4.1 permits direct Kuzu read access for it.
+- **Generator / verifier workers**: their wrapper code (Python, NOT Codex)
+  writes truth events. Codex subprocess is read-only sandboxed; it
+  outputs to stdout which the wrapper captures and converts to truth
+  events. Workers are **Kuzu-free** (§4.1): they do not poll
+  `AppliedEvent`. After publishing, wrapper writes
+  `status = "publishing"` into its job file and exits; coordinator
+  takes over (§6.7.1 step 3) and mirrors the AppliedEvent outcome
+  back to the job file.
 
 **Codex never writes files.** Only Python wrappers do.
 
@@ -3478,9 +3618,12 @@ commits, but the runtime is **not** multi-master:
     Coordinator's dispatch decisions read only `pass_count` (plus
     dependency `pass_count`s). `repair_count` exists alongside but
     only as an advisory signal to the generator (§5.2, invariant 19).
-13. **Two-layer validation (§3.1.6).** Admission checks structural
-    correctness before publish; librarian decides semantic realization
-    at apply time and records each decision in `AppliedEvent`.
+13. **Two-layer validation (§3.1.6).** Admission (user CLI or worker
+    role.py) checks structural correctness before publish; coordinator
+    does a semantic pre-dispatch check against Kuzu before spawning a
+    worker (§5.5.2); librarian applies the event on coordinator's
+    command and records each decision in `AppliedEvent`. Workers
+    themselves do no validation — they trust coordinator's job file.
 14. **`events/` records proposals; KB records realized projection.**
     Every published event is preserved. `AppliedEvent(status)` tells
     which events actually mutated KB. `KB = f(events/)` is still a
@@ -3816,15 +3959,19 @@ See `PHASE1.md` for the concrete task list.
   - PHASE1 M2.2 / M2.3 / M3.4 / M6.4 / M6.5 / M8.1 / M8.3 updated to
     cover these CLI-level contracts.
 - **2026-04-24 (B1–B6 review)**:
-  - **B2 (broadened)**: §5.5.2 renamed "Pre-dispatch hash
-    revalidation" → "Pre-dispatch validation". The gate is now the
-    wrapper (not coordinator): on worker startup, before calling
-    Codex, wrapper re-checks **every** dispatch condition against
-    current Kuzu (target exists, hash matches `dispatch_hash` from
-    job file, pass_count in expected band, strict-monotone deps,
-    deps visible in `nodes/` for generator, no other in-flight job
-    on same target, repair-mode `H_rejected` still current). Failure
-    → `status = "precheck_failed"` with detail naming the condition;
+  - **B2 (broadened)** _(superseded by the workers-are-Kuzu-free
+    review below; the wrapper no longer validates against Kuzu and
+    the `precheck_failed` status no longer exists — see §5.5.2 and
+    §6.7.1 for the current model)_: §5.5.2 renamed "Pre-dispatch
+    hash revalidation" → "Pre-dispatch validation". At the time of
+    this B2 decision, the gate was the wrapper (not coordinator):
+    on worker startup, before calling Codex, wrapper re-checked
+    **every** dispatch condition against current Kuzu (target
+    exists, hash matches `dispatch_hash` from job file, pass_count
+    in expected band, strict-monotone deps, deps visible in
+    `nodes/` for generator, no other in-flight job on same target,
+    repair-mode `H_rejected` still current). Failure →
+    `status = "precheck_failed"` with detail naming the condition;
     exit without Codex call. Coordinator still writes the snapshot
     `dispatch_hash` for forensic anchoring. New job status
     `precheck_failed` added to §6.7.1 enum.
@@ -3993,3 +4140,47 @@ See `PHASE1.md` for the concrete task list.
     during the 10 s wait escalates to SIGKILL; external SIGKILL of
     coordinator is handled by OS (children die via process group)
     plus D4 startup cleanup on next supervise.
+- **2026-04-24 (Kuzu-access boundaries — workers file-only,
+  librarian sole writer and passive, coordinator owns event→Kuzu
+  command flow)**:
+  - **K1 — Workers are Kuzu-free (§4.1, §6.2, §6.3)**: generator
+    and verifier `role.py` (and the `common/runtime/` modules they
+    transitively import) **must not link Kuzu**. They read input
+    only from (a) the coordinator-authored job file under
+    `runtime/jobs/{job_id}.json` and (b) `nodes/*.md` files on
+    disk. Dep `statement_hash`es reach the generator's decoder via
+    the job file's `dep_statement_hashes` map (populated by
+    coordinator at precheck) with `nodes/*.md` frontmatter as the
+    fallback source; the verifier uses `dispatch_hash` from the
+    job file as the verdict's `verification_hash`. `nodes/*.md`
+    frontmatter now carries both `statement_hash` and
+    `verification_hash` so this read path is self-sufficient
+    (§4.2 rendering contract). Enforced by a static test that
+    greps worker-reachable modules for `common/kb` imports
+    (PHASE1 M5 / M6 / M7).
+  - **K2 — Librarian is the sole Kuzu writer and is passive
+    (§6.5)**: librarian no longer watches `events/`. It runs a
+    startup replay + `nodes/` reconciliation, then waits for
+    `APPLY(event_id, path)` commands from coordinator over the
+    command channel and replies `APPLIED` / `APPLY_FAILED` /
+    `CORRUPTION`. APPLY commands received before
+    `startup_phase = ready` are queued and drained exactly once
+    after ready (PHASE1 M4 "APPLY-during-startup queuing" test).
+    Kuzu concurrency model is single-writer (librarian) +
+    multi-reader (coordinator, dashboard, user CLI).
+  - **K3 — Coordinator owns the event→Kuzu command flow
+    (§5.5.2, §6.5, §6.7.1)**: coordinator (not wrapper) runs the
+    full pre-dispatch validation against Kuzu before spawning a
+    worker. On precheck failure it writes no job file — the
+    candidate is skipped and the reason is logged to
+    `runtime/logs/supervise.log`. The `precheck_failed` job
+    status introduced by the earlier B2 review is **gone**
+    (§6.7.1). Coordinator also owns the `events/` watchdog: new
+    event files dropped via atomic rename are detected by
+    coordinator, which sends an APPLY command to librarian; the
+    outcome is reflected back into coordinator's dashboard state
+    (SSE `applied_event` envelope). After a wrapper exits with
+    job status `publishing`, coordinator polls
+    `AppliedEvent(event_id)` on its next tick and writes the
+    terminal status (`applied` / `apply_failed` + reason +
+    detail) into the job file before deleting it.

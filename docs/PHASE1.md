@@ -105,15 +105,43 @@ centralized.
 
 ### Pre-M2 Kuzu stress validation
 
-Before opening M2, write a **10-line Kuzu sanity check**: one
+Rethlas uses **multiple OS processes** (librarian, coordinator,
+dashboard, linter, worker wrappers) all accessing the same
+`dag.kz/`. That is a stronger requirement than most embedded DBs'
+defaults: SQLite handles it via WAL / shm files; DuckDB historically
+single-process; LMDB natively multi-reader-single-writer; Kuzu's
+multi-process guarantees are not obvious from the docs. Before
+committing to the Phase I design, validate Kuzu in **two steps**,
+in this order:
+
+**Step 1 — multi-process open.** Two independent Python processes
+both open the same `knowledge_base/dag.kz/` and each run a simple
+query loop. If this fails (lock errors, "database in use",
+segfault), the ARCHITECTURE §4.1 "sole writer: librarian; multiple
+readers" model is not achievable directly and Phase I must revise
+the storage layer — likely route all reads through librarian via
+a small IPC (Unix socket JSON-RPC) rather than direct Kuzu open.
+This is a significant design change; knowing at M2 day-1 is
+cheap, finding out at M6 is not.
+
+**Step 2 — snapshot isolation (only if Step 1 passes).** One
 writer loop + several reader loops hammering `Node` / `AppliedEvent`
-queries for ~10⁴ iterations. Phase I's design assumes readers see
-snapshot-isolated state during librarian commits (ARCHITECTURE
-§4.1). If Kuzu in the version we adopt exposes partially-committed
-rows, the Phase I fallback is an explicit `threading.RLock` around
-Kuzu access in `common/kb/kuzu_backend.py`. Run this validation on
-day-1 of M2 — if the assumption is wrong, discovering it now (before
-building projector / validator on top) is much cheaper than at M6+.
+queries for ~10⁴ iterations. Readers must never observe a
+partially-committed transaction (Node's `pass_count` updated but
+not yet `AppliedEvent` row, etc.). If this fails, readers could
+see logically-impossible states mid-commit.
+
+  - Cross-process lock is not a simple fix here: an advisory
+    `flock` around every Kuzu operation would serialize all DB
+    access across processes, killing dashboard responsiveness.
+    The cleaner Phase I fallback is the same as Step 1's — a
+    librarian-mediated read API — but narrower in scope, only for
+    the operations that actually need serialization.
+
+- If Step 1 and Step 2 both pass, proceed with the architecture
+  as written.
+- If either fails, **stop and revise** before building projector /
+  coordinator / dashboard on top.
 
 ---
 
@@ -501,10 +529,14 @@ building projector / validator on top) is much cheaper than at M6+.
 **Deliverables**
 
 - `librarian/main.py`
-  - event watcher
-  - ordered replay
-  - startup replay
+  - startup replay (ordered)
   - startup `nodes/` reconciliation
+  - **passive APPLY command handler** — receives
+    `APPLY(event_id, path)` from coordinator over the command
+    channel, applies to Kuzu + renders `nodes/*.md`, replies
+    `APPLIED` / `APPLY_FAILED` / `CORRUPTION` (ARCHITECTURE §6.5).
+    Librarian does **not** watch `events/` itself during runtime;
+    the watchdog lives in coordinator (tested in M8).
   - `librarian.json`
 - `librarian/renderer.py`
 - `librarian/cli.py`
@@ -515,30 +547,39 @@ building projector / validator on top) is much cheaper than at M6+.
 **Tests**
 
 - `unit`: `renderer.render(node)` produces **byte-identical** output
-  across repeated invocations on the same `Node` — stable YAML key
-  order, `depends_on` ASCII-sorted, Unix `\n` line endings, UTF-8
-  NFC normalization, trailing newline (ARCHITECTURE §4.2 rendering
-  contract). Without this, startup reconciliation + linter E would
-  flap every run.
+  across repeated invocations on the same `Node` — fixed YAML key
+  order (`label`, `kind`, `pass_count`, `statement_hash`,
+  `verification_hash`, `depends_on`), `depends_on` ASCII-sorted,
+  Unix `\n` line endings, UTF-8 NFC normalization, trailing newline
+  (ARCHITECTURE §4.2 rendering contract). Both hashes appear in
+  frontmatter so workers can resolve dep `statement_hash`es without
+  reading Kuzu (§4.1 worker invariant). Without byte-determinism,
+  startup reconciliation + linter E would flap every run.
 - `integration`: startup replay processes unseen events and skips already-decided ones
-- `integration`: **live watchdog** — while librarian daemon is
-  running (past `startup_phase = ready`), dropping a new event file
-  into `events/{date}/` via atomic `.tmp + rename` triggers the
-  watchdog; within **5 seconds** the corresponding `AppliedEvent`
+- `integration`: **APPLY command handling** — after
+  `startup_phase = ready`, librarian receives an
+  `APPLY(event_id, path)` command from coordinator over the command
+  channel; within **5 seconds** the corresponding `AppliedEvent`
   row appears with `status=applied` (or `apply_failed` if the
   fixture event is designed to fail) and, for rendered kinds, the
-  expected `nodes/*.md` content is on disk. Exercises the runtime
-  (non-startup) projection path.
-- `integration`: **watchdog subscription timing** — librarian
-  subscribes to `events/` filesystem notifications **before**
-  beginning startup replay (`startup_phase = replaying`). Any
-  event file that arrives during replay or reconciliation is
-  **queued in-memory** and processed exactly once after
-  `startup_phase = ready`. Fixture: during replay, drop a new
-  event file; verify (a) no double-apply (AppliedEvent has exactly
-  one row per event), (b) the new event is applied once the
-  startup sequence completes. Without this, new events arriving
-  mid-startup could be lost or double-processed.
+  expected `nodes/*.md` content is on disk; librarian replies
+  `APPLIED` / `APPLY_FAILED` with the same `event_id`. Exercises
+  the runtime (non-startup) projection path. The coordinator-side
+  watchdog that emits the APPLY command is tested in M8.
+- `integration`: **APPLY-during-startup queuing** — coordinator may
+  send `APPLY` commands to librarian before `startup_phase = ready`
+  (e.g. supervise started coordinator first, or a new event is
+  dropped while librarian is still replaying). Librarian **queues**
+  any APPLY received while `startup_phase` is `replaying` or
+  `reconciling` and processes it exactly once after `ready`.
+  Fixture: during replay, coordinator sends an APPLY for an event
+  that is also present on disk (so startup replay will find it).
+  Verify (a) no double-apply (AppliedEvent has exactly one row per
+  event), (b) librarian replies to the queued APPLY after `ready`,
+  (c) for an event **not** yet on disk at replay time but sent via
+  APPLY, it is applied exactly once after `ready`. Without this,
+  supervise start order or mid-startup event arrivals could cause
+  lost or double-processed events.
 - `integration`: crash window after Kuzu commit but before render is healed by startup reconciliation
 - `integration`: orphan `nodes/*.md` files are deleted by reconciliation
 - `integration`: `librarian.json.startup_phase` transitions:
@@ -567,7 +608,6 @@ building projector / validator on top) is much cheaper than at M6+.
   hand-drop past admission). On startup replay, librarian halts as
   **workspace corruption** per §3.1.6 rather than silently applying
   or skipping; dashboard surfaces the corruption.
-- `system`: Kuzu-dependent dashboard endpoints must become 503 while `rebuild_in_progress`
 
 **Exit**
 
@@ -632,6 +672,10 @@ building projector / validator on top) is much cheaper than at M6+.
   argument; any other env vars present at coordinator spawn time
   (e.g. a stubbed `OPENAI_API_KEY`) flow through unchanged to the
   wrapper process (ARCHITECTURE §6.7.1 job lifecycle step 1)
+- `static`: `generator/role.py`, `verifier/role.py`, and every module
+  under `common/runtime/` they transitively import **must not import
+  `common/kb`** (enforce via a `grep`-style static check in the test
+  suite; workers are Kuzu-free per ARCHITECTURE §4.1)
 - `unit`: consecutive outcome window logic for:
   - `crashed`
   - `timed_out`
@@ -701,10 +745,21 @@ building projector / validator on top) is much cheaper than at M6+.
     combined with current KB edges)
   - repair-must-change-hash — post-batch `verification_hash`
     equals the rejected `H_rejected` from the triggering verdict
-- `integration`: batch-internal topological hashing works
+- `integration`: batch-internal topological hashing works; decoder
+  resolves existing deps' `statement_hash` from **`nodes/*.md`
+  frontmatter** (ARCHITECTURE §4.2) and batch-new deps from the
+  staged batch itself; no Kuzu read happens inside generator
 - `integration`: staged publish is atomic
-- `integration`: wrapper pre-dispatch validation returns `precheck_failed` without calling Codex when conditions drift
+- `integration`: wrapper **reads** its full dispatch context from
+  `runtime/jobs/{job_id}.json` (target statement/proof,
+  `dispatch_hash`, `dep_statement_hashes`, and for `mode=repair`
+  the `verification_report` / `repair_hint` / `repair_count` /
+  `H_rejected`) — coordinator populated these before spawn
+  (ARCHITECTURE §5.5.2); the wrapper trusts and does not re-check
+  against Kuzu
 - `integration`: decoder rejections append to `runtime/state/rejected_writes.jsonl`
+- `static`: `generator/role.py` and its transitive imports do **not**
+  import `common/kb` (enforces Kuzu-free worker invariant)
 - `system`: `rethlas generator --target ... --mode fresh|repair` works in a temp workspace with fake Codex
 - `system`: `rethlas generator --target ... --mode xyz` (invalid
   mode) is rejected by argparse itself — exit code 2, usage
@@ -749,8 +804,19 @@ building projector / validator on top) is much cheaper than at M6+.
     `verdict=critical` ⇒ `critical_errors` non-empty
   - optional `cost`: same shape check as M6
 - `integration`: malformed verdict JSON becomes `status = "crashed"` and no truth event
-- `integration`: pre-dispatch validation rejects stale/invalid dispatches with `precheck_failed`
-- `integration`: wrapper mirrors `AppliedEvent` outcome into runtime job file
+- `integration`: emitted `verifier.run_completed` event carries
+  `verification_hash` **equal to the `dispatch_hash` from the job
+  file** (no Kuzu read in the worker, ARCHITECTURE §6.3); if the
+  target's hash has drifted in Kuzu by apply time, librarian's
+  hash-match gate yields `apply_failed(hash_mismatch)` — confirmed
+  by a dedicated test that forces drift via librarian inject
+- `integration`: after `publishing`, wrapper **exits**; coordinator
+  (exercised in M8 tests) writes the final `applied` /
+  `apply_failed` status into the job file. Verifier M7 test scope
+  stops at "wrapper wrote `publishing` and exited cleanly" — the
+  mirroring step is coordinator's responsibility
+- `static`: `verifier/role.py` and its transitive imports do **not**
+  import `common/kb`
 - `system`: `rethlas verifier --target ...` works with fake Codex
 
 **Exit**
@@ -838,11 +904,48 @@ building projector / validator on top) is much cheaper than at M6+.
   assert the in-flight pool capacity stays at 2 across at least 5
   coordinator ticks; stop and restart supervise; only then the new
   value takes effect.
+- `integration`: **coordinator is the precheck gate** (ARCHITECTURE
+  §5.5.2). Fixture induces one of each precheck-failing condition
+  (stale hash, advanced `pass_count`, dep not yet at ≥1, other
+  in-flight job on same target, repair `H_rejected` mismatch). For
+  each: coordinator skips the candidate **without writing any
+  `runtime/jobs/*.json`**; a structured line appears in
+  `runtime/logs/supervise.log` naming the failed condition; no
+  Codex is spawned; no event is published.
+- `integration`: **coordinator populates the job file with full
+  pre-validated context** when precheck passes (ARCHITECTURE §6.7.1
+  step 1): `target`, `mode`, `kind`, `dispatch_hash`, target's
+  `statement`, target's `proof`, `dep_statement_hashes` map for
+  every `\ref`-ed dep, and for generator `mode=repair` the repair
+  context (`verification_report`, `repair_hint`, `repair_count`,
+  `H_rejected`). Worker trusts; never re-reads Kuzu.
+- `integration`: **coordinator is the AppliedEvent poller**
+  (ARCHITECTURE §6.7.1 step 3). After a wrapper exits with job
+  file `status = "publishing"`, coordinator on its next tick polls
+  `kb.applied_event_record(event_id)` for the event wrapper
+  published, writes final `status` (`applied` / `apply_failed`
+  with `reason` + `detail`) into the job file, then deletes it.
+  Fixture covers both branches:
+  - Happy path: librarian applies → coordinator writes `applied`
+  - Fail path: librarian records `apply_failed` with reason
+    `label_conflict` → coordinator writes `apply_failed` + reason +
+    detail
+- `integration`: **coordinator owns the `events/` watchdog**
+  (ARCHITECTURE §6.5). A new event file dropped via atomic rename
+  into `events/{date}/` is detected by coordinator's watchdog,
+  which sends an `APPLY(event_id, path)` command to librarian over
+  the command channel; librarian replies `APPLIED` /
+  `APPLY_FAILED`; coordinator mirrors the outcome into its own
+  dashboard-facing state (SSE `applied_event` envelope fires).
+  Librarian **never** autonomously picks up events from `events/`
+  on its own.
 - `system`: `rethlas supervise` can run a tiny workspace to steady state
 
 **Exit**
 
-- Coordinator is a correct singleton parent and pool-based dispatcher
+- Coordinator is a correct singleton parent, pool-based dispatcher,
+  pre-dispatch gate, AppliedEvent poller, and `events/` watchdog
+  owner
 
 **Checkpoint D**
 
@@ -903,6 +1006,11 @@ building projector / validator on top) is much cheaper than at M6+.
     `drift_alerts.jsonl`)
   Per §6.7.1.
 - `integration`: Kuzu-dependent endpoints return 503 + `Retry-After: 5` during rebuild
+- `integration`: while `librarian.json.rebuild_in_progress = true`,
+  Kuzu-dependent endpoints (`/api/overview`, `/api/theorems`,
+  `/api/node/{label}`, `/api/rejected`) return HTTP 503 with
+  `Retry-After: 5`; non-Kuzu endpoints (`/api/coordinator`,
+  `/api/active`, raw `/events/stream`) continue to serve
 - `integration`: coordinator child-management for dashboard
   - dashboard restart three times then degrade
   - dashboard startup grace period honored before first heartbeat
@@ -944,10 +1052,20 @@ building projector / validator on top) is much cheaper than at M6+.
 - `integration`: **category A** (event stream integrity) — fixture
   where an event file's filename `event_id` disagrees with the body
   JSON `event_id`; linter reports the mismatch and exits non-zero.
+  Additional A-fixtures:
+  - two event files with the same `event_id` but different filenames /
+    bytes → duplicate event-id violation
+  - event with `parent_event_id` (or other event reference field)
+    pointing at a missing prior event → missing-reference violation
 - `integration`: **category B** (KB structural) — fixture with a
   cycle hand-inserted into Kuzu `DependsOn`; linter reports the
-  cycle path. Also: a node whose label prefix does not match its
-  `kind` (§3.5.2).
+  cycle path. Additional B-fixtures:
+  - two Kuzu `Node` rows that violate label uniqueness assumptions
+    (or a duplicate-label import fixture, depending on backend test
+    setup) → uniqueness violation
+  - a node whose label prefix does not match its `kind` (§3.5.2)
+  - a node whose kind-appropriate fields are invalid (for example
+    `kind=external_theorem` with empty `source_note`)
 - `integration`: **category C** (`pass_count` audit) — fixture
   where librarian has been forced to store a `Node.pass_count` that
   disagrees with the event-stream-replayed `audit_count`; linter
