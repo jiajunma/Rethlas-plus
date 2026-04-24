@@ -335,7 +335,8 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 - Concurrency rules (ARCHITECTURE §6.4.1, §10.3):
   - no two in-flight jobs targeting the same label (generator or
     verifier)
-  - at most 2 generator jobs in flight per workspace
+  - at most `N` generator jobs in flight per workspace, where `N` is
+    `rethlas.toml [scheduling] max_concurrent_generators` (default 2)
   - verifier jobs may run concurrently on distinct targets within the
     remaining `codex_budget` slots
 

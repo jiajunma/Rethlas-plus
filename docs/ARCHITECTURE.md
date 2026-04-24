@@ -1644,17 +1644,22 @@ or verifier on a node, coordinator checks current-runtime job state for that
 target. If a live/in-flight job exists, skip this loop. Prevents racing
 attempts producing conflicting events on the same node.
 
-**At most two generator jobs in flight per workspace in Phase I.** Generator
-write scope is narrow (§6.2): a batch may touch only its own target label plus
-brand-new labels. With the existing "no concurrent same-target dispatch" rule,
-this makes generator-generator overlap tolerable in Phase I. The remaining race
-is that two concurrent generator batches may independently invent the same
-brand-new label; in that case one batch wins and the other is rejected at apply
-time with `label_conflict`. Verifier jobs may still run concurrently on
-distinct targets.
+**At most `N` generator jobs in flight per workspace.** `N` is
+configurable via `rethlas.toml [scheduling] max_concurrent_generators`;
+default is **2**. Generator write scope is narrow (§6.2): a batch may
+touch only its own target label plus brand-new labels. With the
+existing "no concurrent same-target dispatch" rule, any `N >= 1`
+generator overlap is tolerable — the only cross-batch race is two
+concurrent batches independently inventing the same brand-new label,
+resolved deterministically by `(iso_ms, seq, uid)` ordering: the
+first to apply wins, the loser gets `apply_failed(label_conflict)`.
+Higher `N` trades slightly more wasted work (on rare label collisions)
+for more parallelism; the default 2 is a conservative starting point.
+Verifier jobs may still run concurrently on distinct targets within
+the remaining `codex_budget` slots.
 
 **Cross-component write-set overlap is not prevented.** The "no
-concurrent same-target" and "at most two generators at a time" rules are not
+concurrent same-target" and "at most `N` generators at a time" rules are not
 enough to guarantee that a verifier's snapshot of a target's
 dependency chain remains valid for the entire verifier run. Concrete
 scenario (narrower after the §6.2 write-scope invariant, but still
@@ -2552,8 +2557,10 @@ Existing `common/codex_budget` slot mechanism caps concurrent Codex
 subprocesses. Coordinator acquires slot before dispatching; releases on
 completion.
 
-Within that budget, Phase I additionally caps generator concurrency at **2**
-per workspace (§6.4.1). Verifier jobs use the remaining available slots.
+Within that budget, generator concurrency is additionally capped at
+`N` per workspace (§6.4.1), configurable via `rethlas.toml
+[scheduling] max_concurrent_generators` with default **2**. Verifier
+jobs use the remaining available slots.
 
 ### 10.4 Repair rounds
 
@@ -2853,21 +2860,24 @@ See `PHASE1.md` for the concrete task list.
     `60 s < age <= 5 min` degraded, `> 5 min` / missing down. Same
     thresholds for coordinator.json and librarian.json.
   - Phase I M6.3 (new) and M7.1-7.5 updated to cover the contract.
-- **2026-04-24 (evening review, generator concurrency 1 → 2)**:
+- **2026-04-24 (evening review, generator concurrency 1 → N, default 2)**:
   - §6.4.1 / §10.3: raised generator in-flight cap from **1** to
-    **2** per workspace. Justified by the §6.2 write-scope invariant
-    (H7): a generator batch only touches its own target + brand-new
-    labels, so two concurrent batches on distinct targets cannot
-    corrupt each other's write sets. The remaining cross-batch race
-    is both batches independently inventing the same brand-new label;
-    resolved deterministically by `(iso_ms, seq, uid)` ordering +
-    `apply_failed(label_conflict)` for the loser (wasted work, not
+    **`N`**, configurable via `rethlas.toml [scheduling]
+    max_concurrent_generators` with default **2**. Justified by the
+    §6.2 write-scope invariant (H7): a generator batch only touches
+    its own target + brand-new labels, so any number of concurrent
+    batches on distinct targets cannot corrupt each other's write
+    sets. The remaining cross-batch race is two (or more) batches
+    independently inventing the same brand-new label; resolved
+    deterministically by `(iso_ms, seq, uid)` ordering +
+    `apply_failed(label_conflict)` for the losers (wasted work, not
     corruption). Dashboard's "expected normal events" list extended
-    to include occasional `label_conflict` alongside
-    `hash_mismatch`.
+    to include occasional `label_conflict` alongside `hash_mismatch`.
+    Default 2 is a conservative starting point; operators can raise
+    `N` when they have LLM budget headroom.
   - §5.1 "goal concept" paragraph sharpened: Phase I stop condition
     ranges over **all** nodes, not a separately configured goal set;
     "goal" is just user-side naming convention for `kind=theorem`.
   - Phase I M6.1 updated to spell out the new concurrency rules
-    (no concurrent same-target, at most 2 generators, verifiers share
-    the remaining `codex_budget` slots).
+    (no concurrent same-target, at most `N` generators from config,
+    verifiers share the remaining `codex_budget` slots).
