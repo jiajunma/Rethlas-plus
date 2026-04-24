@@ -149,9 +149,11 @@ runs (no-op with empty events).
   - hash change: `count = 0` if proof non-empty, `-1` if empty
 - No -1 propagation rule (strict-monotone dispatch already handles it)
 - No separate counter-example event — handled as statement revision
-  (generator emits `node_statement_revised` with negation as new statement)
-- Set `repair_hint` when user emits `user.hint_attached`; clear on next
-  generator attempt emission for that target
+  inside a normal `generator.batch_committed` (batch contains the
+  revised node whose new statement is the negation, which flips the
+  `statement_hash` and triggers the usual Merkle cascade)
+- Set `repair_hint` when user emits `user.hint_attached`; clear on the
+  next `generator.batch_committed` that touches that target label
 
 **M3.2** `librarian/validator.py` — business rule validation
 - Referenced event_ids exist and precede current
@@ -166,9 +168,12 @@ runs (no-op with empty events).
 
 **M3.4** `librarian/main.py` — long-running daemon
 - File watcher on `events/` (via `watchdog`)
-- Ordered event processing (by event_id)
+- Ordered event processing (stable sort by iso_ms, seq, uid per
+  ARCHITECTURE §3.7.1)
 - Full node re-render on startup
-- Handle `coordinator.full_rebuild_requested` event by calling rebuild
+- Rebuild is a CLI action (`rethlas rebuild`), not an event — librarian
+  exposes it via `librarian/cli.py`, never via a truth event (Phase I
+  truth producers are user/generator/verifier only)
 
 **M3.5** `librarian/cli.py` — `rethlas librarian [--rebuild | --daemon]`
 
@@ -194,21 +199,30 @@ AGENTS.md instructions to require `<node>` block output format and
 - Document `\ref{label}` convention
 - Document repair mode prompt format
 
-**M4.4** Update `generator/mcp/server.py`:
-- Keep: `search_arxiv_theorems`, `verify_proof_service`, `memory_*`
-- Add: `get_event(event_id)`, `closure(label, direction, depth)`
-- Remove nothing in Phase I
+**M4.4** Update `generator/mcp/server.py` to match ARCHITECTURE §8.1:
+- Keep: `search_arxiv_theorems(query)`, `memory_init` / `memory_append`
+  / `memory_search`
+- Remove any stale tools that do not appear in §8.1 (e.g.,
+  `verify_proof_service`, `get_event`, `closure`) — those are not in
+  the Phase I generator toolset
 
 **M4.5** `generator/role.py` — new thin wrapper
-- Read dispatch event (target + mode + optional repair context refs)
+- Read dispatch parameters from coordinator (runtime job file / CLI
+  args): target label + mode + optional repair context refs. Dispatch
+  is **not** a truth event in Phase I (coordinator is not a truth
+  producer per ARCHITECTURE §3.5).
 - Assemble minimal Codex prompt
 - Invoke `codex exec` via `common/runtime/codex_runner`
   - cwd = `<workspace>/knowledge_base/nodes/`
   - `--sandbox read-only`
 - Parse stdout for `<node>` blocks
-- Emit fine-grained events per node
-- Emit session markers (`attempt_started` with pid+log_path;
-  `attempt_produced` / `attempt_failed`)
+- Stage the batch outside `events/` until fully validated, then atomically
+  publish exactly **one** `generator.batch_committed` truth event (per
+  ARCHITECTURE §3.7.2). No per-node truth events, no `attempt_started` /
+  `attempt_failed` truth events.
+- Runtime-only artifacts (pid, codex log path, crash info) go to
+  `runtime/jobs/{job_id}.json` and `runtime/logs/{job_id}.codex.log`.
+  Decoder rejections are appended to `runtime/state/rejected_batches.jsonl`.
 
 **M4.6** `cli/generator.py` — `rethlas generator --target <label>
 --mode {fresh|repair}` invokes `generator/role.py`
@@ -238,8 +252,10 @@ the registration. Keep `verifier/mcp/` directory for future Phase II use
 but don't launch an MCP server.
 
 **M5.5** `verifier/role.py` — single `codex exec` invocation
-- Read dispatch event (target label)
-- Compute current `verification_hash` (pre-dispatch revalidation)
+- Read dispatch parameters from coordinator (runtime job file / CLI
+  args): target label. Dispatch is not a truth event in Phase I.
+- Compute current `verification_hash` (pre-dispatch revalidation per
+  ARCHITECTURE §5.5.2)
 - Build minimal prompt: target label + statement + proof
 - `codex exec` once; parse verdict JSON
 - Emit `verifier.run_completed` with verdict, verification_hash,
@@ -269,7 +285,9 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
   record runtime job file under `runtime/jobs/`
 - Monitor in-flight dispatches (via codex log mtime)
 - On timeout: kill process group; mark runtime job timed out
-- Check global stop condition: all proof-requiring nodes count >= DESIRED
+- Check global stop condition: all nodes (including definitions and
+  external_theorems) have `pass_count >= DESIRED_COUNT` — matches
+  ARCHITECTURE §10.1 / §6.4
 
 **M6.3** `coordinator/supervise.py` — launch and monitor long-running
 children (librarian, coordinator loop, dashboard)
@@ -311,8 +329,9 @@ Milestone exit: browser at `localhost:8765` shows workspace state.
 
 **M8.2** `linter/main.py` — one-shot run
 - Load events, rebuild KB in memory (or query existing), run checks
-- Emit `linter.run_completed` with counts
-- Emit `linter.invariant_violated` per violation
+- Report results via stdout / JSON to `runtime/state/linter_report.json`
+  (linter is NOT a truth producer per ARCHITECTURE §6). Exit non-zero on
+  any violation so CI can gate on it.
 
 **M8.3** `cli/linter.py` — `rethlas linter [--mode fast]`
 
@@ -324,8 +343,9 @@ workspace; flags injected errors in test cases.
 ## M9 — End-to-end smoke test
 
 **M9.1** Fixture: a tiny workspace with
-- One `user.definition_added` event (starts at count=0)
-- One `user.theorem_added` event (kind=theorem, count=-1, depends on the definition)
+- One `user.node_added` event (`kind: definition`, starts at count=0)
+- One `user.node_added` event (`kind: theorem`, empty proof, starts at
+  count=-1; statement references the definition via `\ref{def:...}`)
 
 **M9.2** `rethlas supervise` in this fixture:
 - Coordinator parallel dispatches:
