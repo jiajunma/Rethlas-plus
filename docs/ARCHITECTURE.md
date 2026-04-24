@@ -124,7 +124,7 @@ rethlas init                               # initialize events/ skeleton + rethl
 rethlas add-node ...                       # publish a user node event
 rethlas attach-hint ...                    # publish a user hint event
 rethlas supervise                          # run librarian + coordinator + dashboard
-rethlas dashboard --port 8765              # dashboard only
+rethlas dashboard --bind 127.0.0.1:8765    # dashboard only (§6.7.1)
 rethlas linter --mode fast                 # one-shot audit
 rethlas rebuild                            # rebuild dag.kz + nodes/ from events
 ```
@@ -149,11 +149,20 @@ bind                     = "127.0.0.1:8765"    # §6.7.1
 - **Missing section**: that section's fields default as shown.
 - **Missing field**: defaults to the shown value.
 - **Unknown field**: logged as a startup warning; value ignored.
-- **Malformed TOML (parse error) or out-of-range value** (e.g. negative
-  `generator_workers`, `desired_pass_count < 1`): startup fails with a
-  non-zero exit code and a human-readable error pointing at the offending
-  line. Fail-fast rather than silently falling back to defaults, since a
-  malformed config is almost always a user error worth surfacing.
+- **Malformed TOML (parse error) or out-of-range value**: startup
+  fails with a non-zero exit code and a human-readable error pointing
+  at the offending line. Fail-fast rather than silently falling back
+  to defaults, since a malformed config is almost always a user error
+  worth surfacing.
+
+Validation bounds:
+
+| Field | Required shape |
+| --- | --- |
+| `desired_pass_count` | integer, `>= 1` |
+| `generator_workers` | integer, `>= 1` |
+| `verifier_workers` | integer, `>= 1` |
+| `bind` | string matching `HOST:PORT`; `PORT` in `[1, 65535]`; `HOST` any value parseable as IPv4, IPv6, or hostname |
 
 Reload semantics: `rethlas.toml` is read once at process startup
 (supervise / dashboard / linter each load independently). Editing it
@@ -296,6 +305,40 @@ Phase I truth producers:
 - `user:<name>` — human author
 - `generator:codex-gpt-5.4-xhigh` — Codex generator
 - `verifier:codex-gpt-5.4` — Codex verifier
+
+The registry lives in `producers.toml` at the **Rethlas repo root**
+(not the workspace; the registry travels with the tool version).
+Phase I content:
+
+```toml
+[[producer]]
+kind                 = "user"
+actor_pattern        = "^user:[a-zA-Z0-9_-]+$"
+allowed_event_types  = [
+  "user.node_added",
+  "user.node_revised",
+  "user.hint_attached",
+]
+
+[[producer]]
+kind                 = "generator"
+actor_pattern        = "^generator:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = ["generator.batch_committed"]
+
+[[producer]]
+kind                 = "verifier"
+actor_pattern        = "^verifier:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = ["verifier.run_completed"]
+```
+
+Admission and librarian both validate `(actor, type)` against this
+registry. Unknown producer kinds, actor strings that don't match any
+`actor_pattern`, or `(kind, type)` pairs outside the allowed list are
+rejected:
+- Admission: recorded in `runtime/state/rejected_writes.jsonl`; nothing
+  enters `events/`.
+- Librarian (defensive replay): counts as **workspace corruption**
+  (§3.1.6) — projection halts.
 
 ### 3.5.1 Phase I truth event types
 
@@ -720,10 +763,12 @@ class KnowledgeBase(Protocol):
     def repair_count(self, label: str) -> int: ...   # reads Node.repair_count
 
     # reads — projection decisions (§3.1.6 / §6.5)
+    def applied_event_record(
+        self, event_id: str
+    ) -> AppliedEvent | None: ...                  # full row or None
     def applied_event_status(
         self, event_id: str
     ) -> Literal["applied", "apply_failed", "not_found"]: ...
-    def applied_event_reason(self, event_id: str) -> str: ...
     def list_apply_failed(
         self, *, since: str | None = None, limit: int = 100
     ) -> list[AppliedEvent]: ...
@@ -733,12 +778,16 @@ class KnowledgeBase(Protocol):
     def rebuild_from_events(self, events_dir: Path) -> None: ...
 ```
 
+`AppliedEvent` is a dataclass mirroring the Kuzu table: `event_id`,
+`status`, `reason`, `detail`, `applied_at`.
+
 `ApplyOutcome` carries `status` (`"applied"` / `"apply_failed"`),
-`reason` (empty if applied), and the set of affected node labels
-(empty if apply_failed). Producers / CLI poll
-`applied_event_status(event_id)` after publish to learn the fate of
-their proposal; dashboard uses `list_apply_failed` to surface recent
-failures.
+`reason` (empty if applied), `detail` (human-readable context,
+empty if applied), and the set of affected node labels (empty if
+apply_failed). Producers / CLI poll `applied_event_status(event_id)`
+for a quick yes/no; they call `applied_event_record(event_id)` when
+they need the reason + detail to surface to the user. Dashboard uses
+`list_apply_failed` to surface recent failures.
 
 Only Python components use this. Codex does not import KB code.
 
@@ -2736,8 +2785,11 @@ projection logic.
     `user`, `generator`, and `verifier` are the only truth writers.
 11. **No status field stored.** All status is derived from atomic fields
     (count, hashes) at query time.
-12. **`pass_count` is the only progress indicator.** Signed int
-    (-1 / 0 / positive), updated by librarian per rules.
+12. **`pass_count` is the single progress indicator for scheduling.**
+    Signed int (-1 / 0 / positive), updated by librarian per rules.
+    Coordinator's dispatch decisions read only `pass_count` (plus
+    dependency `pass_count`s). `repair_count` exists alongside but
+    only as an advisory signal to the generator (§5.2, invariant 19).
 13. **Two-layer validation (§3.1.6).** Admission checks structural
     correctness before publish; librarian decides semantic realization
     at apply time and records each decision in `AppliedEvent`.
@@ -2764,6 +2816,11 @@ projection logic.
     `repair_count` tracks gap/critical verdicts against current
     `statement_hash` (generator decision signal: "is this statement
     itself stuck?"). Both audited by linter.
+20. **Concurrency is two independent worker pools** (§10.3):
+    `generator_workers` and `verifier_workers` from `rethlas.toml`,
+    each with its own queue and dispatch loop, no cross-pool
+    contention. The "no concurrent same-target dispatch" rule
+    applies across pools.
 
 ---
 
