@@ -429,7 +429,25 @@ Dashboard / linter aggregate these by querying the event stream. No
 separate cost-tracking store. No budget enforcement in Phase I — just
 observability.
 
-### 3.6.2 Generator batch atomicity
+### 3.7 Writing truth events
+
+This section collects the rules for how truth events reach `events/` in a
+form that librarian can replay deterministically.
+
+#### 3.7.1 Stable event ordering
+
+Librarian replay order must be stable and deterministic. Sorting is by:
+
+1. `iso_ms`
+2. `seq`
+3. `uid`
+
+`uid` is retained for uniqueness, but it has no primary ordering meaning.
+Within a same-millisecond producer batch, `seq` is the canonical order. This
+is especially important for generator-emitted statement/proof pairs and
+topologically ordered multi-node output.
+
+#### 3.7.2 Generator batch atomicity
 
 One generator run is one generator truth commit. A single
 `generator.batch_committed` event carries the full batch of node updates and
@@ -451,19 +469,6 @@ Rules:
 
 This prevents half-attempt truth from entering the KB and gives generator cost
 a single stable truth anchor.
-
-### 3.6.1 Stable event ordering
-
-Librarian replay order must be stable and deterministic. Sorting is by:
-
-1. `iso_ms`
-2. `seq`
-3. `uid`
-
-`uid` is retained for uniqueness, but it has no primary ordering meaning.
-Within a same-millisecond producer batch, `seq` is the canonical order. This
-is especially important for generator-emitted statement/proof pairs and
-topologically ordered multi-node output.
 
 ---
 
@@ -768,6 +773,57 @@ Higher `pass_count` = more confidence.
 
 ### 5.5 Auditability and safety checks
 
+#### 5.5.0 Prevention-first mechanisms for `pass_count` correctness
+
+Before the audit catches drift, multiple mechanisms make drift unlikely
+to occur in the first place:
+
+1. **Single writer to Kuzu.** Only librarian writes `dag.kz/`. No race.
+
+2. **Transactional event application.** Librarian wraps each event's
+   application in a Kuzu transaction. Crash mid-apply → rollback, event
+   not marked applied, retried on next startup.
+
+3. **Idempotent event application.** Librarian stores
+   `last_applied_event_id` in `ProjectionState`. Re-processing events
+   before that id is a no-op. Safe to replay after restart.
+
+4. **Strict event ordering.** Events processed by ascending tuple
+   `(iso_ms, seq, uid)`. Never apply later event before earlier.
+   Deterministic replay → reconstructed `pass_count` always matches.
+
+5. **Hash-match gate on verdicts.** A `verifier.run_completed` event
+   changes `pass_count` **only if** its `verification_hash` equals the
+   current `Node.verification_hash`. Stale verdicts are silently
+   discarded — cannot over-increment or corrupt count.
+
+6. **Pre-dispatch hash revalidation** (§5.5.2). Before verifier runs,
+   role layer confirms the hash is current. Catches drift *before* a
+   new verdict can pollute count.
+
+7. **Canonical hash inputs.** `statement_hash` and `verification_hash`
+   use canonical JSON (UTF-8, sorted keys, compact separators,
+   newline-normalized). Same state → same hash on every machine, every
+   run. Deterministic.
+
+8. **Generator batch atomicity** (§3.6.2). Multi-node generator output
+   is one atomic `generator.batch_committed` event. Librarian never
+   sees partial batches — count updates for all batch nodes happen
+   together or not at all.
+
+9. **Validation before apply.** Librarian validates schema + business
+   rules (label format, cycle detection, reference resolution) before
+   touching Kuzu. Invalid events never reach the count-update step.
+
+10. **No retraction / no deletion.** Nodes are never removed; only
+    statement / proof revised via `user.node_revised` /
+    `generator.batch_committed`. Count transitions are always from
+    event-driven recomputation, not from ad-hoc deletions.
+
+With all of these in place, `pass_count` drift requires a librarian
+code bug. The audit in §5.5.1 is the final safety net that catches such
+bugs if they happen.
+
 #### 5.5.1 Auditability of `pass_count`
 
 `pass_count` stored in Node is a cache of a value that can be
@@ -788,9 +844,11 @@ audit_count(node) =
   if matching_verdicts is empty:
     return 0  (has proof but not yet verified against current hash)
 
-  if any(e.verdict in ("gap", "critical") for e in matching_verdicts):
-    return -1  (a hash is permanently rejected once any matching verdict rejects it)
+  last = matching_verdicts[-1]  # by event_id ordering
+  if last.verdict in ("gap", "critical"):
+    return -1  (latest matching verdict rejects ⇒ needs repair)
 
+  # latest is accepted; count the accepted verdicts against this hash
   return count(e in matching_verdicts if e.verdict == "accepted")
 ```
 
@@ -801,6 +859,22 @@ Drift = librarian bug or corruption.
 This makes the stored count a **verifiable** value. Anyone can reconstruct
 it by reading `events/` alone. The count field is there for query speed,
 not for correctness.
+
+**Design observation — why "last verdict" and "any gap poisons" are
+equivalent in practice:**
+
+A gap/critical verdict triggers generator repair. Generator repair must
+emit a batch whose `verification_hash` differs from the rejected hash
+(see §6.2 — decoder enforces this). So the same hash is never
+re-verified after a wrong verdict. For any unique `verification_hash`:
+
+- Either every matching verdict is `accepted` (count up normally), OR
+- The hash was judged wrong at some point and then abandoned
+  (subsequent verdicts, if any, don't exist because hash changed)
+
+No mixed-history hash exists. "Latest verdict" and "any gap" agree on
+every hash. The simpler `last verdict` rule is used; the equivalence is
+preserved by the repair-must-change-hash invariant.
 
 #### 5.5.2 Pre-dispatch hash revalidation
 
@@ -894,9 +968,8 @@ with the new statement and proof. When the revision flips truth polarity
 **Kind assignment:** the counter-example is simply the target theorem
 with its statement revised. A separate sibling "counter-example node"
 (like a new `Y` distinct from `X`) is also possible if the user prefers
-keeping both the original (historically noted) and the counter-example as
-separate nodes; that's just standard node creation + retraction flow,
-not a distinct mechanism.
+keeping both the original and the counter-example as separate nodes —
+user adds them as two `user.node_added` events with different labels.
 
 ### 5.8 No status enum
 
@@ -984,6 +1057,12 @@ nodes, each entering its own verify-or-regenerate cycle.
 - label uniqueness conflict → reject
 - placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
 - unresolved `\ref{}` to non-existent label (and not produced in same attempt) → reject
+- **Repair-must-change-hash** (mode=repair only): for the repair target,
+  decoder computes the new `verification_hash` from the committed
+  statement + proof + current dep `statement_hash`es. If this equals the
+  previously rejected `verification_hash`, the batch is rejected. This
+  prevents generator from re-emitting identical content and relying on
+  verifier non-determinism to escape `count = -1`.
 
 **Intra-batch ordering.** Within one generator batch, the wrapper
 topologically orders the included node states by their explicit `\ref{}`
@@ -1240,7 +1319,7 @@ or verifier on a node, coordinator checks current-runtime job state for that
 target. If a live/in-flight job exists, skip this loop. Prevents racing
 attempts producing conflicting events on the same node.
 
-**Seven safeguards against infinite loops / over-verification:**
+**Six safeguards against infinite loops / over-verification:**
 
 1. **`pass_count` monotonic per hash**: only `+1` from accepted verdicts;
    only resets via hash change (→ 0) or wrong verdict (→ -1). No
@@ -1331,9 +1410,14 @@ Read-only audit. Phase I scope:
   `event_id` uniqueness, references to prior events exist
 - **B. KB structural invariants**: no cycles, label uniqueness,
   kind-appropriate fields
+- **C. `pass_count` audit** (§5.5.1): for every node, recompute
+  `audit_count` from the event stream and assert it matches stored
+  `Node.pass_count`. Catches librarian drift on the one field that drives
+  all scheduling decisions.
 
 Phase I does NOT implement:
-- C. Projection drift detection (full replay vs current Kuzu)
+- Full projection drift detection (replay all events into a fresh KB and
+  diff against live Kuzu). Only `pass_count` is audited in Phase I.
 - Clock skew detection
 
 Linter writes no truth events in Phase I.

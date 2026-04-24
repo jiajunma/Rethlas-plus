@@ -13,7 +13,7 @@ Within a group, order follows dependencies.
 A minimum viable Rethlas that can:
 - Accept user-authored events (definitions, external theorems, open problems)
 - Run Codex generator (fresh + repair modes)
-- Run Codex verifier (3-stage pipeline)
+- Run Codex verifier (single-call, Codex internally uses 3 skills)
 - Project events into `dag.kz/` and `nodes/*.md` via librarian
 - Schedule dispatches via coordinator (count-based)
 - Show a linear HTML dashboard
@@ -137,12 +137,19 @@ runs (no-op with empty events).
 ## M3 — Librarian (read events → write KB + nodes)
 
 **M3.1** `librarian/projector.py` — event projection logic
-- For each event type, define the update to Kuzu atomic fields
-- Hash recomputation + BFS propagation
-- `verification_count` update rules (axioms get 1; proof nodes get 0 then
-  driven by verdicts; -1 on wrong; reset on hash change)
-- Counter-example cascade on `theorem_disproven`: replace dep references
-  to disproven theorem with counter-example; set dependents' count to -1
+- For each event type, update Kuzu atomic fields per §5.4 table
+- Hash recomputation + BFS propagation (Merkle; statement changes only)
+- `pass_count` update rules:
+  - Definitions / external_theorems created at 0
+  - Proof-requiring kinds (lemma/theorem/proposition) created at -1
+  - verifier accepted + hash match → +1
+  - verifier gap/critical + hash match → -1; store `verification_report` and `repair_hint`
+  - hash change: `count = 0` if proof non-empty, `-1` if empty
+- No -1 propagation rule (strict-monotone dispatch already handles it)
+- No separate counter-example event — handled as statement revision
+  (generator emits `node_statement_revised` with negation as new statement)
+- Set `repair_hint` when user emits `user.hint_attached`; clear on next
+  generator attempt emission for that target
 
 **M3.2** `librarian/validator.py` — business rule validation
 - Referenced event_ids exist and precede current
@@ -209,35 +216,36 @@ Codex, writes events. Librarian projects them into KB + nodes/.
 
 ---
 
-## M5 — Verifier (Codex, 3-stage pipeline)
+## M5 — Verifier (Codex, single-call, original Rethlas pattern)
 
-**M5.1** Keep `verifier/.agents/skills/` intact; update skill AGENTS.md for
-structured output per stage.
+**M5.1** Keep `verifier/.agents/skills/` intact (3 skills:
+check-referenced-statements, verify-sequential-statements,
+synthesize-verification-report). Codex uses them internally via
+multi-agent feature.
 
-**M5.2** Update `verifier/.codex/config.toml` similarly to generator.
+**M5.2** Keep `verifier/.codex/config.toml` multi-agent setup.
 
-**M5.3** Update `verifier/AGENTS.md`: document cwd = nodes/, read-only,
-and per-stage output format.
+**M5.3** Update `verifier/AGENTS.md`:
+- Document cwd = nodes/, read-only sandbox
+- Document output format: final JSON with verdict ∈ {accepted, gap, critical}
+- Document `resolve-reference` skill: label `:` → `_` for cat-ing nodes/*.md
 
 **M5.4** Update `verifier/mcp/server.py`:
 - Existing tools preserved
-- Add `get_event(event_id)` and `closure(label, direction, depth)`
+- Add `get_event(event_id)`, `closure(label, direction, depth)` if needed
 
-**M5.5** `verifier/role.py` — 3-stage pipeline orchestrator
-- Read dispatch event
-- Stage 1: `check-referenced-statements`
-- Stage 2: `verify-sequential-statements`
-- Stage 3: `synthesize-verification-report`
-- Each stage is an independent `codex exec` call
-- Emit `run_stage_completed` after each stage
-- Compute `verification_hash` against current KB state before dispatching
-- Emit `run_completed` with verdict + verification_hash
+**M5.5** `verifier/role.py` — single `codex exec` invocation
+- Read dispatch event (target label)
+- Compute current `verification_hash` (pre-dispatch revalidation)
+- Build minimal prompt: target label + statement + proof
+- `codex exec` once; parse verdict JSON
+- Emit `verifier.run_completed` with verdict, verification_hash,
+  verification_report, repair_hint
 
 **M5.6** `cli/verifier.py` — `rethlas verifier --target <label>`
 
-Milestone exit: `rethlas verifier --target lem:test` runs 3 stages, emits
-verdict event. Librarian increments count on accepted; sets count=-1 on
-wrong.
+Milestone exit: `rethlas verifier --target lem:test` emits verdict event.
+Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 
 ---
 
@@ -290,7 +298,7 @@ Milestone exit: browser at `localhost:8765` shows workspace state.
 
 ## M8 — Linter (minimal)
 
-**M8.1** `linter/checks.py` — category A + B checks only
+**M8.1** `linter/checks.py` — category A + B + C (pass_count audit) checks
 - A: event filename ↔ frontmatter consistency; unique event_ids;
   referenced event_ids exist
 - B: no cycles in Kuzu; label uniqueness; kind-field consistency
@@ -310,17 +318,23 @@ workspace; flags injected errors in test cases.
 ## M9 — End-to-end smoke test
 
 **M9.1** Fixture: a tiny workspace with
-- One `user.definition_added` event
-- One `user.open_problem_created` event (goal with 1 dep on the definition)
+- One `user.definition_added` event (starts at count=0)
+- One `user.theorem_added` event (kind=theorem, count=-1, depends on the definition)
 
 **M9.2** `rethlas supervise` in this fixture:
-- Coordinator dispatches generator for the goal (fresh)
-- Generator produces `<node>` blocks → events
-- Librarian projects → KB + nodes/
-- Coordinator dispatches verifier
-- Verifier returns accepted
-- Count increments; eventually reaches DESIRED_COUNT = 3
-- Supervise loop idles (global stop condition met)
+- Coordinator parallel dispatches:
+  - Verifier on the definition (count=0, no deps, strict monotone vacuous)
+  - Generator on the theorem (count=-1)
+- Definition verified, count increments; eventually reaches DESIRED=3
+- Generator produces theorem's proof (+ maybe sub-lemmas)
+- Librarian projects → dag.kz + nodes/
+- Theorem now has proof, count=0
+- Coordinator can dispatch verifier on theorem only when
+  definition.count > theorem.count (strict monotone)
+  - theorem.count=0 needs def.count ≥ 1 → OK once def verified once
+  - theorem.count=1 needs def.count ≥ 2 → OK once def verified twice
+  - ... until both hit DESIRED=3
+- Supervise loop idles (global stop condition: all nodes count ≥ DESIRED)
 
 **M9.3** Kill supervise, `rm -rf knowledge_base/`, restart.
 - Librarian re-projects from events → same KB state
@@ -366,14 +380,15 @@ M0 ──▶ M1 ──▶ M2 ──▶ M3 ──▶ M4 ──▶ M5 ──▶ M6
 ## Phase I "done" criteria
 
 - [ ] Workspace can be created (`rethlas init`)
-- [ ] User can drop a definition / external_theorem / open_problem as an
+- [ ] User can drop a definition / external_theorem / theorem as an
       event file
 - [ ] Librarian projects it; nodes/*.md and dag.kz populated
 - [ ] `rethlas supervise` drives generator + verifier loop
-- [ ] Goal reaches verification_count >= DESIRED_COUNT = 3
+- [ ] All nodes reach pass_count >= DESIRED_COUNT = 3
 - [ ] Dashboard at port 8765 shows current state
-- [ ] Linter reports consistency
+- [ ] Linter reports consistency (event-stream integrity + KB invariants)
 - [ ] `rm -rf knowledge_base/; rethlas rebuild` reconstructs full state
+- [ ] Linter audits `pass_count` against event-stream replay (§5.5.1)
 
 ---
 
