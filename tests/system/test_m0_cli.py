@@ -51,8 +51,16 @@ def test_each_stub_subcommand_is_reachable() -> None:
 
 
 def test_each_stub_subcommand_runs_placeholder() -> None:
-    """Invoking each subcommand (no args) must exit 0 and print a placeholder line."""
-    for name in SUBCOMMANDS:
+    """Subcommands whose owning milestone hasn't shipped yet must still be
+    reachable from argparse and print a recognisable placeholder.
+
+    M3 wired init / add-node / revise-node / attach-hint / rebuild to real
+    implementations; those are exercised in M3's own system tests and
+    excluded from this placeholder check.
+    """
+    wired_in_m3 = {"init", "add-node", "revise-node", "attach-hint", "rebuild"}
+    remaining = [n for n in SUBCOMMANDS if n not in wired_in_m3]
+    for name in remaining:
         result = _run(name)
         assert result.returncode == 0, (
             f"rethlas {name} returned {result.returncode}; stderr={result.stderr!r}"

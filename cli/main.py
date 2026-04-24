@@ -1,11 +1,15 @@
 """Rethlas CLI entry point.
 
-M0 stub dispatcher: every Phase I subcommand is registered with
-argparse so `rethlas --help` lists them. Each subcommand prints a
-placeholder line and exits 0 until the owning milestone replaces it.
-Real implementations land in M3 (init / add-node / revise-node /
-attach-hint / rebuild), M4 (librarian), M6 (generator), M7 (verifier),
-M8 (supervise), M9 (dashboard), M10 (linter).
+Wired subcommands (M3 delivers user-visible publish + lifecycle):
+- ``init``        -> cli.init
+- ``add-node``    -> cli.add_node
+- ``revise-node`` -> cli.revise_node
+- ``attach-hint`` -> cli.attach_hint
+- ``rebuild``     -> cli.rebuild
+
+Remaining Phase I subcommands stay as placeholders until their owning
+milestone lands (``supervise`` M8, ``dashboard`` M9, ``linter`` M10,
+``generator`` M6 worker entry, ``verifier`` M7 worker entry).
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import argparse
 import sys
 from typing import Sequence
+
 
 SUBCOMMANDS: dict[str, str] = {
     "init": "initialize a Rethlas workspace (M3)",
@@ -38,19 +43,52 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="path to the Rethlas workspace (default: current directory)",
     )
-
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    for name, help_text in SUBCOMMANDS.items():
-        sp = sub.add_parser(name, help=help_text, description=help_text)
-        sp.set_defaults(_cmd=name)
+    # init
+    sp = sub.add_parser("init", help=SUBCOMMANDS["init"], description=SUBCOMMANDS["init"])
+    sp.add_argument("--force", action="store_true", help="overwrite rethlas.toml if present")
+
+    # add-node
+    sp = sub.add_parser("add-node", help=SUBCOMMANDS["add-node"], description=SUBCOMMANDS["add-node"])
+    sp.add_argument("--label", required=True)
+    sp.add_argument("--kind", required=True)
+    sp.add_argument("--statement", required=True)
+    sp.add_argument("--proof", default="")
+    sp.add_argument("--remark", default="")
+    sp.add_argument("--source-note", default="")
+    sp.add_argument("--actor", default="user:cli", help="producer actor (default user:cli)")
+
+    # revise-node
+    sp = sub.add_parser("revise-node", help=SUBCOMMANDS["revise-node"], description=SUBCOMMANDS["revise-node"])
+    sp.add_argument("--label", required=True)
+    sp.add_argument("--kind", required=True)
+    sp.add_argument("--statement", required=True)
+    sp.add_argument("--proof", default="")
+    sp.add_argument("--remark", default="")
+    sp.add_argument("--source-note", default="")
+    sp.add_argument("--actor", default="user:cli")
+
+    # attach-hint
+    sp = sub.add_parser("attach-hint", help=SUBCOMMANDS["attach-hint"], description=SUBCOMMANDS["attach-hint"])
+    sp.add_argument("--target", required=True)
+    sp.add_argument("--hint", required=True)
+    sp.add_argument("--actor", default="user:cli")
+
+    # rebuild
+    sp = sub.add_parser("rebuild", help=SUBCOMMANDS["rebuild"], description=SUBCOMMANDS["rebuild"])
+
+    # still-placeholder subcommands
+    for name in ("supervise", "dashboard", "linter", "generator", "verifier"):
+        sp = sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
 
     return parser
 
 
 def _run_stub(name: str) -> int:
-    """Placeholder for every Phase I subcommand until its owning milestone lands."""
-    sys.stdout.write(f"rethlas {name}: placeholder (not yet implemented in this milestone)\n")
+    sys.stdout.write(
+        f"rethlas {name}: placeholder (not yet implemented in this milestone)\n"
+    )
     return 0
 
 
@@ -62,6 +100,52 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help(sys.stderr)
         return 1
 
+    ws = getattr(args, "workspace", None)
+
+    if args.command == "init":
+        from cli.init import run_init
+        return run_init(ws, force=getattr(args, "force", False))
+
+    if args.command == "add-node":
+        from cli.add_node import run_add_node
+        return run_add_node(
+            workspace=ws,
+            label=args.label,
+            kind=args.kind,
+            statement=args.statement,
+            proof=args.proof,
+            remark=args.remark,
+            source_note=args.source_note,
+            actor=args.actor,
+        )
+
+    if args.command == "revise-node":
+        from cli.revise_node import run_revise_node
+        return run_revise_node(
+            workspace=ws,
+            label=args.label,
+            kind=args.kind,
+            statement=args.statement,
+            proof=args.proof,
+            remark=args.remark,
+            source_note=args.source_note,
+            actor=args.actor,
+        )
+
+    if args.command == "attach-hint":
+        from cli.attach_hint import run_attach_hint
+        return run_attach_hint(
+            workspace=ws,
+            target=args.target,
+            hint=args.hint,
+            actor=args.actor,
+        )
+
+    if args.command == "rebuild":
+        from cli.rebuild import run_rebuild
+        return run_rebuild(ws)
+
+    # placeholders still — supervise / dashboard / linter / generator / verifier
     return _run_stub(args.command)
 
 

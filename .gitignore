@@ -8,3 +8,9 @@ dist/
 .venv/
 myenv/
 .DS_Store
+
+/events/
+/knowledge_base/
+/runtime/
+/rethlas.toml
+
