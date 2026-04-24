@@ -942,15 +942,16 @@ see logically-impossible states mid-commit.
     `mode = "repair"`; job file carries `verification_report`,
     `repair_hint`, `repair_count = 2`, and `H_rejected` equal to the
     `verification_hash` of the most-recent rejected verdict.
-- `integration`: **generator pool tie-break by `repair_count`**
+- `integration`: **generator pool ordering by `label` only**
   (ARCHITECTURE §10.2.2). Fixture with three proof-requiring
   candidates all at `pass_count = -1` and all with deps ready:
   `lem:a(repair_count=0)`, `lem:b(repair_count=5)`,
   `lem:c(repair_count=0)`. With `generator_workers = 1` and the
   "no concurrent same-target" rule, coordinator dispatches in order
-  `lem:a` → `lem:c` → `lem:b` across three ticks (fresh candidates
-  first, then label ASC within equal `repair_count`, stuck
-  candidate last).
+  `lem:a` → `lem:b` → `lem:c` across three ticks — strict label
+  ascending, **no `repair_count` deprioritization**. Guards against
+  the earlier starvation-prone ordering; §10.4 keeps the "when to
+  give up" decision on the generator, not the scheduler.
 - `integration`: **verifier pool ordering by `pass_count`**
   (ARCHITECTURE §10.2.1). Fixture with three candidates whose deps
   are verified: `thm:x(pass_count=2)`, `def:y(pass_count=0)`,

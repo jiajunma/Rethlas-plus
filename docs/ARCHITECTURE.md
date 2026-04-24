@@ -3533,12 +3533,18 @@ Filter:
   being verified; generator must wait.
 
 Priority ordering:
-1. `repair_count` ascending (fresh candidates first; the node has
-   never been retried for this statement). This avoids repeatedly
-   hammering a stuck target while other ready targets wait — the
-   stuck one is surfaced under Dashboard "Human attention" (§6.4.1,
-   §6.7) instead.
-2. `label` ascending (deterministic tiebreak).
+1. `label` ascending (deterministic, single-key sort).
+
+All eligible candidates share the same band (`pass_count = -1`),
+so — unlike verifier (§10.2.1) — there is no pass-count axis to
+spread on. `repair_count` is **not** used here: §10.4 pins the
+"when to give up" decision on the generator (which reads
+`repair_count` in its prompt, §6.2) and the user (dashboard Human
+Attention surfaces `repair_count ≥ 3`, §6.7), not on the
+coordinator. Using `repair_count` as a priority key would starve
+stuck candidates whenever fresh work keeps arriving, contradicting
+§10.4's "proof-requiring nodes at `pass_count = -1` continue to
+be dispatched."
 
 #### 10.2.3 Mode selection (generator only)
 
