@@ -1236,12 +1236,35 @@ nodes, each entering its own verify-or-regenerate cycle.
 - label uniqueness conflict → reject
 - placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
 - unresolved `\ref{}` to non-existent label (and not produced in same attempt) → reject
-- **Repair-must-change-hash** (mode=repair only): for the repair target,
-  decoder computes the new `verification_hash` from the committed
-  statement + proof + current dep `statement_hash`es. If this equals the
-  previously rejected `verification_hash`, the batch is rejected. This
-  prevents generator from re-emitting identical content and relying on
-  verifier non-determinism to escape `count = -1`.
+- **Repair-must-change-hash** (mode=repair only): decoder must verify
+  that the repair target's **post-batch** `verification_hash` differs
+  from the `verification_hash` carried by the most recent
+  gap/critical `verifier.run_completed` for that target (call it
+  `H_rejected`). Procedure:
+
+  1. Compute each batch node's `statement_hash` using strict
+     batch-internal topological order of `\ref{}` edges. Values
+     resolved as follows:
+     - if the `\ref{}` target label appears in the staged batch, use
+       the **batch's** `statement_hash` for that label (the new value
+       this batch will commit);
+     - otherwise use the **current KB** `statement_hash` for that
+       label.
+  2. Assemble the target's post-batch dependency set (resolved via
+     the same rule above).
+  3. Compute the target's post-batch `verification_hash = H_new`
+     from its committed `statement + proof` and the resolved dep
+     `statement_hash`es.
+  4. If `H_new == H_rejected`, reject the entire batch.
+
+  Rationale: a common legitimate repair path is "my proof was fine;
+  the upstream `def:D` needed sharpening". The batch revises `def:D`
+  and reprints the target's proof verbatim. Using current-KB
+  `def:D.statement_hash` (pre-batch) would compute `H_new ==
+  H_rejected` and falsely reject the batch. Using the staged batch's
+  post-application view captures the real effect of the commit and
+  admits this path. The guard still blocks genuine no-ops (generator
+  re-emits identical content with no upstream change).
 
 **Intra-batch ordering.** Within one generator batch, the wrapper
 topologically orders the included node states by their explicit `\ref{}`
