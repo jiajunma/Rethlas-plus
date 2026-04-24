@@ -2229,7 +2229,7 @@ every loop iteration and whenever in-flight job state changes. Minimum fields:
   "recent_hash_mismatch_count": 3,
   "children": {
     "librarian": {"pid": 12346, "status": "running", "updated_at": "2026-04-24T06:05:11.000Z"},
-    "dashboard": {"pid": 12348, "status": "running", "updated_at": "2026-04-24T14:05:12.000+08:00"}
+    "dashboard": {"pid": 12348, "status": "running", "updated_at": "2026-04-24T06:05:12.000Z"}
   }
 }
 ```
@@ -2738,8 +2738,8 @@ stuck-detection on timeout / orphan cleanup).
   "dispatch_hash": "sha256:...verification_hash_at_dispatch...",
   "pid": 23491,
   "pgid": 23491,
-  "started_at": "2026-04-24T10:04:20.111+08:00",
-  "updated_at": "2026-04-24T10:04:25.300+08:00",
+  "started_at": "2026-04-24T02:04:20.111Z",
+  "updated_at": "2026-04-24T02:04:25.300Z",
   "status": "running",
   "log_path": "runtime/logs/ver-20260424T100420.111-a7b2c912d4f1e380.codex.log"
 }
@@ -2833,7 +2833,7 @@ layer. Schema per line:
 ```json
 {
   "schema": "rethlas-rejection-v1",
-  "ts": "2026-04-24T10:04:20.111+08:00",
+  "ts": "2026-04-24T02:04:20.111Z",
   "actor": "generator:codex-gpt-5.4-xhigh",
   "event_type_attempted": "generator.batch_committed",
   "target": "thm:foo",
@@ -2904,7 +2904,7 @@ Dashboard is the **only** SSE emitter. Mechanism:
 ```json
 {
   "type": "truth_event | applied_event | job_change | coordinator_tick | librarian_tick | alert",
-  "ts": "2026-04-24T10:04:25.300+08:00",
+  "ts": "2026-04-24T02:04:25.300Z",
   "payload": { ... }
 }
 ```
