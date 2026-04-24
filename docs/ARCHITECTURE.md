@@ -3363,6 +3363,12 @@ truth-event producer (admission layer, pre-publish):
     seq    = next same-ms seq for this producer (almost always 0001)
     uid    = random 16 hex
   run structural_check (§3.1.6) against current KB snapshot
+    # "current KB snapshot" source is producer-specific:
+    #   - user CLI: reads Kuzu directly (§4.1 allows user CLI read)
+    #   - worker wrapper (gen/ver): reads nodes/*.md + job file
+    #     only (Kuzu-free per §4.1); best-effort for checks that
+    #     need count<1 KB state — librarian is authoritative at
+    #     apply time (§6.5)
     on failure: record to runtime/state/rejected_writes.jsonl; return
                 failure to caller. Nothing reaches events/.
   compose filename per §3.2
