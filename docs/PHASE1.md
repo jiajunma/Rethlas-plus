@@ -352,6 +352,20 @@ Recommended helper infrastructure:
 
 - `system`: `rethlas init` on empty workspace creates expected tree
 - `system`: `rethlas init --force` overwrites config only, never `events/`
+- `system`: **init writes the annotated `rethlas.toml` template
+  anchored to ARCHITECTURE §2.4** — the written file must contain
+  every field named in §2.4's validation-bounds table, each with
+  its documented default value and a one-line human-readable
+  comment. Test parses the written file and asserts:
+  - `[scheduling].desired_pass_count == 3`
+  - `[scheduling].generator_workers == 2`
+  - `[scheduling].verifier_workers == 4`
+  - `[scheduling].codex_silent_timeout_seconds == 1800`
+  - `[dashboard].bind == "127.0.0.1:8765"`
+  Additionally, raw file text contains a non-empty `# ...` comment
+  on the line immediately above each field (self-documenting init
+  output). Without this anchor, the template and ARCHITECTURE can
+  drift silently.
 - `system`: user publish CLI writes canonical event file
 - `integration`: publish CLI polls `AppliedEvent` and reports each
   of the four outcomes from ARCHITECTURE §9.1 D2. Setup for each
@@ -466,6 +480,16 @@ Recommended helper infrastructure:
   fixture event is designed to fail) and, for rendered kinds, the
   expected `nodes/*.md` content is on disk. Exercises the runtime
   (non-startup) projection path.
+- `integration`: **watchdog subscription timing** — librarian
+  subscribes to `events/` filesystem notifications **before**
+  beginning startup replay (`startup_phase = replaying`). Any
+  event file that arrives during replay or reconciliation is
+  **queued in-memory** and processed exactly once after
+  `startup_phase = ready`. Fixture: during replay, drop a new
+  event file; verify (a) no double-apply (AppliedEvent has exactly
+  one row per event), (b) the new event is applied once the
+  startup sequence completes. Without this, new events arriving
+  mid-startup could be lost or double-processed.
 - `integration`: crash window after Kuzu commit but before render is healed by startup reconciliation
 - `integration`: orphan `nodes/*.md` files are deleted by reconciliation
 - `integration`: `librarian.json.startup_phase` transitions:
@@ -585,7 +609,9 @@ Recommended helper infrastructure:
 - `integration`: fake Codex output with valid `<node>` blocks
   produces exactly one `generator.batch_committed`; emitted event
   body asserts every field required by ARCHITECTURE §3.5.1:
-  - `attempt_id` matches the `gen-{iso_ms}-{seq}-{uid}` pattern
+  - `attempt_id` matches `gen-{iso_ms}-{seq}-{uid}` where components
+    are separated by single hyphens, e.g.
+    `gen-20260424T101530.123-0001-a7b2c912d4f1e380`
   - `target` equals the dispatch target and appears in `nodes[]`
   - `mode ∈ {"fresh", "repair"}`
   - each `nodes[i]` has `label`, `kind`, non-empty `statement`,
@@ -699,6 +725,16 @@ Recommended helper infrastructure:
   - librarian restart once then coordinator exits on rapid re-crash
 - `integration`: child startup grace period does not mark a just-spawned but
   still-initializing librarian as down before the grace window expires
+- `integration`: **startup grace expiry without first heartbeat** —
+  fixture spawns a child that stays alive but never writes its first
+  heartbeat file. After the 30 s grace window, coordinator records
+  `startup_timeout` for that child and triggers the restart policy
+  (§6.4 E2):
+  - librarian: restart once; if the second attempt also fails to
+    heartbeat within 30 s, coordinator exits with code 3
+  - dashboard: restart up to 3× with 30 s backoff; after the third
+    failure, mark `children.dashboard.status = "degraded"` and keep
+    coordinator + librarian running
 - `integration`: startup cleanup removes zombie runtime state from prior crash
   - deletes stale `runtime/jobs/*.json`
   - deletes stale `runtime/state/coordinator.json` and
@@ -869,6 +905,14 @@ Recommended helper infrastructure:
   the missing file.
 - `integration`: `--repair-nodes` is idempotent and only touches
   category E artefacts (no category A/B/C/D/F side effects)
+- `integration`: **all six categories run to completion and
+  aggregate** — fixture that simultaneously violates categories B
+  (a cycle in Kuzu) and D (stored `repair_count` disagrees with
+  event-stream replay). `rethlas linter` runs every category
+  (A→F order), reports violations for both B and D in a single
+  `linter_report.json`, exits with code 5. No "fail-fast" short
+  circuit; user sees every problem at once rather than whack-a-mole
+  fixing them one category at a time.
 - `integration`: linter refuses with live `supervise.lock` unless `--allow-concurrent`
 - `system`: JSON report is written to
   `runtime/state/linter_report.json` and exit code 5 on violations
