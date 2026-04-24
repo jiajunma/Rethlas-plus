@@ -762,6 +762,41 @@ Codex encounters `\ref{lem:foo}` in a proof, the `resolve-reference`
 skill teaches it to `cat nodes/lem_foo.md` (colon→underscore) to see
 the dependency.
 
+**Rendering contract (deterministic, byte-exact).** Startup
+reconciliation (§6.5) and linter category E (§6.6) both check
+`nodes/*.md` by comparing on-disk bytes against the output of
+re-rendering the node from current Kuzu state. For that to work
+without false "drift" every run, rendering must produce **exactly the
+same bytes** for the same input. Rules:
+
+- **Line endings**: Unix `\n` only. No `\r\n`.
+- **Character encoding**: UTF-8, Unicode NFC normalization applied
+  before write.
+- **Trailing newline**: the file ends with exactly one `\n`.
+- **YAML frontmatter key order (fixed)**: `label`, `kind`,
+  `pass_count`, `depends_on`. No other keys.
+- **YAML value formatting**: scalars serialized via PyYAML with
+  `default_flow_style=False`, `allow_unicode=True`,
+  `sort_keys=False`; no comments.
+- **`depends_on` list**: sorted by label in ASCII lexicographic
+  order; deduplicated. Output in YAML block-list form (`- lem:foo`
+  on its own line), **not** flow form.
+- **Body section order (fixed)**: `Source Note.`, `Remark.`,
+  `Statement.`, `Proof.`, each introduced by `**Section Name.**` on
+  its own line followed by a blank line, then the content. Sections
+  with empty content are **omitted entirely** (no `**Remark.**`
+  followed by nothing).
+- **No timestamps, no generation version, no host-specific data** in
+  the rendered file — everything comes from deterministic Kuzu
+  fields.
+
+This rendering function is the canonical one used by librarian's
+per-event re-render, startup reconciliation, linter category E's
+`--repair-nodes`, and `rethlas rebuild`'s final render pass. All four
+must invoke the same function from `librarian/renderer.py` so that
+"drift" is a signal of real disagreement, not a false positive from
+two rendering paths disagreeing on whitespace.
+
 ### 4.3 Access interface: `common/kb/KnowledgeBase`
 
 Python components access the KB through a Protocol, decoupling them from
@@ -894,11 +929,14 @@ CREATE NODE TABLE ProjectionState (
 -- producers, dashboard, linter, and CLI feedback loops.
 CREATE NODE TABLE AppliedEvent (
   event_id STRING PRIMARY KEY,
-  status STRING,      -- "applied" | "apply_failed"
-  reason STRING,      -- "" for applied; failure code otherwise
-  detail STRING,      -- human-readable context for apply_failed rows;
-                      -- "" for applied rows
-  applied_at STRING   -- ISO timestamp when librarian decided
+  status STRING,        -- "applied" | "apply_failed"
+  reason STRING,        -- "" for applied; failure code otherwise
+  detail STRING,        -- human-readable context for apply_failed rows;
+                        -- "" for applied rows
+  event_sha256 STRING,  -- SHA-256 of the event file's bytes at apply time;
+                        -- used by linter category F to detect manual tampering
+                        -- with events/ content (git revert, edit, etc.)
+  applied_at STRING     -- ISO timestamp when librarian decided
 );
 ```
 
@@ -2082,9 +2120,11 @@ for each new event file (sorted globally by (iso_ms, seq, uid)):
             break
 
         semantic_ok, reason, detail = semantic_check(e, current_projection)
+        event_hash = sha256(read_bytes(file))
         if not semantic_ok:
             insert AppliedEvent(e.event_id, status="apply_failed",
                                 reason=reason, detail=detail,
+                                event_sha256=event_hash,
                                 applied_at=now())
             commit transaction
             continue                   # no KB change; terminal for e
@@ -2094,7 +2134,8 @@ for each new event file (sorted globally by (iso_ms, seq, uid)):
             recompute affected hashes (BFS through dependents)
             update pass_count per §5.4
         insert AppliedEvent(e.event_id, status="applied",
-                            reason="", detail="", applied_at=now())
+                            reason="", detail="",
+                            event_sha256=event_hash, applied_at=now())
         commit transaction
 
         re-render nodes/*.md for each affected node (atomic writes)
@@ -2223,6 +2264,19 @@ Read-only audit. Phase I scope:
   with matching content. Passing `--repair-nodes` lets linter rewrite
   divergent files and delete orphaned ones (idempotent re-render).
   Without the flag, linter only reports.
+- **F. `events/` ↔ `AppliedEvent` inventory audit**: for every row
+  in `AppliedEvent`, assert the corresponding event file exists in
+  `events/` and its SHA-256 matches the hash Librarian computed when
+  it applied the event (see below). For every file in `events/`,
+  assert either an `AppliedEvent` row exists with matching content
+  hash, or the file is newer than the most recent librarian startup
+  (legitimately un-applied). Any mismatch is a sign the user
+  manually edited or removed event files (git revert, manual
+  deletion, etc.) and the workspace is no longer consistent. Linter
+  reports; there is no `--repair` — fixing it requires `rethlas
+  rebuild` after the user decides which side is correct. To make
+  this audit possible, librarian records `event_sha256` on each
+  `AppliedEvent` row (schema addition below).
 
 Phase I does NOT implement:
 - Full projection drift detection (replay all events into a fresh KB and
@@ -2374,6 +2428,9 @@ Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
 - Librarian `status = degraded` with non-empty `last_error` (librarian
   saw a canonical event that failed structural validation, i.e.
   workspace corruption per §3.1.6)
+- Targets with 3 consecutive `status = "crashed"` job outcomes —
+  Codex is repeatedly producing unparseable output on that node
+  (§7.5). Labelled `"<kind> unstable on <label>"`.
 
 **Should remain useful even when services are partly down:**
 - If coordinator is down but Kuzu is readable, dashboard still renders the last
@@ -2501,7 +2558,13 @@ does not need to know the derivation rule.
 **Job file lifecycle:**
 
 1. Coordinator creates the file with `status = "starting"` (atomic
-   `.tmp` + rename) just before spawning the wrapper process.
+   `.tmp` + rename) just before spawning the wrapper process. The
+   wrapper subprocess is spawned with the environment variable
+   `RETHLAS_WORKSPACE=<absolute path of workspace root>` and the
+   positional argument `job_id`; the wrapper uses these to locate
+   `knowledge_base/dag.kz`, `runtime/jobs/{job_id}.json`, and
+   `runtime/logs/{job_id}.codex.log` without having to inherit cwd
+   or re-discover the workspace.
 2. Wrapper updates `status` through the enumeration above as it
    progresses. Every update is an atomic `.tmp` + rename.
 3. On clean terminal state (`applied` / `apply_failed`), the **wrapper**
@@ -2540,6 +2603,19 @@ layer. Schema per line:
 drift detection (§5.5.2) or librarian-internal sanity failure. Same
 line format (reuses `schema`, `ts`, `actor`, `target`, `reason`,
 `detail`).
+
+**Line length cap.** Both JSONL files are concurrently appended to
+by multiple producers (user CLI, generator wrapper, verifier wrapper).
+POSIX `O_APPEND` guarantees atomic writes **only for payloads
+strictly smaller than `PIPE_BUF`** (4096 bytes on Linux). To stay
+safely within that bound:
+- `detail` field content is capped at **1024 bytes** (truncate with
+  trailing `...(truncated)` if longer).
+- Each complete JSONL line is capped at **2048 bytes**; if a line
+  would exceed that cap, `detail` is re-truncated until it fits.
+- Writers open with `O_APPEND | O_CLOEXEC` and write in a single
+  `write(2)` call — no Python buffered I/O. This preserves atomicity
+  across concurrent admission writes from different processes.
 
 **Retention (Phase I):** both JSONL files are append-only and
 **never rotated automatically**. `rethlas rebuild` truncates them.
@@ -2702,7 +2778,35 @@ liveness signal.
   final output; wrapper parses and emits events on Codex's behalf
 
 Even if Codex attempts an illegal operation, the sandbox denies it.
-Malformed output is caught by the wrapper's parser and rejected.
+Malformed output is caught by the wrapper's parser and rejected per
+the following rules.
+
+**Malformed-output handling** (generator decoder, verifier verdict
+parser):
+
+1. Wrapper's parser fails to extract the expected structured output
+   from Codex's stdout (missing `<node>` blocks for generator;
+   missing / malformed final verdict JSON for verifier).
+2. Wrapper writes `status = "crashed"` to its
+   `runtime/jobs/{job_id}.json` with `detail` containing a short
+   error ("verdict parse failed: missing 'verdict' key", etc.).
+3. The full stdout stays in `runtime/logs/{job_id}.codex.log` for
+   post-hoc triage — Codex's reasoning trace is often essential for
+   diagnosing why it returned malformed output.
+4. **No automatic retry.** Wrapper exits; the job's target returns to
+   whatever queue it was in (generator or verifier) and will be
+   picked up again on a subsequent coordinator tick under normal
+   scheduling — no special backoff, the target just competes for the
+   next pool slot.
+5. **Instability surfacing**: coordinator keeps a short sliding
+   window (per-target) of recent job outcomes. If a target hits
+   `status = "crashed"` **three times in a row** without an
+   intervening success / apply_failed, dashboard surfaces that
+   target under "Human Attention" as
+   "`<kind> unstable on <label>: N consecutive crashes`". Operator
+   can inspect `runtime/logs/*` for the stdout and decide whether
+   to revise the source, attach a user hint, or adjust the
+   generator / verifier skill.
 
 ---
 
@@ -2715,6 +2819,14 @@ external callers.
 
 Generator's MCP server process is launched by Codex per invocation. Code
 duplication is acceptable at this scale.
+
+**Transport: MCP stdio** (not TCP). Codex launches the MCP server as
+a subprocess and communicates over its stdin/stdout. Rationale: with
+`generator_workers > 1` there may be multiple generator workers and
+therefore multiple MCP server processes alive concurrently; stdio
+transport requires no port allocation and has zero chance of port
+clashes. Configure in `generator/.codex/config.toml` as a stdio MCP
+server pointing at `./mcp/server.py`.
 
 ### 8.1 Generator-only tools
 
@@ -2795,11 +2907,13 @@ begin Kuzu transaction:
   run structural_check(e):
     on failure: halt projection; workspace corruption (§6.5)
 
+  event_hash = sha256(read_bytes(file))
   run semantic_check(e, current_projection):
     on failure (label_conflict / cycle / ref_missing /
                 hint_target_missing / hash_mismatch / ...):
       insert AppliedEvent(event_id, status="apply_failed",
                           reason=<code>, detail=<context>,
+                          event_sha256=event_hash,
                           applied_at=now())
       commit; done with e (terminal)
 
@@ -2808,7 +2922,8 @@ begin Kuzu transaction:
   recompute affected nodes' hashes (BFS through dependents)
   update pass_count per §5.4
   insert AppliedEvent(event_id, status="applied",
-                      reason="", detail="", applied_at=now())
+                      reason="", detail="",
+                      event_sha256=event_hash, applied_at=now())
 commit
 
 re-render nodes/*.md for each affected node (atomic writes)
@@ -2955,6 +3070,30 @@ Librarian reads all `events/` and rebuilds `dag.kz/` and `nodes/`.
 New event types, new fields, new producer kinds are append-only changes.
 Existing events stay valid. `rethlas rebuild` always uses current
 projection logic.
+
+### 11.4 Git collaboration (multi-clone)
+
+Phase I assumes the active scheduler — coordinator + children — runs
+on a **single machine against a single clone**. `events/` is
+git-tracked so that multiple people can share truth offline through
+commits, but the runtime is **not** multi-master:
+
+- Operator A commits new events and pushes.
+- Operator B `git pull` brings new event files into `events/`.
+- If B's `rethlas supervise` is running during the pull, B's
+  librarian's watchdog will see new files and try to apply them.
+  Events that were committed by A on A's machine carry A's wall
+  clock in their `iso_ms`; B's librarian applies them in sorted
+  order and everything works **as long as A and B did not both
+  author conflicting events while disconnected** (label collision,
+  cycle-closing edges, etc.).
+- For cleanness, Phase I recommends: when pulling in externally
+  committed events, stop B's supervise first, run `rethlas rebuild`
+  on the merged `events/`, then restart supervise. Rebuild is
+  idempotent (§6.5 / §11.2) so this is safe to do routinely.
+- Phase II may add native multi-writer conflict resolution. In
+  Phase I, treating the event log as "shared via git pull, apply via
+  rebuild" keeps the operational model simple.
 
 ---
 
@@ -3322,3 +3461,41 @@ See `PHASE1.md` for the concrete task list.
   - **B6**: §2.3 adds an exit-code table shared across all CLIs
     (0 success, 1 generic, 2 lock/uninitialized, 3 critical child
     crash loop, 4 config error, 5 linter violations, 6 init refused).
+- **2026-04-24 (C1–C7 review)**:
+  - **C1**: new linter category **F** — `events/` ↔ `AppliedEvent`
+    inventory audit detects manual edits / deletions / git reverts
+    against `events/` content. `AppliedEvent` gains a
+    `event_sha256 STRING` column (librarian records the file hash
+    at apply time). No auto-repair; fixing requires `rethlas
+    rebuild` after operator decides which side is correct.
+  - **C2**: §4.2 adds a **rendering contract** for `nodes/*.md`:
+    Unix `\n`, UTF-8 NFC, fixed YAML key order, `depends_on`
+    sorted, fixed section order, no timestamps / host data.
+    Rendering is byte-deterministic so startup reconciliation and
+    linter category E use content-equality checks without false
+    positives. All four rendering paths (per-event, startup,
+    `--repair-nodes`, rebuild) invoke the same
+    `librarian/renderer.py` function.
+  - **C3**: §7.5 pins malformed-output handling — wrapper writes
+    `status = "crashed"` with `detail = "verdict parse failed: ..."`;
+    no auto-retry; coordinator surfaces targets that hit 3
+    consecutive `crashed` outcomes as `"<kind> unstable on
+    <label>"` under Dashboard → Human Attention.
+  - **C4**: coordinator passes workspace path to wrappers via
+    `RETHLAS_WORKSPACE` env var; wrappers locate Kuzu / runtime
+    files without relying on inherited cwd (§6.7.1 job lifecycle
+    step 1).
+  - **C5**: `rejected_writes.jsonl` / `drift_alerts.jsonl` enforce
+    line-length caps (`detail` ≤ 1024 B, line ≤ 2048 B, truncated
+    with `...(truncated)`) plus `O_APPEND | O_CLOEXEC` single-write
+    discipline to guarantee atomic concurrent append under POSIX
+    `PIPE_BUF`.
+  - **C6**: §8 pins **MCP stdio transport** (not TCP) for
+    generator's MCP server — with `generator_workers > 1` there are
+    multiple concurrent MCP server processes, and stdio transport
+    eliminates port-clash scenarios entirely.
+  - **C7**: new §11.4 documents the git-collaboration operational
+    model — Phase I assumes single-machine-single-clone runtime;
+    bringing in externally committed events from `git pull` should
+    be followed by `rethlas rebuild` for cleanliness. Multi-writer
+    native conflict resolution is Phase II.

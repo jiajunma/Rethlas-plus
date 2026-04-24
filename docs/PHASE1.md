@@ -495,6 +495,15 @@ healthy / degraded / down badges.
   fields; for every `nodes/*.md` file, assert the label is present
   in Kuzu at `pass_count >= 1`. `--repair-nodes` flag rewrites
   divergent files and deletes orphaned ones.
+- **F**: `events/` ↔ `AppliedEvent` inventory — for every row in
+  `AppliedEvent`, assert the corresponding event file exists in
+  `events/` and its SHA-256 matches `AppliedEvent.event_sha256`; for
+  every file in `events/`, assert an `AppliedEvent` row exists with
+  matching hash (or the file is newer than the most recent
+  librarian startup and is thus legitimately un-applied). Any
+  mismatch indicates `events/` has been edited / deleted / reverted
+  outside Rethlas; reported but no auto-repair (requires `rethlas
+  rebuild`).
 
 **M8.2** `linter/main.py` — one-shot run
 - Refuses if `runtime/locks/supervise.lock` is held (per ARCHITECTURE
