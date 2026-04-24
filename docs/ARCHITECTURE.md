@@ -17,7 +17,7 @@ independent **workspaces**; each workspace represents one math project.
 
 **In scope (Phase I):**
 
-- Event-sourced knowledge base with append-only events as single truth
+- Event-sourced knowledge base with append-only knowledge events as single truth
 - Codex-backed generator and verifier agents
 - Kuzu-backed DAG projection for queries
 - Per-node markdown views for Codex browsing
@@ -72,7 +72,7 @@ Rethlas/
 ├── common/              # shared libraries
 │   ├── kb/              # KnowledgeBase interface + Kuzu backend
 │   ├── events/          # event read/write/parse
-│   ├── runtime/         # codex_runner + heartbeat
+│   ├── runtime/         # codex_runner + log-mtime timeout
 │   └── config/          # rethlas.toml loader
 ├── cli/                 # rethlas command entry points
 ├── producers.toml       # producer registry
@@ -87,15 +87,17 @@ Rethlas/
 ```
 <workspace>/
 ├── rethlas.toml                    # workspace config
-├── events/                         # ⭐ only truth, append-only, git-tracked
-│   └── {date}/*.{md,json}
+├── events/                         # ⭐ knowledge truth only, append-only, git-tracked
+│   └── {date}/*.json
 ├── knowledge_base/                 # derived, gitignored
 │   ├── dag.kz/                     # Kuzu graph DB (Python components use this)
-│   └── nodes/                      # per-node markdown (Codex reads this)
+│   └── nodes/                      # verified notes only (Codex reads this)
 │       └── {kind_prefix}_{label}.md
 └── runtime/                        # ephemeral, gitignored
-    └── logs/
-        └── {dispatch_event_id}.codex.log
+    ├── jobs/
+    ├── logs/
+    │   └── {job_id}.codex.log
+    └── state/
 ```
 
 Workspace `.gitignore`:
@@ -124,40 +126,46 @@ Default workspace is cwd. `--workspace <path>` overrides.
 
 ## 3. Truth Layer: `events/`
 
-Events are the **only** source of truth. Every state change is an event file.
+`events/` contains only **knowledge truth**. Runtime orchestration, process
+state, logs, retries, and job bookkeeping live under `runtime/` and are not
+part of the recoverable mathematical truth.
+
 All derived artifacts (Kuzu DB, nodes/*.md files) can be reconstructed from
-the event stream.
+the truth event stream alone.
 
 ### 3.1 Core invariants
 
-1. **Append-only.** Once a file is committed to its canonical path, it is
-   never modified, moved, or deleted.
+1. **Append-only.** Once a truth event file is committed to its canonical
+   path, it is never modified, moved, or deleted.
 2. **Self-contained.** Each event file contains every piece of information
    needed to interpret it. Event bodies inline content directly. No external
    blob storage.
 3. **Events may reference other events** by `event_id`. Since the referenced
    event is in `events/`, truth stays self-contained.
-4. **Atomic publication.** Write `.tmp` + rename atomically. No partial
-   events visible.
+4. **Atomic publication.** Truth publication is atomic. For single-event
+   writes this means `.tmp` + rename. For generator multi-event output this
+   means whole-batch atomic publish. No partial truth is visible.
+5. **Only knowledge actors write truth events.** In Phase I, only
+   `user`, `generator`, and `verifier` write to `events/`.
 
 ### 3.2 File naming
 
 ```
-{iso_ms}--{event_type}--{target_or_none}--{actor}--{uid}.{md|json}
+{iso_ms}--{event_type}--{target_or_none}--{actor}--{seq}--{uid}.json
 ```
 
 - **`iso_ms`**: compact ISO with millisecond precision (`20260423T143015.123`)
-- **`event_type`**: dotted name (`user.definition_added`, `verifier.run_completed`)
+- **`event_type`**: dotted name (`user.node_added`, `verifier.run_completed`)
 - **`target_or_none`**: DAG node label with `:` escaped to `_`, or `none`
 - **`actor`**: producer identifier `{kind}:{instance}` with `:` escaped to `_`
-- **`uid`**: 8 hex characters for same-millisecond collision safety
-- **Extension**: `.md` for events with markdown body, `.json` for purely structured
+- **`seq`**: zero-padded monotone sequence within the producer's same-millisecond emission batch
+- **`uid`**: 8 hex characters for uniqueness and filename ↔ event_id consistency
+- **Extension**: `.json` only in Phase I
 
 Examples:
 ```
-20260423T143015.123--user.definition_added--def_primary_object--user_alice--a7b2c912.md
-20260423T144522.999--verifier.run_completed--lem_key_step--verifier_codex-gpt-5.4--1f8e22c0.json
-20260423T150000.000--coordinator.phase_changed--none--coordinator_local--77bb3344.json
+20260423T143015.123--user.node_added--def_primary_object--user_alice--0001--a7b2c912.json
+20260423T144522.999--verifier.run_completed--lem_block_form_for_x0_plus_u--verifier_codex-gpt-5.4--0001--1f8e22c0.json
 ```
 
 Directories sharded by date: `events/{YYYY-MM-DD}/`.
@@ -167,35 +175,21 @@ Linter checks filename-body consistency.
 
 ### 3.3 Event formats
 
-**`.md` (YAML frontmatter + markdown body)** — used when event carries
-substantial text (statements, proofs):
-
-```markdown
----
-event_id: 20260423T143015.123
-type: user.definition_added
-actor: user:alice
-target: def:primary_object
-depends_on: [def:base_structure, def:supporting_concept]
-kind: definition
----
-
-A *primary object* is ...
-```
-
-**`.json`** — used for purely structured events (verdicts, dispatches):
+**All truth events use `.json` in Phase I.** Human-readable markdown views
+belong to derived `knowledge_base/nodes/*.md`, not to `events/`.
 
 ```json
 {
-  "event_id": "20260423T144522.999",
-  "type": "verifier.run_completed",
-  "actor": "verifier:codex-gpt-5.4",
-  "target": "lem:key_step",
-  "parent_event_id": "20260423T143830.111",
+  "event_id": "20260423T143015.123-0001-a7b2c912",
+  "ts": "2026-04-23T14:30:15.123+08:00",
+  "type": "user.node_added",
+  "actor": "user:alice",
+  "target": "def:primary_object",
   "payload": {
-    "verification_hash": "sha256:...",
-    "verdict": "accepted",
-    "report": { ... }
+    "kind": "definition",
+    "statement": "A primary object is ...",
+    "remark": "Local foundational definition.",
+    "source_note": ""
   }
 }
 ```
@@ -204,20 +198,223 @@ A *primary object* is ...
 
 | Field            | Required | Description                                  |
 | ---------------- | -------- | -------------------------------------------- |
-| `event_id`       | ✓        | ISO + ms timestamp, unique                   |
+| `event_id`       | ✓        | `{iso_ms}-{seq}-{uid}` unique event identifier |
 | `type`           | ✓        | `{producer_kind}.{action}` dotted name       |
 | `actor`          | ✓        | `{kind}:{instance}` string                   |
 | `target`         | —        | DAG node label if applicable                 |
-| `parent_event_id`| —        | Causal predecessor                           |
-| `ts`             | ✓        | ISO timestamp (matches `event_id` prefix)    |
+| `parent_event_id`| —        | Optional direct causal predecessor           |
+| `ts`             | ✓        | Full ISO timestamp (matches `event_id` prefix)|
 | `cost`           | —        | Per-event resource consumption, see §3.6     |
-| `payload`        | varies   | Structured data or markdown body             |
+| `payload`        | ✓        | Structured event payload                     |
+
+### 3.5 Producer openness
+
+Truth-event producers are an intentionally small set in Phase I. New
+producers are possible in later phases, but Phase I truth events are limited
+to `user`, `generator`, and `verifier`. The projector rejects truth events
+whose `actor` / `type` don't match registered patterns.
+
+Phase I truth producers:
+- `user:<name>` — human author
+- `generator:codex-gpt-5.4-xhigh` — Codex generator
+- `verifier:codex-gpt-5.4` — Codex verifier
+
+### 3.5.1 Phase I truth event types
+
+Phase I truth events are intentionally small and unified:
+
+- `user.node_added`
+- `user.node_revised`
+- `user.hint_attached`
+- `generator.batch_committed`
+- `verifier.run_completed`
+
+`user.node_added` and `user.node_revised` carry:
+
+```json
+{
+  "kind": "definition | external_theorem | lemma | proposition | theorem",
+  "statement": "...",
+  "proof": "...",
+  "remark": "...",
+  "source_note": "..."
+}
+```
+
+For `definition` and `external_theorem`, `proof` is normally empty. For
+`lemma` / `proposition` / `theorem`, users may add or revise a node with a
+proof already present; that enters the verifier queue at `pass_count = 0`
+rather than generator queue at `pass_count = -1`.
+
+`user.node_added` and `user.node_revised` both carry the node's complete
+authored state. Neither is a patch event.
+
+For both add and revise, the payload must provide:
+- `kind`
+- `statement`
+- `proof`
+- `remark`
+- `source_note`
+
+Omitting one of these fields is invalid in Phase I. This is a full-state
+schema requirement, not a non-empty-content requirement: `proof` may be the
+empty string when the node currently has no proof. `remark` and `source_note`
+may be empty strings. `statement` may never be empty.
+
+Special case: for `external_theorem`, `source_note` must be non-empty.
+
+Hint events carry:
+
+```json
+{
+  "hint": "...",
+  "remark": "..."
+}
+```
+
+`user.hint_attached` is also full-schema in Phase I: both `hint` and `remark`
+must be present. `remark` may be empty, but `hint` may not be empty.
+
+Verdict events carry:
+
+```json
+{
+  "verification_hash": "sha256:...",
+  "verdict": "accepted | gap | critical",
+  "verification_report": {
+    "summary": "...",
+    "checked_items": [],
+    "gaps": [],
+    "critical_errors": [],
+    "external_reference_checks": []
+  },
+  "repair_hint": "..."
+}
+```
+
+`verifier.run_completed` is full-schema in Phase I: `verification_hash`,
+`verdict`, `verification_report`, and `repair_hint` must all be present.
+`repair_hint` may be empty. `verification_report` must be present even when
+the verdict is `accepted`.
+
+`verification_report` has a fixed minimum structure in Phase I:
+- `summary`: string
+- `checked_items`: array
+- `gaps`: array
+- `critical_errors`: array
+- `external_reference_checks`: array
+
+Expected consistency:
+- `accepted` ⇒ `gaps = []` and `critical_errors = []`
+- `gap` ⇒ `gaps` non-empty
+- `critical` ⇒ `critical_errors` non-empty
+
+Generator batch-commit events carry:
+
+```json
+{
+  "attempt_id": "gen-20260424T101530.123-0001-a7b2c912",
+  "target": "thm:maximal_orbits_equal_open_orbits",
+  "mode": "fresh | repair",
+  "nodes": [
+    {
+      "label": "lem:block_form_for_x0_plus_u",
+      "kind": "lemma",
+      "statement": "...",
+      "proof": "...",
+      "remark": "...",
+      "source_note": "..."
+    },
+    {
+      "label": "thm:maximal_orbits_equal_open_orbits",
+      "kind": "theorem",
+      "statement": "...",
+      "proof": "...",
+      "remark": "...",
+      "source_note": "..."
+    }
+  ]
+}
+```
+
+Each `nodes[]` entry is the node's full post-commit state, not a patch.
+Librarian diffs the committed batch against current KB state to determine
+whether each node is new, revised, or proof-only changed.
+
+Each `nodes[]` entry must provide the full authored node schema:
+- `label`
+- `kind`
+- `statement`
+- `proof`
+- `remark`
+- `source_note`
+
+Field presence is mandatory. `statement` must be non-empty. `proof`,
+`remark`, and `source_note` may be empty strings, except that
+`kind=external_theorem` still requires non-empty `source_note`.
+
+The batch-level `target` field must equal the generator run's primary target
+label, and that label must appear in `nodes[]`. A generator run may emit
+auxiliary nodes alongside the target, but it may not commit a batch that
+omits the target node entirely.
+
+Within one `generator.batch_committed`, each label may appear at most once in
+`nodes[]`. Duplicate labels inside the same batch are invalid.
+
+Batch-local forward references are allowed. A node in `nodes[]` may reference
+another node that appears later in the same batch, as long as the referenced
+label also appears exactly once in that batch and the fully combined batch
+graph remains acyclic.
+
+Self-reference is always invalid. A node may not reference its own label in
+its `statement` or `proof`, whether directly or via same-batch emission.
+This rule applies equally to user-authored node events and generator batches.
+
+### 3.5.2 Label rules
+
+Node labels are part of the long-lived knowledge interface. They must be
+globally descriptive, not local placeholders.
+
+Required form:
+
+```text
+{prefix}:{slug}
+```
+
+Where:
+- `prefix ∈ {def, ext, lem, prop, thm}`
+- `slug ∈ [a-z0-9_]+`
+
+Rules:
+- Label should roughly describe the mathematical content or role of the node
+- Label must remain meaningful when read in isolation later
+- Local / positional names are invalid
+
+Invalid examples:
+- `thm:main`
+- `lem:helper`
+- `prop:claim1`
+- `lem:key_step`
+- `def:object`
+
+Valid style examples:
+- `def:primary_object`
+- `ext:barbasch_signed_tableau_rule`
+- `lem:block_form_for_x0_plus_u`
+- `prop:symplectic_sign_pair_for_even_block`
+- `thm:maximal_orbits_equal_open_orbits`
+
+Librarian validates label syntax and rejects placeholder-style labels in
+Phase I.
 
 ### 3.6 Per-event cost tracking
 
-Events that consume LLM resources (primarily `generator.attempt_produced`,
-`verifier.run_stage_completed`, `verifier.run_completed`) record
-consumption inline in the event frontmatter or JSON:
+Events that consume LLM resources may record consumption inline in the truth
+event when that cost can be attached to an actual knowledge update or
+verifier judgment. In Phase I:
+
+- `verifier.run_completed` carries the full verifier run cost when available
+- generator run cost is recorded once on `generator.batch_committed`
 
 ```yaml
 cost:
@@ -228,24 +425,45 @@ cost:
   duration_seconds: 890
 ```
 
-Dashboard / linter aggregate these by querying the event stream. There is
-no separate cost-tracking store. No budget enforcement in Phase I — just
+Dashboard / linter aggregate these by querying the event stream. No
+separate cost-tracking store. No budget enforcement in Phase I — just
 observability.
 
-### 3.5 Producer openness
+### 3.6.2 Generator batch atomicity
 
-Producers are an open set. `actor` and `type` are free strings. New
-producers register in `producers.toml`. The projector rejects events whose
-`actor` / `type` don't match registered patterns (unless in permissive
-mode).
+One generator run is one generator truth commit. A single
+`generator.batch_committed` event carries the full batch of node updates and
+must be published atomically.
 
-Phase I producers:
-- `user:<name>` — human author
-- `generator:codex-gpt-5.4-xhigh` — Codex generator
-- `verifier:codex-gpt-5.4` — Codex verifier
-- `coordinator:local` — scheduling
-- `librarian:local` — projection
-- `linter:local` — audit
+Rules:
+
+1. Generator stages the full batch outside canonical `events/` visibility.
+2. Only once the batch is complete does the wrapper atomically publish the
+   single `generator.batch_committed` truth event into `events/{date}/`.
+3. Librarian must never observe a partially published generator batch.
+4. Each successful generator run emits exactly one `generator.batch_committed`
+   truth event carrying:
+   - `attempt_id`
+   - target label
+   - mode (`fresh` / `repair`)
+   - full node batch
+   - optional batch-level `cost`
+
+This prevents half-attempt truth from entering the KB and gives generator cost
+a single stable truth anchor.
+
+### 3.6.1 Stable event ordering
+
+Librarian replay order must be stable and deterministic. Sorting is by:
+
+1. `iso_ms`
+2. `seq`
+3. `uid`
+
+`uid` is retained for uniqueness, but it has no primary ordering meaning.
+Within a same-millisecond producer batch, `seq` is the canonical order. This
+is especially important for generator-emitted statement/proof pairs and
+topologically ordered multi-node output.
 
 ---
 
@@ -259,6 +477,11 @@ librarian:
 
 Both are gitignored and rebuildable.
 
+**Hard invariant:** the dependency graph is a DAG. Cycles are never allowed.
+Any authored truth change that would introduce a dependency cycle is rejected
+by librarian and does not change KB state. This applies to both user-authored
+node events and generator batch commits.
+
 ### 4.1 KuzuDB
 
 - Embedded (no server process)
@@ -271,14 +494,60 @@ Both are gitignored and rebuildable.
 ### 4.2 Per-node markdown files
 
 `knowledge_base/nodes/{kind_prefix}_{label_sanitized}.md`. Flat directory.
-Kind prefixes: `def_`, `xthm_`, `lem_`, `thm_`, `prop_`, `problem_`.
+Filename convention: replace `:` with `_` in labels. Examples:
+- `def:primary_object` → `def_primary_object.md`
+- `lem:block_form_for_x0_plus_u` → `lem_block_form_for_x0_plus_u.md`
+- `thm:maximal_orbits_equal_open_orbits` → `thm_maximal_orbits_equal_open_orbits.md`
 
-Contents: label, kind, statement, current proof, dependencies, verdict
-history — everything humans or Codex want to see about the node in one
-file.
+**Only nodes with `pass_count >= 1` are written to `nodes/`**.
+Unverified (count=0) or failed (count=-1) nodes do NOT appear in this
+directory. Librarian deletes the md file when a node transitions from
+count ≥ 1 back to count < 1 (e.g., due to hash change or wrong verdict).
 
-Codex browses via bash (`ls`, `cat`, `grep`, `find`) inside this directory
-with `cwd = nodes/` and `--sandbox read-only`.
+`nodes/` is the only Codex-visible knowledge view in Phase I. Both generator
+and verifier read only these verified notes.
+
+**Format: YAML frontmatter + markdown body:**
+
+```markdown
+---
+label: lem:block_form_for_x0_plus_u
+kind: lemma
+pass_count: 2
+depends_on: [def:primary_object, lem:normal_form_for_x0]
+---
+
+**Source Note.** Barbasch, Section 3, Theorem 3.4, pp. 45-47.
+
+**Remark.** Imported for the symplectic branch.
+
+**Statement.** Let $X$ be a primary object ...
+
+**Proof.** By \ref{lem:normal_form_for_x0}, ... $\square$
+```
+
+**YAML header fields:**
+- `label`: the canonical label
+- `kind`: definition / external_theorem / lemma / theorem / proposition
+- `pass_count`: current integer count (always ≥ 1 for files in nodes/)
+- `depends_on`: list of dependency labels, derived from explicit `\ref{...}` occurrences
+
+**Semantics of `pass_count`:**
+- `pass_count = 0` is impossible in `nodes/*.md` (filter excludes them)
+- `pass_count ≥ 1` means the node has been independently verified at
+  least once
+- Higher `pass_count` means more confidence (more independent verifier
+  passes against the current hash)
+- Codex uses the value directly when deciding how much to trust a dep
+
+No separate `verified` field — `pass_count` alone conveys both binary
+(verified/not) and scalar (confidence level) information.
+
+**Codex reads `nodes/`** via bash (`ls`, `cat`, `grep`, `find`) inside
+this directory with `cwd = nodes/` and `--sandbox read-only`. When
+Codex encounters `\ref{lem:foo}` in a proof, the `resolve-reference`
+skill teaches it to `cat nodes/lem_foo.md` (colon→underscore) to see
+the dependency.
 
 ### 4.3 Access interface: `common/kb/KnowledgeBase`
 
@@ -289,7 +558,7 @@ the backend.
 class KnowledgeBase(Protocol):
     # reads
     def get_node(self, label: str) -> Node | None: ...
-    def list_nodes(self, *, kind=None, goal=None, retracted=None) -> list[Node]: ...
+    def list_nodes(self, *, kind=None) -> list[Node]: ...
     def direct_dependencies(self, label: str) -> list[str]: ...
     def dependents(self, label: str) -> list[str]: ...
     def dependency_closure(self, label: str) -> list[Node]: ...
@@ -310,35 +579,103 @@ Only Python components use this. Codex does not import KB code.
 
 ### 5.1 Kinds
 
-| Kind | Has proof? | User-attested? | Initial verification_count |
+| Kind | Generator can create? | Initial count | Fix on wrong verdict |
 | --- | --- | --- | --- |
-| `definition` | no | yes | **1** |
-| `external_theorem` | no | yes | **1** |
-| `open_problem` | yes | no | 0 |
-| `lemma` | yes | no | 0 |
-| `theorem` | yes | no | 0 |
-| `proposition` | yes | no | 0 |
+| `definition` | ✓ | **0** (needs verify) | user (primary); generator as side-effect of a proof-requiring repair |
+| `external_theorem` | ✗ (user only) | **0** | user only |
+| `lemma` | ✓ | **-1** | generator (dispatched auto) |
+| `theorem` | ✓ | **-1** | generator |
+| `proposition` | ✓ | **-1** | generator |
+
+**All five kinds share the same Node schema** (statement + proof +
+hashes + count). They differ in:
+
+- **Who can create them** (generator or user only)
+- **Whether proof is expected** (empty for axioms, content for
+  proof-requiring)
+- **How verifier evaluates them** (same 3-stage pipeline but stages 2-3
+  adapt based on kind)
+- **Who can fix them when wrong** (generator for proof-requiring, user
+  for definition / external_theorem)
+
+`definition` and `external_theorem` are **both** "no-proof" kinds but
+they are structurally **distinct** in meaning:
+- `definition`: a concept introduced locally (user or generator
+  authored); verifier checks well-formedness
+- `external_theorem`: a result imported from external literature
+  (user-only, requires citation); verifier checks the import's
+  references resolve
+
+All 5 kinds run the same DESIRED=3 audit cycle.
+
+`kind` is immutable after node creation. Revisions replace the node's full
+authored state for the same label, but must preserve `kind`. They may change
+statement, proof, `remark`, and `source_note`, but never `kind`. If a different
+classification is desired, create a new node under a new label.
+
+No "goal" concept in the schema. What the user considers a goal is just
+a `kind=theorem` node; dashboard / user distinguishes via naming.
 
 ### 5.2 Kuzu Node table
 
 ```cypher
 CREATE NODE TABLE Node (
   label STRING PRIMARY KEY,
-  kind STRING,
-  goal BOOLEAN DEFAULT false,
-  statement_event_id STRING,
-  current_proof_event_id STRING,      -- NULL for axioms
+  kind STRING,                         -- definition | external_theorem | lemma | theorem | proposition
+  statement STRING,                    -- always non-empty
+  proof STRING,                        -- empty for axioms or unproved
   statement_hash STRING,
   verification_hash STRING,
-  verification_count INT DEFAULT 0,   -- signed: -1 / 0 / positive
-  retracted BOOLEAN DEFAULT false,
-  disproven BOOLEAN DEFAULT false,
-  disproved_by STRING,                -- label of counter-example when disproven
-  updated_at STRING
+  pass_count INT DEFAULT -1,   -- -1 / 0 / positive
+  verification_report STRING,          -- latest verifier report (stage details + verdict)
+  repair_hint STRING,                  -- accumulated hints for next repair attempt
+  remark STRING,
+  source_note STRING
 );
 
-CREATE REL TABLE DependsOn (FROM Node TO Node, event_id STRING);
+CREATE REL TABLE DependsOn (FROM Node TO Node);
+
+-- projection progress (librarian's water mark)
+CREATE NODE TABLE ProjectionState (
+  key STRING PRIMARY KEY,
+  value STRING
+);
 ```
+
+**Node contents** (logical schema):
+
+- **`statement` / `proof`**: the current text for this node. `statement` is
+  always non-empty. `proof` may be empty for axioms or for proof-requiring
+  nodes that currently have no proof.
+- **Hashes**: for Merkle propagation and verdict matching.
+- **`pass_count`**: `-1` means needs generator; `0` means needs
+  verifier; `≥ 1` means verified that many times.
+- **`verification_report`**: set by librarian whenever a
+  `verifier.run_completed` event arrives — contains the latest
+  three-stage structured report (what the verifier found). Generator
+  reads this during repair.
+- **`repair_hint`**: current aggregated hints for the next repair attempt.
+  Sources:
+  - Extracted from verifier's report on wrong verdict (e.g., "step 5 has a gap")
+  - Set by `user.hint_attached` events
+  - Cleared when generator emits a new statement/proof for the node
+- **`remark`**: free-form human-facing note; field always present, value may be empty
+- **`source_note`**: source/citation note; field always present, value may be
+  empty except for `external_theorem`, where it is required to be non-empty
+
+`DependsOn` is derived and maintained by librarian from explicit `\ref{label}`
+occurrences in the current `statement` and `proof`. It is not authored
+directly in truth events.
+
+**Canonical dependency syntax:** only `\ref{label}` creates a formal
+dependency edge. Mere textual mention does not.
+
+Phase I does **not** attempt semantic duplicate detection or automatic node
+merging. Node identity is the canonical `label`.
+
+`nodes/{kind_prefix}_{label_sanitized}.md` renders the node plus derived
+dependency list into one
+human- and Codex-readable file.
 
 **Not stored:**
 - `status` enum
@@ -348,23 +685,50 @@ CREATE REL TABLE DependsOn (FROM Node TO Node, event_id STRING);
 
 ### 5.3 Merkle hashes
 
-Two recursive hashes capture node identity:
+Two recursive hashes capture node identity. The Merkle chain uses **only
+`statement_hash` of deps** — never `verification_hash` of deps. Hash inputs
+must use canonical JSON encoding (UTF-8, sorted keys, compact separators,
+newline-normalized text).
 
 ```
 statement_hash(n) = sha256(
-    n.statement
-    + ";".join(dep.statement_hash for dep in sorted(n.depends_on))
+    canonical_json({
+      "schema": "rethlas-statement-v1",
+      "label": n.label,
+      "kind": n.kind,
+      "statement": n.statement,
+      "depends_on": [
+        {"label": dep.label, "statement_hash": dep.statement_hash}
+        for dep in sorted(n.depends_on, key=label)
+      ]
+    })
 )
 
 verification_hash(n) = sha256(
-    statement_hash(n)
-    + (n.proof or "")
+    canonical_json({
+      "schema": "rethlas-verification-v1",
+      "statement_hash": statement_hash(n),
+      "proof": (n.proof or "")
+    })
 )
 ```
 
-- `statement_hash` is what deps transmit upward: **only statement, not proof**
-- `verification_hash` adds the local proof on top of `statement_hash`
-- For axioms (`definition` / `external_theorem`): `verification_hash == statement_hash` (no proof)
+**Why only `dep.statement_hash` (not `verification_hash`) propagates:**
+
+My proof references dep by `\ref{dep_label}` — I use dep's statement,
+not its proof content. If dep's proof changes (same statement, new
+proof), my proof is unaffected. So dep's `verification_hash` changes
+must NOT invalidate my verdict. Only dep's `statement_hash` change
+should cascade.
+
+**Consequences:**
+- Change own statement → both own hashes change → `statement_hash` cascades to dependents
+- Change own proof → only own `verification_hash` changes → NO cascade
+- Dep changes proof → dep's `statement_hash` unchanged → my hashes unchanged → my verdicts remain valid
+- Dep changes statement → dep's `statement_hash` changes → my `statement_hash` changes (via this Merkle rule) → my `verification_hash` changes → my verdicts become stale
+
+For axioms (`definition` / `external_theorem`): no proof, so
+`verification_hash == statement_hash`.
 
 **Propagation rule:** When any node's `statement_hash` changes, all
 dependents' `statement_hash` recompute (BFS up dependents). Each affected
@@ -374,82 +738,178 @@ node's `verification_hash` also recomputes.
 unchanged) does NOT invalidate my verdict — dep's `statement_hash` didn't
 change, so my `statement_hash` and `verification_hash` didn't change.
 
-### 5.4 `verification_count` semantics
+### 5.4 `pass_count` semantics
 
 Signed integer. Librarian maintains per event.
 
 | Value | Meaning |
 | --- | --- |
-| `-1` | Verifier judged current hash as wrong |
-| `0` | Has proof, awaiting first successful verification (or just post-repair) |
-| `>= 1` | Verified N times (independent runs) against current hash |
+| `-1` | Needs generator: either no proof yet, or latest verdict for current hash was `gap` / `critical` |
+| `0` | Has proof; no accepted verdict for current hash yet |
+| `>= 1` | Accepted N times against current hash |
+
+Higher `pass_count` = more confidence.
 
 **Update rules:**
 
-| Event | Effect |
+| Event | Effect on target Node |
 | --- | --- |
-| `user.definition_added` | Create node, `count = 1` |
-| `user.external_theorem_added` | Create node, `count = 1` |
-| `user.open_problem_created` | Create node, `count = 0` |
-| `generator.node_statement_added` (for lemma/etc. without proof yet) | Create node, `count = 0` |
-| `generator.node_proof_produced` | Update proof; hash changes; `count = 0` (for proof-requiring kinds; axioms unaffected) |
-| `user.definition_revised` | Update statement; hash changes; propagate to dependents (their hash changes → `count = 0`) |
-| `verifier.run_completed(verdict=accepted, hash matches)` | `count += 1` |
-| `verifier.run_completed(verdict=wrong, hash matches)` | `count = -1` |
+| `user.node_added(kind=definition)` | Create kind=definition, `count = 0` |
+| `user.node_added(kind=external_theorem)` | Create kind=external_theorem, `count = 0` |
+| `user.node_added(kind ∈ {lemma, proposition, theorem})` with empty proof | Create node, `count = -1` |
+| `user.node_added(kind ∈ {lemma, proposition, theorem})` with non-empty proof | Create node, `count = 0` |
+| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `count = 0` if proof non-empty else `-1`; Merkle propagates to dependents when statement changes |
+| `generator.batch_committed` | Apply the committed node batch atomically; for each included node, create or replace current statement/proof/metadata, recompute hashes, and set `count = 0` if proof non-empty else `-1` |
+| `verifier.run_completed(accepted, hash matches)` | `count += 1`; set `verification_report` |
+| `verifier.run_completed(gap, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (local fix suggestions) |
+| `verifier.run_completed(critical, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (may need statement rewrite) |
 | `verifier.run_completed(hash mismatch)` | Ignored (stale verdict) |
-| Any event causing `verification_hash` change on proof-requiring node | `count = 0` (takes precedence over accepted / wrong semantics) |
-| `user.node_retracted` | `retracted = true` |
-| `user.theorem_disproven(target=X, by=Y)` or `generator.theorem_disproven(...)` | See §5.6 Counter-examples |
+| `user.hint_attached(target=X)` | Append to `X.repair_hint` |
 
-### 5.6 Counter-examples and disproven theorems
+### 5.5 Auditability and safety checks
 
-A theorem can be proven **wrong in statement** (not just its proof). When
-this happens, a **counter-example** (another theorem whose statement
-contradicts the target) is added to the KB and linked to the disproven
-target.
+#### 5.5.1 Auditability of `pass_count`
 
-**Node fields:**
-- `disproven` BOOLEAN DEFAULT false — set when a counter-example invalidates
-  the theorem
-- `disproved_by` STRING — label of the counter-example theorem
+`pass_count` stored in Node is a cache of a value that can be
+**independently recomputed from the event stream**:
 
-**Event:** `user.theorem_disproven(target=X, by=Y)` (or
-`generator.theorem_disproven(...)` emitted by generator after failed
-repairs + counter-example discovery).
+```
+audit_count(node) =
+  if node.proof is empty and node.kind in [lemma, theorem, proposition]:
+    return -1  (proof-requiring node without proof ⇒ needs generator)
+  
+  matching_verdicts = [
+    e for e in events if
+    e.type == "verifier.run_completed" and
+    e.target == node.label and
+    e.payload.verification_hash == node.verification_hash
+  ]
+  
+  if matching_verdicts is empty:
+    return 0  (has proof but not yet verified against current hash)
 
-**Librarian's action on this event:**
+  if any(e.verdict in ("gap", "critical") for e in matching_verdicts):
+    return -1  (a hash is permanently rejected once any matching verdict rejects it)
 
-1. Ensure Y exists as a node (counter-example theorem, kind=theorem)
-2. Set `X.disproven = true` and `X.disproved_by = Y`
-3. For every transitive dependent D of X:
-   a. In D's `depends_on` edges: replace reference to X with reference to Y
-   b. Recompute D's `statement_hash` and `verification_hash`
-   c. Set `D.verification_count = -1` (forces repair, not just re-verification)
-4. BFS through dependents applying (a) (b) (c)
+  return count(e in matching_verdicts if e.verdict == "accepted")
+```
 
-**Effect:** All dependents' proofs are flagged as needing rewrite. The
-structural dependency graph is updated so they now depend on the
-counter-example Y. Coordinator sees count=-1 and dispatches generator in
-repair mode. Generator reads updated `nodes/*.md` (which shows D depends
-on Y now) and rewrites proofs accordingly.
+Linter's audit check: for every node, recompute `audit_count` from the
+event stream and assert it equals the stored `Node.pass_count`.
+Drift = librarian bug or corruption.
 
-**Distinction from retraction:**
-- `retracted = true` (node gone) → dependents become blocked (can't proceed)
-- `disproven = true` (node present but statement is wrong) → dependents
-  get count=-1 (repair dispatched, with counter-example as replacement dep)
+This makes the stored count a **verifiable** value. Anyone can reconstruct
+it by reading `events/` alone. The count field is there for query speed,
+not for correctness.
 
-### 5.7 No status enum
+#### 5.5.2 Pre-dispatch hash revalidation
+
+**Before dispatching verifier on a node (or before verifier starts a
+run), recompute `verification_hash` from current state.** If the freshly
+computed value differs from the stored value, reset `count` to 0 and
+update the stored hash.
+
+```
+fresh_hash = verification_hash(current_node_state)
+
+if fresh_hash != node.verification_hash:
+    node.verification_hash = fresh_hash
+    node.pass_count = 0    # old accepted verdicts don't match new hash
+```
+
+Purpose:
+- Catches any drift between stored hash and actual content (librarian bug,
+  corruption, concurrent modification race)
+- Ensures verifier always runs on a verified-fresh hash
+- Invalidates prior accepted verdicts if state changed without proper
+  hash maintenance
+
+This is a **safety backstop**. In a bug-free librarian, hashes are always
+current; this check is a no-op. But if the check ever triggers, the
+system self-heals by resetting count.
+
+### 5.6 Merkle cascade (statement changes only)
+
+**When any node's `statement` changes**, or when librarian re-parses
+explicit references from the current `statement` / `proof`, its
+`statement_hash` recomputes
+and Merkle propagation recomputes all dependents' hashes. For each
+dependent whose `statement_hash` changed:
+- If the dependent's `proof` is non-empty: `count = 0` (existing proof
+  now needs re-verification against new dep state)
+- If the dependent's `proof` is empty: `count = -1` (stays at -1,
+  still needs generator)
+
+**Own `proof` changes do NOT propagate downstream.** They change my
+`verification_hash` but not my `statement_hash`; dependents only look at
+my `statement_hash`. This captures the insight: dependents trust my
+statement, not how I proved it.
+
+**No separate `-1` propagation rule.** The strict-monotone dispatch rule
+(§6.4) already prevents dependents from advancing when upstream is not
+strictly ahead; no explicit BFS for -1 is needed. If an upstream goes
+to -1 but recovers to its prior count with the same statement,
+dependents just stay at their count waiting, no re-repair needed. If
+an upstream's repair changes its statement, Merkle cascade automatically
+resets dependents.
+
+### 5.7 Counter-examples as statement revisions
+
+A counter-example is **not a separate mechanism**. It is a special case
+of statement revision: the original proposition `P` is replaced with its
+correct form, typically `¬P` (the negation) or a more nuanced statement.
+The proof of the revised statement serves as the counter-example.
+
+**No dedicated `disproven` flag or `theorem_disproven` event.** The
+existing statement-revision mechanism covers it:
+
+**Event:** `generator.batch_committed` containing a revised node state for `X`
+with the new statement and proof. When the revision flips truth polarity
+(e.g., `P → ¬P`), the new proof demonstrates the original was false.
+
+**Mechanical flow:**
+
+1. Generator emits statement revision + proof events for X
+2. X's `statement_hash` changes (new statement content)
+3. X's `verification_hash` changes (new statement + new proof)
+4. X's `pass_count` resets to 0 (hash change)
+5. Via Merkle propagation, all transitive dependents of X also have their
+   `statement_hash` / `verification_hash` change → their count resets to 0
+6. Verifier re-runs on X (once eligible) — if new proof is valid,
+   `X.count` → 1
+7. Dependents with proofs reset to `count = 0` because their
+   `verification_hash` changed
+8. Verifier re-runs on dependents once strict-monotone conditions hold
+9. If an old dependent proof no longer works, verifier returns
+   `gap/critical` and only then that dependent enters `count = -1`
+10. Coordinator dispatches repair on dependents
+11. Generator during repair reads `nodes/{X}.md` with its new statement
+   and writes dependents' proofs accordingly
+
+**Why this design unification is natural:**
+- Statement changes already propagate through the Merkle hash tree
+- `pass_count` already captures the "needs re-verification" state
+- No extra flag, no extra event type
+
+**Kind assignment:** the counter-example is simply the target theorem
+with its statement revised. A separate sibling "counter-example node"
+(like a new `Y` distinct from `X`) is also possible if the user prefers
+keeping both the original (historically noted) and the counter-example as
+separate nodes; that's just standard node creation + retraction flow,
+not a distinct mechanism.
+
+### 5.8 No status enum
 
 The system does not store or define a `status` field. Queries derive
 decisions directly from the atomic fields:
 
 | Question | Query |
 | --- | --- |
-| Needs fresh proof? | `current_proof_event_id is None` and kind is proof-requiring |
-| Needs verification? | `verification_count == 0` and deps all `count >= 1` |
-| Needs repair? | `verification_count == -1` and repair attempts `< MAX_REPAIRS` |
-| Complete? | `verification_count >= DESIRED_COUNT` (default 3) |
-| Blocked (deps broken)? | Any dep is retracted or missing |
+| Needs fresh proof? | `proof is empty` and kind is proof-requiring |
+| Needs verification? | `pass_count == 0` and deps all `count > node.count` |
+| Needs repair? | `pass_count == -1` and kind is proof-requiring |
+| Complete? | `pass_count >= DESIRED_COUNT` (default 3) |
+| Blocked (deps broken)? | Any dep is missing |
 
 For display, dashboard composes a label string on the fly.
 
@@ -461,32 +921,124 @@ For display, dashboard composes a label string on the fly.
 
 | Component | Writes events | Writes dag.kz | Writes nodes/ | Uses MCP | Backend |
 | --- | --- | --- | --- | --- | --- |
-| **generator** | ✓ (via wrapper) | ✗ | ✗ | ✓ (own MCP server) | Codex |
-| **verifier** | ✓ (via wrapper) | ✗ | ✗ | ✓ (own MCP server) | Codex |
-| **coordinator** | ✓ (own events) | ✗ | ✗ | ✗ | Python |
-| **librarian** | ✓ (meta events) | **✓ (sole)** | **✓ (sole)** | ✗ | Python |
-| **linter** | ✓ (drift events) | ✗ | ✗ | ✗ | Python |
+| **generator** | ✓ (`batch_committed` truth only) | ✗ | ✗ | ✓ (own MCP server) | Codex |
+| **verifier** | ✓ (`run_completed` truth only) | ✗ | ✗ | ✗ | Codex |
+| **coordinator** | ✗ (truth) | ✗ | ✗ | ✗ | Python |
+| **librarian** | ✗ (truth) | **✓ (sole)** | **✓ (sole)** | ✗ | Python |
+| **linter** | ✗ (truth) | ✗ | ✗ | ✗ | Python |
 | **dashboard** | ✗ | ✗ | ✗ | ✗ | Python HTTP |
 
 Hard invariants:
 - Librarian is the only writer of `dag.kz` and `nodes/`
 - Coordinator only schedules; never reads/writes derived state directly (it reads KB)
 - Codex components are read-only in the filesystem (enforced by sandbox)
+- Runtime orchestration data lives under `runtime/`, not `events/`
 
 ### 6.2 Generator
 
-Produces proof `<node>` blocks via Codex. Two modes:
+Produces `<node>` blocks via Codex. Two modes:
 - **fresh**: produce proof for target label from scratch
 - **repair**: fix a rejected proof using prior attempt + verdict as context
+
+**Generator's allowed output kinds:**
+- `definition` — creating new definitions or revising existing ones
+- `lemma`, `theorem`, `proposition` — proof-requiring kinds
+- **NOT** `external_theorem` — user-only (requires citation)
+
+Generator role layer rejects any `<node>` block with `kind: external_theorem`
+and reports the failure in runtime logs.
+
+**Multi-node output is expected.** One generator attempt for a target
+theorem typically produces:
+- Proof of the target theorem (one `<node>` for the target)
+- Several auxiliary sub-lemmas or sub-theorems (multiple `<node>` blocks
+  for supporting results)
+- New definitions introduced by the generator (optional)
+- Possibly revisions to existing definitions the new proof re-interprets
+
+**Decoder pipeline** (inside generator role.py):
+
+```
+Codex stdout
+  ↓
+decoder:
+  1. scan for <node>...</node> blocks
+  2. for each block: parse YAML frontmatter + markdown body
+  3. validate: full node-schema fields present, non-empty statement, no duplicate labels in batch, label format, kind is allowed,
+     explicit `\ref{label}` references resolve (or will resolve by end of attempt)
+  4. assemble the full node batch for this run
+  5. stage the batch
+  6. atomically publish one `generator.batch_committed`
+  ↓
+events/ directory
+  ↓
+librarian watches, applies → dag.kz + nodes/*.md
+```
+
+After one attempt completes, the KB may have several new / revised
+nodes, each entering its own verify-or-regenerate cycle.
+
+**Decoder failure modes:**
+- `<node>` block malformed → reject attempt, emit `generator.attempt_failed`
+- `kind: external_theorem` appears → reject (user-only)
+- label uniqueness conflict → reject
+- placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
+- unresolved `\ref{}` to non-existent label (and not produced in same attempt) → reject
+
+**Intra-batch ordering.** Within one generator batch, the wrapper
+topologically orders the included node states by their explicit `\ref{}`
+dependency edges before handing the batch to librarian. Librarian applies the
+batch in that order inside one batch transaction.
+
+**Prompt composition** (assembled by `role.py`):
+
+1. **Generation prompt** — task description for the target label
+2. **Repair context** (if mode=repair) — the target's
+   `verification_report` and `repair_hint` from the latest verdict
+3. **Latest batch rejection report** (if any) — runtime-only structural
+   rejection summary from librarian/coordinator, such as cycle introduction
+   or unresolved reference
+4. **Repair history summary** — current repair round count and brief
+   history summary, so generator can decide between local repair,
+   statement revision, or counter-example
+5. **Target's current state** — statement (if present) and previous
+   proof attempt (if any)
+
+Codex can **freely explore `nodes/` directory** via bash to see verified
+dependencies and library structure. Structured prompt is the essential input;
+exploration enriches context.
+
+**Repair mode can produce three kinds of outcomes** (choice guided by
+verifier's verdict category in `repair_hint` and repair history):
+
+1. **New proof** (typically for `gap` verdicts): statement unchanged;
+   fresh proof attempt patches the gap. The committed batch updates the
+   target node's proof.
+
+2. **Revised statement + new proof** (typically for `critical` verdicts
+   where statement needs adjustment): generator rewrites both in the
+   committed batch. The
+   `statement_hash` changes → dependents cascade (their count resets).
+
+3. **Counter-example** (extreme `critical` case where generator proves
+   the original statement is false): statement revised to its negation
+   (`P → ¬P`); proof is the counter-example argument. Same event flow
+   as case 2 — this is just the polarity-flipping instance of statement
+   revision. No dedicated `theorem_disproven` event needed.
+
+The generator decides the outcome based on `verification_report` +
+`repair_hint` passed in via the prompt (role.py injects them). The
+target node is typically NOT in `nodes/` (its `pass_count = -1`), so
+the prompt carries this context directly.
 
 Internal structure follows original Rethlas (`.agents/skills/`, `.codex/`,
 `mcp/`, `AGENTS.md`). Phase I adds a thin `role.py` that:
 
-1. Reads dispatch event from coordinator
+1. Reads runtime job / CLI dispatch parameters from coordinator
 2. Assembles minimal Codex prompt (target label + mode + optional hints)
 3. Launches Codex via `codex exec` (see §8 for args)
 4. Parses Codex stdout for `<node>` blocks
-5. Emits fine-grained events per node
+5. Emits one `generator.batch_committed`
 
 Skill output convention: Codex produces one or more `<node>` blocks:
 
@@ -494,8 +1046,9 @@ Skill output convention: Codex produces one or more `<node>` blocks:
 <node>
 ---
 kind: lemma
-label: lem:helper
-depends_on: [def:primary_object]
+label: lem:block_form_for_x0_plus_u
+remark: Block-form reduction lemma for the target proof.
+source_note: ""
 ---
 **Statement.** If $X$ then $Y$.
 
@@ -506,72 +1059,243 @@ depends_on: [def:primary_object]
 Inside proofs, cross-references use `\ref{label}` (Lean Blueprint
 convention).
 
-**Events emitted:**
-- `generator.attempt_started` (with pid, codex_log_path)
-- `generator.node_statement_added`
-- `generator.node_proof_produced`
-- `generator.attempt_produced` (session marker)
-- `generator.attempt_failed` (parse error, Codex timeout, etc.)
-- `generator.attempt_interrupted` (SIGTERM during run)
+**Truth events emitted:**
+- `generator.batch_committed`
+
+Attempt lifecycle, pid, log path, timeout, and crash information are runtime
+state only and live under `runtime/`.
 
 ### 6.3 Verifier
 
-Runs a 3-stage pipeline via Codex, orchestrated by `role.py`:
+**Single `codex exec` call per verification** (matches original
+Rethlas design). Codex internally uses its 3 skills via multi-agent
+feature:
 
-1. `check-referenced-statements` — all `\ref{}` in proof exist and are usable
-2. `verify-sequential-statements` — each proof step logically follows
-3. `synthesize-verification-report` — consolidate into verdict
+1. `check-referenced-statements`
+2. `verify-sequential-statements`
+3. `synthesize-verification-report`
 
-Each stage is a separate Codex call. The role layer chains them.
+Python `verifier/role.py` invokes Codex once and parses the final
+verdict JSON. **No external stage orchestration.**
 
-Internal structure follows original Rethlas (`.agents/skills/`, `.codex/`,
-`mcp/`, `api/`, `AGENTS.md`).
+**Prompt composition (minimal):**
 
-**Events emitted:**
-- `verifier.run_dispatched` (by coordinator; verifier picks it up)
-- `verifier.run_stage_completed` (×3)
-- `verifier.run_completed` (final verdict, includes `verification_hash`)
-- `verifier.run_failed` / `verifier.run_interrupted`
+```
+Run_id: ...
+Target label: lem:block_form_for_x0_plus_u
+Statement: <target statement>
+Proof: <target proof>   (empty for definition / external_theorem)
++ instructions from AGENTS.md
+```
+
+**No dependency context injection.** Codex finds dependencies by
+browsing `knowledge_base/nodes/` directly:
+- Codex sees `\ref{lem:bar}` in the proof
+- Codex runs `cat nodes/lem_bar.md` (after label-to-filename conversion)
+- The skill `resolve-reference` teaches Codex this convention
+
+**How label ↔ filename conversion works:**
+
+| Label | Filename |
+| --- | --- |
+| `def:primary_object` | `def_primary_object.md` |
+| `lem:block_form_for_x0_plus_u` | `lem_block_form_for_x0_plus_u.md` |
+| `thm:vogan_green` | `thm_vogan_green.md` |
+
+Colon `:` replaced with underscore `_`. Kind prefix preserved.
+
+**Only count ≥ 1 nodes appear in `nodes/`** (see §6.5). Codex finding
+a file = dep is at least once-verified. Missing file = dep not yet
+verified, Codex treats as "cannot use".
+
+**Verdict categories:**
+
+| Verdict | Meaning | Count effect |
+| --- | --- | --- |
+| `accepted` | Node is well-formed / correctly proven | `count += 1` |
+| `gap` | Local issue (missing justification, unclear step) — repair can patch | `count = -1` |
+| `critical` | Fundamental issue (circular, type mismatch, statement wrong) — may need statement rewrite or counter-example | `count = -1` |
+
+`gap` and `critical` both set count to `-1` but carry different
+`repair_hint` semantics: generator seeing `gap` tries local patches;
+seeing `critical` considers deeper rewrites or counter-example.
+
+**For definitions:**
+- Stage 1: check referenced concepts exist and are accepted
+- Stage 2: vacuously passing (empty proof — no step-by-step to verify)
+- Stage 3: synthesize verdict — check semantic well-formedness (Codex
+  judges if the statement is coherent, not self-contradictory, domain
+  terminology correct)
+- Full DESIRED audits (runs 3 times like proof-requiring kinds)
+- On wrong verdict: `count = -1`; user revises via
+  `user.node_revised(kind=definition)` (or generator revises as side-effect of
+  repairing a dependent proof-requiring node)
+
+**For external_theorems (independent kind, distinct semantics):**
+- Structurally similar to definitions (empty proof) but **semantically
+  the content is imported from external literature** — the theorem is
+  asserted-true on the basis of user's citation, not derived locally
+- Stage 1: check referenced concepts exist
+- Stage 2: vacuously passing
+- Stage 3: synthesize — check well-formedness (statement coherence,
+  citation referenced in the body) + sanity of what's being claimed
+- Full DESIRED audits (runs 3 times)
+- On wrong verdict: `count = -1`; user revises via
+  `user.node_revised(kind=external_theorem)` (generator NEVER touches external
+  theorems — they are strictly user-authored, require citation)
+
+Internal structure follows original Rethlas (`.agents/skills/`,
+`.codex/`, `mcp/`, `api/`, `AGENTS.md`).
+
+**Truth events emitted:**
+- `verifier.run_completed` (final verdict: accepted / gap / critical; includes `verification_hash`, `verification_report`, `repair_hint`)
+
+A single verifier run always targets exactly one node and emits exactly one
+`verifier.run_completed` truth event. Coordinator may still run many verifier
+subprocesses in parallel on different nodes.
+
+Verifier start/fail/interrupt lifecycle belongs to `runtime/`, not `events/`.
 
 ### 6.4 Coordinator
 
 **Pure scheduling. No derived-state work. No parsing. No rendering.**
 
-Reads KB, decides dispatches, emits coordinator events.
+**Coordinator's state model:** based on current KB plus runtime job state,
+coordinator maintains three things in memory:
+
+1. **Generator queue** — `kind ∈ {lemma, theorem, proposition}` nodes
+   with `count = -1` (either no proof yet, or latest verdict was
+   gap/critical). Generator reads history to decide fresh vs repair.
+   Priority: by `label` (stable).
+2. **Verifier queue** — all nodes where:
+   - `0 ≤ count < DESIRED_COUNT`
+   - For every dep: `dep.count > node.count` (strict monotone)
+   Priority: `pass_count` ascending.
+3. **KB read handle** — opens `dag.kz/` read-only via `common/kb` to
+   compute candidates for the two queues on each loop iteration
+
+Queues are **ephemeral** (in-memory) and re-derived from current KB on each
+loop start. Coordinator runtime job bookkeeping lives under `runtime/`; there
+is no persistent scheduling truth separate from KB state.
+
+**Process-lifetime invariant:** coordinator is the parent of all in-flight
+generator and verifier subprocesses. Worker lifetime is subordinate to the
+current `rethlas supervise` / coordinator lifetime. If coordinator or
+supervise exits or crashes, all in-flight workers are terminated as part of
+the same runtime teardown. Restart never assumes an old worker is still
+alive.
 
 Decisions (per node, per loop iteration):
 
 ```
-if node.kind in [definition, external_theorem]: skip (axiom)
-if node.retracted: skip
-if any dep is missing or retracted: skip (blocked)
-if node.current_proof_event_id is None:
-    → dispatch generator (fresh)
-elif node.verification_count == -1:
-    if repair_attempts < MAX_REPAIRS: → dispatch generator (repair)
-    else: skip (exhausted)
-elif node.verification_count == 0:
-    if all deps have count >= 1: → dispatch verifier
-    else: skip (wait)
-elif 1 <= node.verification_count < DESIRED_COUNT:
-    → dispatch verifier (audit)
-else:  # count >= DESIRED_COUNT
+if any dep is missing: skip (blocked)
+
+if node.pass_count == -1:
+    if node.kind in [definition, external_theorem]:
+        skip (waiting for user revision; no generator auto-fix)
+    else:
+        → dispatch generator
+
+elif node.pass_count >= DESIRED_COUNT:
     skip (done)
+
+else:
+    # count in [0, DESIRED-1]
+    # Strict monotone rule applies to ALL deps
+    for dep in node.depends_on:
+        if dep.pass_count <= node.pass_count:
+            skip (wait for dep to advance)
+    → dispatch verifier
 ```
 
-Verifier dispatch priority: `verification_count` ascending (lowest first).
+**Verifier dispatch condition** (strict monotone):
 
-**Global stop condition:** All proof-requiring nodes have
-`verification_count >= DESIRED_COUNT`. Default `DESIRED_COUNT = 3`.
+A node enters the verifier queue when:
+1. `0 <= count < DESIRED_COUNT`
+2. For every dep: `dep.count > node.count` (strict greater-than)
+3. No broken deps
 
-**Events emitted:**
-- `coordinator.phase_changed`
-- `coordinator.dispatch_generator`
-- `coordinator.dispatch_verifier`
-- `coordinator.attempt_timed_out` (Codex log stale)
-- `coordinator.attempt_crashed` (process dead)
-- `coordinator.full_rebuild_requested`
-- `coordinator.rate_limit_backoff`
+**No axiom exemption.** Definitions and external_theorems participate in
+the same strict monotone rule. Their deps (typically other definitions)
+must also be strictly ahead.
+
+**Why strict monotone:** forces bottom-up, pyramid verification. Deepest
+leaves advance first; dependents advance one step at a time as upstream
+confirms. Every ancestor's verification rests on deps that are
+strictly more confirmed.
+
+**Verifier dispatch priority:** `pass_count` ascending — lowest
+first, unblocks downstream.
+
+**Global stop condition:** All nodes have `pass_count >= DESIRED_COUNT`.
+Default `DESIRED_COUNT = 3`.
+
+By the strict-monotone rule, when top-level theorems reach `DESIRED`,
+all their ancestors (including definitions) are at `DESIRED`.
+
+### 6.4.1 Loop prevention and stuck detection
+
+**No concurrent dispatch on same target.** Before dispatching generator
+or verifier on a node, coordinator checks current-runtime job state for that
+target. If a live/in-flight job exists, skip this loop. Prevents racing
+attempts producing conflicting events on the same node.
+
+**Seven safeguards against infinite loops / over-verification:**
+
+1. **`pass_count` monotonic per hash**: only `+1` from accepted verdicts;
+   only resets via hash change (→ 0) or wrong verdict (→ -1). No
+   cycling 0↔1 possible on a stable hash.
+2. **Upper bound**: coordinator skips nodes with
+   `pass_count ≥ DESIRED_COUNT`. Over-verification impossible.
+3. **Hash-match check (librarian)**: verdicts with mismatched hash are
+   ignored. No stale verdict pollution.
+4. **Pre-dispatch hash revalidation** (§5.5.2): catches Kuzu ↔ data
+   drift before dispatch.
+5. **Codex log mtime timeout (30 min)**: kills stuck Codex processes
+   via `killpg`.
+6. **Cycle detection (librarian)**: any truth event that would introduce
+   a dependency cycle is rejected at event-application time.
+
+Strict-monotone scheduling relies on this DAG invariant. With no cycles,
+leaves can always advance first. If the system stops making progress, the
+cause is a real blocked node state (for example a rejected definition,
+missing dependency, or unresolved proof repair), not a scheduler-created
+dependency loop.
+
+**Stuck detection (periodic audit, every N≈60 loops):**
+
+Coordinator periodically computes a runtime stuck set:
+- definitions / external_theorems at `pass_count = -1`
+- proof-requiring nodes that have accumulated many repair rounds without
+  progress, for operator visibility only
+
+Dashboard highlights these directly from KB state + runtime job status.
+
+If coordinator finds **no dispatchable action** while unfinished nodes remain,
+it must first run cycle detection against the current projected graph before
+classifying the system as merely stuck. Diagnostic order:
+
+1. dependency cycle check
+2. broken / missing dependency check
+3. user-blocked definition / external_theorem check
+4. proof-repair-needed check
+5. repeated-no-progress visibility diagnostics
+
+**Definitions / external_theorems at pass_count=-1** are always stuck
+— coordinator never auto-dispatches generator on them. Only
+`user.node_revised(kind=definition)` / `user.node_revised(kind=external_theorem)` unblocks.
+Dashboard must make this obvious.
+
+Coordinator writes no truth events in Phase I. Dispatch, start, timeout, and
+crash records are runtime state only.
+
+If librarian rejects a generator batch (for example due to a dependency cycle,
+unresolved reference, or malformed batch), the entire batch is discarded and
+no truth event is applied from it. The rejection is recorded in runtime state
+as a **batch rejection report**. This is distinct from a verifier
+`verification_report`: verifier reports are mathematical judgments on a
+single node/proof, while batch rejection reports are structural/runtime
+diagnostics about why a proposed generator batch could not enter truth.
 
 ### 6.5 Librarian
 
@@ -585,22 +1309,19 @@ for each new event (ordered by event_id):
     validate schema + business rules
     apply to Kuzu transactionally
     recompute hashes for affected nodes (BFS through dependents)
-    update verification_count per rules
+    update pass_count per rules
     re-render nodes/*.md for each affected node
-    on validation failure: emit librarian.event_rejected
+    on validation failure: record runtime validation failure
 ```
 
 Startup: regenerate all `nodes/*.md` from Kuzu (ensures consistency even
 after crash).
 
-Full rebuild: triggered by `coordinator.full_rebuild_requested` event or
-`rethlas rebuild` command. Deletes dag.kz and nodes/, replays entire event
-stream.
+Full rebuild is triggered by `rethlas rebuild`. It deletes dag.kz and nodes/
+and replays the entire truth event stream.
 
-**Events emitted:**
-- `librarian.event_rejected` (schema or business rule violation)
-- `librarian.rebuild_started`
-- `librarian.rebuild_completed`
+Librarian writes no truth events in Phase I. Validation failures and rebuild
+status are reported via runtime logs / CLI output.
 
 ### 6.6 Linter
 
@@ -615,9 +1336,7 @@ Phase I does NOT implement:
 - C. Projection drift detection (full replay vs current Kuzu)
 - Clock skew detection
 
-**Events emitted:**
-- `linter.run_completed` (with counts per check)
-- `linter.invariant_violated`
+Linter writes no truth events in Phase I.
 
 ### 6.7 Dashboard
 
@@ -625,14 +1344,25 @@ HTTP server, read-only. Phase I is a **linear HTML view**, no interactive
 graph.
 
 Pages:
-- `GET /` — workspace overview (goals list + health summary)
-- `GET /api/goals` — JSON: all `kind=open_problem` nodes with progress
-- `GET /api/active` — JSON: currently in-flight dispatches (from recent events)
+- `GET /` — workspace overview (theorems list + health + stuck nodes + rejected events)
+- `GET /api/theorems` — JSON: all `kind=theorem` nodes and their progress
+- `GET /api/active` — JSON: currently in-flight runtime jobs
+- `GET /api/stuck` — JSON: nodes with `pass_count=-1` that need human:
+  - kind ∈ {definition, external_theorem} at count=-1 (user must revise)
+  - proof-requiring kinds with many repair rounds and no visible progress
+- `GET /api/rejected` — JSON: recent runtime validation failures so user sees
+  which dropped files failed validation
 - `GET /api/events?limit=50` — JSON: recent events, filterable by actor/type
-- `GET /api/node/{label}` — JSON: full node info (from Kuzu + event refs)
+- `GET /api/node/{label}` — JSON: full node info
 - `GET /events/stream` — SSE: push new events to connected browsers
 
 Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
+
+**Must prominently surface (so user doesn't miss):**
+- Nodes at `pass_count=-1` with no auto-recovery path (definitions /
+  external_theorems at -1)
+- Recent runtime validation failures
+- Nodes stuck at `pass_count=-1` with no auto-recovery path
 
 Phase II will add interactive DAG visualization (Cytoscape.js) and Blueprint
 LaTeX export.
@@ -643,12 +1373,12 @@ LaTeX export.
 common/
 ├── kb/              # KnowledgeBase interface + Kuzu backend
 ├── events/          # event read/write/parse/validate
-├── runtime/         # codex_runner (Popen + heartbeat + timeout)
+├── runtime/         # codex_runner (Popen + log-mtime timeout)
 └── config/          # rethlas.toml loader
 ```
 
-No `common/mcp/` — MCP server code lives in each agent's own `mcp/`
-directory.
+No `common/mcp/` — generator MCP code lives in the generator tree; verifier
+uses no Phase I MCP tools.
 
 ---
 
@@ -686,11 +1416,11 @@ codex exec \
 ### 7.4 Liveness monitoring
 
 **Only signal:** mtime of Codex subprocess log file at
-`runtime/logs/{dispatch_event_id}.codex.log`.
+`runtime/logs/{job_id}.codex.log`.
 
 **Rule:** If log mtime > 30 minutes old, coordinator sends SIGINT to the
-process group (`os.killpg`), waits 10s, then SIGKILL. Emits
-`coordinator.attempt_timed_out`.
+process group (`os.killpg`), waits 10s, then SIGKILL and marks the runtime
+job timed out.
 
 No separate heartbeat file. No status JSON. Log file mtime is the only
 signal.
@@ -708,38 +1438,26 @@ Malformed output is caught by the wrapper's parser and rejected.
 
 ## 8. MCP Tools
 
-**Only generator and verifier use MCP.** No other component uses MCP for
-any purpose. Python components (coordinator, librarian, linter, dashboard)
-use `common/kb` directly. Rethlas does not expose an MCP server to external
-callers.
+**Only generator uses MCP in Phase I.** No other component uses MCP for any
+truth-bearing purpose. Python components (coordinator, librarian, linter,
+dashboard) use `common/kb` directly. Rethlas does not expose an MCP server to
+external callers.
 
-Each of generator and verifier has its own MCP server process, launched by
-Codex per invocation. They share no code (code duplication is acceptable
-at this scale).
+Generator's MCP server process is launched by Codex per invocation. Code
+duplication is acceptable at this scale.
 
-### 8.1 Shared MCP tools (both generator and verifier)
-
-These tools address the fact that Codex can't read events/ directly
-(sandbox limits it to nodes/).
-
-| Tool | Purpose |
-| --- | --- |
-| `get_event(event_id)` | Read a specific event's body (for repair mode to see prior proof + verdict) |
-| `closure(label, direction, depth)` | Graph closure query (cheaper than bash recursion) |
-
-### 8.2 Generator-only tools
+### 8.1 Generator-only tools
 
 | Tool | Purpose |
 | --- | --- |
 | `search_arxiv_theorems(query)` | External literature search via leansearch.net (existing) |
-| `verify_proof_service(statement, proof)` | Self-check by invoking verifier (existing) |
 | `memory_init` / `memory_append` / `memory_search` | Codex scratchpad (existing) |
 
-### 8.3 Verifier-only tools
+### 8.2 Verifier-only tools
 
-Phase I: no extra tools beyond shared.
+Phase I: none.
 
-### 8.4 Semantic search (deferred)
+### 8.3 Semantic search (deferred)
 
 `search_relevant(query, top_k)` using embedding-based similarity is
 **Phase II**. Phase I relies on `grep` over `nodes/` and the existing
@@ -752,14 +1470,20 @@ arxiv search.
 ### 9.1 Writing an event
 
 ```
-producer:
+truth-event producer:
   construct event payload
-  allocate event_id (iso + ms) + uid
+  allocate event_id ({iso_ms}-{seq}-{uid})
   compose filename per §3.2
   write .tmp file in events/{date}/
   fsync
   atomic rename to canonical filename
 ```
+
+**Who writes truth events:**
+- **User**: writes event files by hand or via a helper CLI (`rethlas add-definition`, etc. — future helper CLI). Phase I uses `.json` truth files in `events/{date}/`.
+- **Generator / verifier**: their wrapper code (Python, NOT Codex) writes truth events. Codex subprocess is read-only sandboxed; it outputs to stdout which the wrapper captures and converts to truth events.
+
+**Codex never writes files.** Only Python wrappers do.
 
 ### 9.2 Projecting an event
 
@@ -770,7 +1494,7 @@ validate schema + business rules
 apply to Kuzu (transaction):
   update atomic fields
   recompute affected nodes' hashes (BFS through dependents)
-  update verification_count per rules
+  update pass_count per rules
 commit
 re-render nodes/*.md for each affected node (atomic writes)
 ```
@@ -778,21 +1502,19 @@ re-render nodes/*.md for each affected node (atomic writes)
 ### 9.3 A typical verification cycle
 
 ```
-1. coordinator reads KB: finds proof-requiring node with count=0, deps all count>=1
-2. coordinator emits: coordinator.dispatch_verifier(target=lem:foo)
-3. verifier wrapper picks up dispatch, emits verifier.run_dispatched
-4. wrapper launches codex exec with nodes/ cwd, read-only sandbox
-5. Codex reads nodes/lem_foo.md and dep files; runs 3-stage skills
-6. wrapper emits verifier.run_stage_completed (×3), then verifier.run_completed
-7. librarian applies verifier.run_completed: count increments if accepted+hash matches
-8. coordinator on next loop sees count=1; if DESIRED_COUNT=3 dispatches audit
+1. coordinator reads KB: finds proof-requiring node with count=0 and every dep.count > node.count
+2. coordinator creates a verifier runtime job for `lem:foo`
+3. wrapper launches codex exec with nodes/ cwd, read-only sandbox
+4. Codex reads the target statement/proof from the prompt and dep files from `nodes/`; runs 3-stage skills
+5. wrapper parses verdict JSON and emits verifier.run_completed
+6. librarian applies verifier.run_completed: count increments if accepted+hash matches
+7. coordinator on next loop sees count=1; if DESIRED_COUNT=3 dispatches audit
 ```
 
 ### 9.4 Communication constraint
 
-Components communicate only through `events/` and `dag.kz/`. No RPC, no
-shared memory, no direct function calls across components. This keeps them
-loosely coupled and independently restartable.
+Truth-bearing components communicate only through `events/` and `dag.kz/`.
+Runtime orchestration uses local subprocess control and files under `runtime/`.
 
 ---
 
@@ -801,24 +1523,25 @@ loosely coupled and independently restartable.
 ### 10.1 DESIRED_COUNT threshold
 
 Default: 3. Configurable via `rethlas.toml` `[scheduling]
-desired_verification_count`.
+desired_pass_count`.
 
-- Phase I with single backend: all 3 verifications run on same backend.
-  Effectively triple-check.
+- Phase I intentionally keeps `DESIRED_COUNT = 3` even with a single
+  verifier backend. The main reason is to exercise strict-monotone
+  scheduling, repeated verifier dispatch, pass-count advancement, recovery,
+  and stop-condition logic under realistic multi-round coordination.
+- These three passes provide repeated LLM checks, but they are **not**
+  multi-backend consensus.
 - Phase II with audit backend: could be 1 primary + 2 audits across
   different backends.
 
 ### 10.2 Verification dispatch priority
 
 Candidate nodes are filtered by:
-- Proof-requiring kind
-- Not retracted
-- All direct deps have `verification_count >= 1`
-- Has `current_proof_event_id`
-- `verification_count < DESIRED_COUNT`
-- `verification_count != -1` (those go to repair)
+- `proof` non-empty (or kind is definition / external_theorem)
+- `pass_count in [0, DESIRED_COUNT)`
+- For every dep: `dep.pass_count > node.pass_count` (strict monotone, §6.4)
 
-Sorted by `verification_count` ascending (count=0 first, then count=1, etc.).
+Sorted by `pass_count` ascending (count=0 first, then count=1, etc.).
 Ties broken by `label`.
 
 ### 10.3 Concurrency
@@ -827,18 +1550,21 @@ Existing `common/codex_budget` slot mechanism caps concurrent Codex
 subprocesses. Coordinator acquires slot before dispatching; releases on
 completion.
 
-### 10.4 Repair exhaustion
+### 10.4 Repair rounds
 
-When `count == -1` and `count_repair_attempts_for_current_hash(label) >=
-MAX_REPAIRS` (default 3), coordinator stops dispatching repair. Emits
-`coordinator.repair_exhausted`. Node stays at `count = -1` until:
-- User adds a hint
-- User revises a dependency
-- User retracts the node
+Phase I does **not** impose a hard repair budget. Proof-requiring nodes at
+`count = -1` continue to be dispatched to generator.
 
-User intervention effectively clears the repair count (implementation: only
-count repair attempts since the last user-produced event targeting this
-node).
+Coordinator and dashboard still track repair round count as derived
+observability data. Generator receives that history in repair mode so it can
+decide whether to:
+
+- continue local proof repair
+- revise the statement
+- pursue a counter-example / negation route
+
+Repeated repair without progress is therefore advisory signal, not a hard
+dispatch stop condition.
 
 ---
 
@@ -859,7 +1585,7 @@ Librarian reads all `events/` and rebuilds `dag.kz/` and `nodes/`.
 | Failure | Effect | Recovery |
 | --- | --- | --- |
 | Producer crashes mid-write | `.tmp` file lingers | Deleted on next startup |
-| Librarian crashes mid-apply | Kuzu transaction rolls back | Next startup replays from `last_applied_event_id` |
+| Librarian crashes mid-apply | Kuzu transaction rolls back | Next startup replays from truth events |
 | Kuzu DB corrupt | Queries fail | `rethlas rebuild` |
 | Full workspace clone | No dag.kz | `rethlas rebuild` on first use |
 | Codex subprocess stuck | Log mtime stales | Coordinator timeout kills process group |
@@ -875,8 +1601,8 @@ projection logic.
 
 ## 12. Core Invariants
 
-1. **Events are the sole source of truth.** `dag.kz/` and `nodes/` are
-   derived.
+1. **Truth events are the sole source of mathematical truth.** `dag.kz/` and
+   `nodes/` are derived.
 2. **Events are immutable** after atomic rename. Compensate by adding
    events, never mutate.
 3. **All content is recoverable from events.** Event files are
@@ -884,15 +1610,16 @@ projection logic.
 4. **Librarian is the only writer of `dag.kz/` and `nodes/`.**
 5. **Coordinator only coordinates.** Does not parse, derive, or render.
 6. **Linter only reports, never repairs.**
-7. **Components communicate only via events + KB.** No direct RPC.
-8. **Python components use `common/kb` directly.** Codex components use
-   MCP. No cross-language direct calls.
+7. **Truth-bearing components communicate via truth events + KB.**
+   Runtime orchestration uses local subprocess control and `runtime/`.
+8. **Python components use `common/kb` directly.** Generator uses MCP.
+   Verifier has no Phase I MCP tools.
 9. **Codex is read-only on filesystem.** Sandbox-enforced.
-10. **Producer identity is open.** `actor` and `type` are strings;
-    producers register in `producers.toml`.
+10. **Truth-event producers are intentionally small in Phase I.**
+    `user`, `generator`, and `verifier` are the only truth writers.
 11. **No status field stored.** All status is derived from atomic fields
-    (count, hashes, retracted) at query time.
-12. **`verification_count` is the only progress indicator.** Signed int
+    (count, hashes) at query time.
+12. **`pass_count` is the only progress indicator.** Signed int
     (-1 / 0 / positive), updated by librarian per rules.
 
 ---
@@ -931,7 +1658,7 @@ projection logic.
   verdicts (hashes cascade)
 - Dep's proof changes don't propagate (statement_hash doesn't include proof)
 
-### 13.6 Why `verification_count` signed (-1, 0, N)
+### 13.6 Why `pass_count` signed (-1, 0, N)
 
 - Single field captures three states: wrong, pending, verified-N-times
 - Eliminates need for `status` enum, `latest_verdict_event_id`, etc.
@@ -972,7 +1699,7 @@ projection logic.
   current hashes
 - No `common/mcp/` shared module — each agent has its own
 - No `adapters/codex/` nesting — Phase II if/when Claude is added
-- No runtime/heartbeat files — log mtime suffices
+- No runtime heartbeat files — log mtime suffices
 - No status enum in Kuzu
 
 ---
@@ -982,7 +1709,7 @@ projection logic.
 These are resolved at implementation time without blocking design:
 
 1. **`rethlas init` scaffolding** — what a fresh workspace contains
-2. **`memory_*` MCP tools** — keep as-is or migrate to event-driven notes
+2. **Generator `memory_*` MCP tools** — keep as-is or migrate to event-driven notes
 3. **Frontend minimal HTML/JS** — exact markup and style for Phase I
    dashboard
 4. **API key management** — likely environment variables; respect existing
