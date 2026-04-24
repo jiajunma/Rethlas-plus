@@ -78,6 +78,43 @@ Recommended helper infrastructure:
 - temporary Kuzu workspace fixture
 - helper to write event files with exact byte content for `event_sha256` tests
 
+### Test time scaling
+
+Every long-running Phase I daemon (coordinator, librarian, dashboard)
+and every worker wrapper honors a single environment variable
+**`RETHLAS_TEST_TIME_SCALE`** (float, default `1.0`). Any internal
+`sleep` / polling interval / timeout threshold that comes from the
+spec — 30-s startup grace, 30-s librarian idle heartbeat, 60-s
+wrapper heartbeat, `codex_silent_timeout_seconds` (default 1800),
+5-min orphan-reaper threshold, dashboard 5-s retry window, etc. —
+is multiplied by this scale at runtime.
+
+With `RETHLAS_TEST_TIME_SCALE=0.01` an end-to-end scenario that
+takes ~30 min of wall time in production (xhigh-reasoning silent
+window, consecutive timeouts, restart cascades) runs in ~18 s on
+CI. Without this hook, Phase I's test suite would take hours.
+
+The scale affects **timing only**, never semantics. Fake-Codex
+`silent_seconds` reads this env too, and additionally back-dates
+the log file's mtime via `os.utime` so the log-mtime timeout path
+(`codex_silent_timeout_seconds`) is exercised faithfully under
+scaling (a raw `time.sleep(0.3)` does not move `os.stat().st_mtime`,
+so the fake must forge it). Every daemon's scaled-timing helper
+lives in `common/runtime/timing.py` so the implementation is
+centralized.
+
+### Pre-M2 Kuzu stress validation
+
+Before opening M2, write a **10-line Kuzu sanity check**: one
+writer loop + several reader loops hammering `Node` / `AppliedEvent`
+queries for ~10⁴ iterations. Phase I's design assumes readers see
+snapshot-isolated state during librarian commits (ARCHITECTURE
+§4.1). If Kuzu in the version we adopt exposes partially-committed
+rows, the Phase I fallback is an explicit `threading.RLock` around
+Kuzu access in `common/kb/kuzu_backend.py`. Run this validation on
+day-1 of M2 — if the assumption is wrong, discovering it now (before
+building projector / validator on top) is much cheaper than at M6+.
+
 ---
 
 ## Milestones
@@ -108,8 +145,17 @@ Recommended helper infrastructure:
   `rebuild`, `generator`, `verifier`) and prints a placeholder
   message + exit 0 for each (real implementations arrive in later
   milestones). This lets `rethlas --help` work from M0 onward.
-- Add `pyproject.toml` with `rethlas` entry point pointing at
-  `cli.main:main`
+- Add `pyproject.toml` with:
+  - `rethlas` entry point pointing at `cli.main:main`
+  - **`include-package-data = true`** (setuptools) and the explicit
+    inclusion of `producers.toml` via `MANIFEST.in` or the
+    `[tool.setuptools.package-data]` table, so that a `pip install`
+    of a wheel also ships the producer registry alongside the code.
+    A V4-style test (admission resolves `producers.toml` from the
+    installation root) must therefore be run against **both** an
+    editable install and a built wheel in CI, to catch the common
+    bug where `producers.toml` is only present in the source tree
+    and missing after `pip install`.
 - Add root `producers.toml`
 
 **Tests**
@@ -606,6 +652,17 @@ Recommended helper infrastructure:
 - updated `generator/.codex/config.toml`
 - updated `generator/mcp/server.py` to exact Phase I toolset
 - decoder with full batch validation
+  - parser is **tolerant of real Codex output noise**: ANSI escape
+    codes may appear (strip before parsing); MCP-tool-call traces
+    may precede / interleave `<node>` blocks; banner / version
+    lines may precede content. The parser extracts `<node>...</node>`
+    blocks by regex (anchored on literal tags, not on position) and
+    extracts the final verdict JSON by finding the last `{...}` that
+    parses as valid JSON with the expected keys. Implementation
+    feeds real recorded Codex stdout samples (from prior
+    inducedorbit runs) through the parser as a regression test so
+    real-world format variations are caught before production
+    dispatch.
 
 **Tests**
 
@@ -667,6 +724,12 @@ Recommended helper infrastructure:
 - `verifier/role.py`
 - updated `verifier/AGENTS.md`
 - pruned verifier MCP usage per architecture
+- verdict JSON parser is **tolerant of real Codex output** for the
+  same reasons as M6: Codex may emit ANSI codes, reasoning prose,
+  and tool-call traces before the final verdict. Parser finds the
+  last `{...}` block that parses as JSON and contains the expected
+  `verdict` / `verification_hash` / `verification_report` keys.
+  Regression-tested against real recorded verifier stdout samples.
 
 **Tests**
 
