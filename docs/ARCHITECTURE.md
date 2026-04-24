@@ -99,12 +99,14 @@ Rethlas/
     │                               # started_at, updated_at, status
     ├── logs/
     │   └── {job_id}.codex.log      # Codex subprocess stdout
+    ├── locks/
+    │   └── supervise.lock          # advisory flock held by coordinator (§6.4)
     └── state/
-        ├── coordinator.json        # coordinator heartbeat / queue summary
+        ├── coordinator.json        # coordinator heartbeat / queue / children
         ├── librarian.json          # librarian heartbeat / projection summary
         ├── rejected_writes.jsonl   # recent decoder/admission rejections
         └── drift_alerts.jsonl      # rare hash/runtime drift alerts
-                                    # (both surfaced via dashboard)
+                                    # (all surfaced via dashboard)
 ```
 
 Workspace `.gitignore`:
@@ -1653,7 +1655,71 @@ Verifier start/fail/interrupt lifecycle belongs to `runtime/`, not `events/`.
 
 ### 6.4 Coordinator
 
-**Pure scheduling. No derived-state work. No parsing. No rendering.**
+Coordinator is the long-running parent process that `rethlas supervise`
+launches. It has two jobs:
+
+1. **Scheduling** — read KB + runtime job state, draw from the
+   generator and verifier worker pools (§10.3), dispatch short-lived
+   worker subprocesses (`generator/role.py`, `verifier/role.py`).
+2. **Workspace process supervision** — launch and monitor the other
+   long-running daemons (librarian, dashboard) as its own child
+   subprocesses; restart on crash; graceful shutdown cascade on
+   SIGTERM.
+
+It never parses events, renders `.md` files, or writes Kuzu directly —
+those belong to librarian. It also holds the workspace singleton lock;
+running a second `rethlas supervise` in the same workspace is not
+allowed and fails fast at lock acquisition.
+
+**Process tree under `rethlas supervise`:**
+
+```
+rethlas supervise (CLI entry point, delegates to coordinator main)
+ └── coordinator process  ← holds runtime/locks/supervise.lock
+     ├── librarian subprocess        (long-lived daemon)
+     ├── dashboard subprocess        (long-lived daemon)
+     ├── generator worker subprocess (short-lived, one per dispatch, up to generator_workers)
+     ├── generator worker subprocess ...
+     ├── verifier worker subprocess  (short-lived, one per dispatch, up to verifier_workers)
+     └── verifier worker subprocess  ...
+```
+
+**Singleton enforcement.** Coordinator acquires an advisory
+`runtime/locks/supervise.lock` via `flock` at startup. If the lock is
+already held, coordinator prints the holder's pid and exits non-zero.
+Clean shutdown releases the lock; crash / kill-9 also releases
+automatically (OS behavior).
+
+**Child daemon management** (librarian, dashboard):
+- Each daemon is spawned with its own pid/pgid. IPC with coordinator
+  is **via `runtime/` files only** — the same observer pattern
+  dashboard uses (§6.7). No direct sockets / pipes.
+- Coordinator polls each child's heartbeat file (`librarian.json`
+  etc.) against staleness thresholds (§6.7.1) and inspects process
+  liveness (`os.kill(pid, 0)`). If a child is dead but should be
+  running, coordinator logs and either restarts it (Phase I
+  restart-once-then-degrade policy) or marks `status = "degraded"`
+  and keeps going.
+- On SIGTERM / SIGINT, coordinator signals children in reverse
+  dependency order (dashboard → coordinator workers → librarian),
+  waits for graceful exit (up to 10 s each), then SIGKILL remnants,
+  then releases the lock and exits.
+
+Coordinator's own heartbeat file is `runtime/state/coordinator.json`
+(§6.4.2), which also carries the children's status so dashboard shows
+the whole tree in one place.
+
+**Interaction with one-shot CLIs:**
+- `rethlas rebuild` requires the `supervise.lock` to **not** be held.
+  If held, rebuild exits non-zero with a "stop supervise first"
+  message (no auto-kill — too destructive). rebuild itself takes the
+  lock while running.
+- `rethlas linter` defaults to refusing if the lock is held
+  (concurrent projection makes drift reports noisy, §6.6); pass
+  `--allow-concurrent` to override, with a transient-drift warning
+  in the report header.
+- `rethlas init` refuses if `events/` or `rethlas.toml` already exist;
+  `--force` allows overwriting `rethlas.toml` only (never `events/`).
 
 **Coordinator's state model:** based on current KB plus runtime job state,
 coordinator maintains three things in memory:
@@ -1674,12 +1740,13 @@ Queues are **ephemeral** (in-memory) and re-derived from current KB on each
 loop start. Coordinator runtime job bookkeeping lives under `runtime/`; there
 is no persistent scheduling truth separate from KB state.
 
-**Process-lifetime invariant:** coordinator is the parent of all in-flight
-generator and verifier subprocesses. Worker lifetime is subordinate to the
-current `rethlas supervise` / coordinator lifetime. If coordinator or
-supervise exits or crashes, all in-flight workers are terminated as part of
-the same runtime teardown. Restart never assumes an old worker is still
-alive.
+**Process-lifetime invariant:** coordinator is the parent of all
+in-flight generator and verifier subprocesses and of the librarian /
+dashboard daemons. Worker and daemon lifetimes are subordinate to
+coordinator's own lifetime. If coordinator exits or crashes, all
+children are terminated
+as part of the same runtime teardown. Restart never assumes an old
+worker is still alive.
 
 Decisions (per node, per loop iteration):
 
@@ -1863,7 +1930,10 @@ every loop iteration and whenever in-flight job state changes. Minimum fields:
 
 ```json
 {
-  "updated_at": "2026-04-24T14:05:12Z",
+  "schema": "rethlas-coordinator-v1",
+  "pid": 12300,
+  "started_at": "2026-04-24T10:03:10.000+08:00",
+  "updated_at": "2026-04-24T14:05:12.000+08:00",
   "status": "running | idle | degraded | stopping",
   "loop_seq": 1829,
   "desired_pass_count": 3,
@@ -1878,7 +1948,11 @@ every loop iteration and whenever in-flight job state changes. Minimum fields:
   "generation_dep_blocked_count": 4,
   "verification_dep_blocked_count": 7,
   "repair_spinning_count": 2,
-  "recent_hash_mismatch_count": 3
+  "recent_hash_mismatch_count": 3,
+  "children": {
+    "librarian": {"pid": 12346, "status": "running", "updated_at": "2026-04-24T14:05:11.000+08:00"},
+    "dashboard": {"pid": 12348, "status": "running", "updated_at": "2026-04-24T14:05:12.000+08:00"}
+  }
 }
 ```
 
@@ -1982,9 +2056,26 @@ Key points:
    re-examined. Producer must publish a fresh event with a new
    `event_id` if it wants to try again.
 
-Startup: walk `events/*` in (iso_ms, seq, uid) order; for each file,
-run the main-loop body. `AppliedEvent` makes already-decided events
-no-ops, so startup is incremental by default.
+Startup sequence:
+
+1. **Event replay**: walk `events/*` in (iso_ms, seq, uid) order; for
+   each file, run the main-loop body. `AppliedEvent` makes
+   already-decided events no-ops, so replay is incremental.
+2. **`nodes/` reconciliation**: after replay completes, for every
+   `Node` in Kuzu with `pass_count >= 1`, compute the expected
+   `nodes/{prefix}_{slug}.md` content from current Kuzu fields; diff
+   against the on-disk file; rewrite any that differ and delete any
+   `.md` file on disk whose label is not at `pass_count >= 1` in
+   Kuzu. This is **idempotent** and closes the crash window between
+   Kuzu commit and per-event re-render — without it, a librarian
+   crash after commit but before re-render would leave stale
+   `nodes/*.md`, which a later verifier could then read via Codex
+   and use to form an incorrect verdict (contaminating truth via
+   the hash-match-passing accept path).
+
+Linter category E (§6.6) also audits `nodes/` ↔ Kuzu consistency on
+demand; startup reconciliation is the automatic safety net, linter
+is the periodic / post-incident verification.
 
 Full rebuild is triggered by `rethlas rebuild`. It deletes `dag.kz/`,
 `nodes/`, **and** the `AppliedEvent` table content, then replays every
@@ -2044,12 +2135,28 @@ Read-only audit. Phase I scope:
   hash matches)` events since the most recent `statement_hash`-changing
   event on that node, including Merkle cascade from upstream statement
   changes) and assert it matches stored `Node.repair_count`.
+- **E. `nodes/` ↔ Kuzu consistency audit**: for every `Node` in Kuzu
+  with `pass_count >= 1`, assert that `nodes/{prefix}_{slug}.md`
+  exists and its content equals what librarian would render from the
+  current Kuzu fields; for every file in `knowledge_base/nodes/`,
+  assert the corresponding label exists in Kuzu at `pass_count >= 1`
+  with matching content. Passing `--repair-nodes` lets linter rewrite
+  divergent files and delete orphaned ones (idempotent re-render).
+  Without the flag, linter only reports.
 
 Phase I does NOT implement:
 - Full projection drift detection (replay all events into a fresh KB and
-  diff against live Kuzu). Only `pass_count` and `repair_count` are
-  audited in Phase I.
+  diff against live Kuzu). Only `pass_count`, `repair_count`, and
+  `nodes/` rendering are audited in Phase I.
 - Clock skew detection
+
+**Concurrency rule.** Linter by default refuses to run while a
+coordinator is active in the same workspace (i.e. while
+`runtime/locks/supervise.lock` is held). Categories C, D, and E
+compare event stream / Kuzu / `nodes/` against each other, and a live
+librarian can make these comparisons show transient drift that is not
+a real bug. Operator can pass `--allow-concurrent` to run anyway; the
+linter report's header then notes that drift entries may be transient.
 
 Linter writes no truth events in Phase I.
 
@@ -2066,7 +2173,7 @@ keeps that separation:
 - Browser talks only to dashboard
 - Coordinator and librarian expose **no** HTTP API
 - Dashboard restart must not restart coordinator, librarian, generator, or verifier
-- Coordinator / supervisor health logic must not depend on dashboard availability
+- Coordinator health logic must not depend on dashboard availability
 - Dashboard reads KB + runtime state only
 - No control actions from the dashboard in Phase I
 
@@ -2457,6 +2564,7 @@ common/
 No `common/mcp/` — generator MCP code lives in the generator tree; verifier
 uses no Phase I MCP tools.
 
+
 ---
 
 ## 7. Codex Invocation
@@ -2774,7 +2882,11 @@ projection logic.
 3. **All content is recoverable from events.** Event files are
    self-contained.
 4. **Librarian is the only writer of `dag.kz/` and `nodes/`.**
-5. **Coordinator only coordinates.** Does not parse, derive, or render.
+5. **Coordinator is singleton per workspace.** `rethlas supervise`
+   launches exactly one coordinator, which holds
+   `runtime/locks/supervise.lock`, scheduler-dispatches workers, and
+   parents librarian / dashboard. It never parses events, derives
+   state, or renders — librarian owns all of that.
 6. **Linter only reports, never repairs.**
 7. **Truth-bearing components communicate via truth events + KB.**
    Runtime orchestration uses local subprocess control and `runtime/`.
@@ -3060,3 +3172,36 @@ See `PHASE1.md` for the concrete task list.
     Phase I).
   - R6: `idle_reason_detail` capped at 512 bytes (truncated with
     `...`).
+- **2026-04-24 (supervisor merged into coordinator + A1/A4/A5 + linter E)**:
+  - No separate "supervisor" role. Coordinator is the workspace
+    singleton: it holds `runtime/locks/supervise.lock`, launches
+    librarian + dashboard as its own subprocesses, parents all
+    generator / verifier worker subprocesses, and runs the scheduler
+    loop. One process, one lock, one heartbeat file. §6.4 rewritten
+    to document this merged role (process tree, singleton lock,
+    child daemon management, graceful shutdown, interaction with
+    one-shot CLIs). Invariant 5 updated to capture coordinator
+    singleton.
+  - `coordinator.json` schema gains `children` field (librarian /
+    dashboard pid + status) so dashboard surfaces the whole tree in
+    one place. `supervisor.json` removed from runtime/state.
+  - A1 (real bug): librarian startup now does a `nodes/`
+    reconciliation pass after event replay — for every Kuzu node at
+    `pass_count >= 1`, diff on-disk `.md` vs expected render and
+    rewrite / delete as needed. Closes the crash window between Kuzu
+    commit and per-event re-render that previously left stale
+    `nodes/` a verifier could read via Codex to form a wrong accept
+    verdict.
+  - Linter category E: `nodes/` ↔ Kuzu consistency audit, with
+    `--repair-nodes` for explicit fix. Startup reconciliation +
+    linter E form a two-layer safety net.
+  - A4: linter refuses by default while `supervise.lock` is held;
+    `--allow-concurrent` overrides with a transient-drift
+    disclaimer in the report header.
+  - A5: `rethlas init` refuses when `events/` or `rethlas.toml`
+    already exist; `--force` allows overwriting `rethlas.toml` only
+    (never `events/`).
+  - `rethlas rebuild` takes the same supervise lock (refuses if
+    supervise is running; holds the lock itself while rebuilding).
+  - PHASE1 M2.2 / M2.3 / M3.4 / M6.4 / M6.5 / M8.1 / M8.3 updated to
+    cover these CLI-level contracts.

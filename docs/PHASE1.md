@@ -137,13 +137,22 @@ Milestone exit: `common/` packages importable; tests green.
 - `rethlas status` (Phase II candidate; stub)
 
 **M2.2** `cli/init.py` — `rethlas init`
-- Creates `events/`, `knowledge_base/`, `runtime/` (empty)
-- Writes minimal `rethlas.toml`
-- Writes workspace `.gitignore`
+- Refuses if `events/` or `rethlas.toml` already exist (per
+  ARCHITECTURE §6.4 one-shot CLI contract). `--force` allows
+  overwriting `rethlas.toml` only; never touches `events/`.
+- On fresh workspace: create `events/`, `knowledge_base/`, `runtime/`
+  skeleton, write `rethlas.toml` with explicit defaults, write
+  workspace `.gitignore`
 
 **M2.3** `cli/rebuild.py` — `rethlas rebuild`
-- Delete `knowledge_base/` and `runtime/`
-- Invoke librarian in one-shot mode to replay events
+- Refuses if `runtime/locks/supervise.lock` is held (supervise is
+  running); prints "stop supervise first" and exits non-zero
+- Takes the lock itself while running
+- Delete `knowledge_base/` and `runtime/` (but recreate `runtime/`
+  skeleton before releasing the lock so subsequent supervise can
+  start)
+- Invoke librarian in one-shot mode to replay all events including
+  repopulating `AppliedEvent` table
 
 Milestone exit: `rethlas init` creates a fresh workspace; `rethlas rebuild`
 runs (no-op with empty events).
@@ -214,7 +223,13 @@ runs (no-op with empty events).
 - File watcher on `events/` (via `watchdog`)
 - Ordered event processing (stable sort by iso_ms, seq, uid per
   ARCHITECTURE §3.7.1)
-- Full node re-render on startup
+- **Startup sequence** (per ARCHITECTURE §6.5):
+  1. Event replay: walk all `events/*` in order; skip any already in
+     `AppliedEvent`; apply the rest.
+  2. `nodes/` reconciliation: for every `pass_count >= 1` node in
+     Kuzu, diff on-disk `.md` vs rendered expected content; rewrite
+     divergent files and delete orphaned ones. Closes the crash
+     window between Kuzu commit and per-event re-render.
 - Rebuild is a CLI action (`rethlas rebuild`), not an event — librarian
   exposes it via `librarian/cli.py`, never via a truth event (Phase I
   truth producers are user/generator/verifier only)
@@ -366,13 +381,27 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 at the end of every loop tick (atomic `.tmp` + rename). Fields include
 `idle_reason_code` from the §6.4.2 enumeration.
 
-**M6.4** `coordinator/supervise.py` — launch and monitor long-running
-children (librarian, coordinator loop, dashboard)
+**M6.4** `coordinator/children.py` — long-running child daemon
+management (per ARCHITECTURE §6.4 merged supervisor role):
+- Acquire advisory `runtime/locks/supervise.lock` via `flock`; exit
+  non-zero if already held (prints holder pid)
+- Launch `librarian` subprocess + `dashboard` subprocess (each own
+  pid/pgid)
+- Monitor each child's heartbeat + process liveness; log + restart-once
+  policy on crash
+- Graceful shutdown: SIGTERM in reverse dependency order
+  (dashboard → workers → librarian), 10 s wait, SIGKILL remnants, then
+  release lock and exit
+- Populate `children` field of `runtime/state/coordinator.json` each
+  tick
 
-**M6.5** `cli/supervise.py` — `rethlas supervise`
+**M6.5** `cli/supervise.py` — `rethlas supervise` delegates to the
+coordinator process entry. No separate supervisor module — coordinator
+is the workspace-singleton parent (ARCHITECTURE §6.4, invariant 5).
 
 Milestone exit: `rethlas supervise` in a workspace with some user events
-drives the generator-verifier loop autonomously.
+drives the generator-verifier loop autonomously; a second `rethlas
+supervise` in the same workspace fails with "lock held by pid N".
 
 ---
 
@@ -430,7 +459,7 @@ healthy / degraded / down badges.
 
 ## M8 — Linter (minimal)
 
-**M8.1** `linter/checks.py` — categories A + B + C + D checks
+**M8.1** `linter/checks.py` — categories A + B + C + D + E checks
 - **A**: event filename ↔ JSON body consistency; unique event_ids;
   referenced event_ids exist
 - **B**: no cycles in Kuzu; label uniqueness; kind-field consistency;
@@ -441,14 +470,24 @@ healthy / degraded / down badges.
   label since the most recent `statement_hash`-changing event (direct
   rewrite or Merkle cascade from upstream statement change), assert
   matches `Node.repair_count`
+- **E**: `nodes/` ↔ Kuzu consistency — for every Kuzu Node with
+  `pass_count >= 1`, assert the corresponding `nodes/*.md` file
+  exists and its content equals the librarian-render of current Kuzu
+  fields; for every `nodes/*.md` file, assert the label is present
+  in Kuzu at `pass_count >= 1`. `--repair-nodes` flag rewrites
+  divergent files and deletes orphaned ones.
 
 **M8.2** `linter/main.py` — one-shot run
+- Refuses if `runtime/locks/supervise.lock` is held (per ARCHITECTURE
+  §6.6). `--allow-concurrent` overrides and annotates report header
+  with "transient drift may appear".
 - Load events, rebuild KB in memory (or query existing), run checks
 - Report results via stdout / JSON to `runtime/state/linter_report.json`
   (linter is NOT a truth producer per ARCHITECTURE §6). Exit non-zero on
   any violation so CI can gate on it.
 
-**M8.3** `cli/linter.py` — `rethlas linter [--mode fast]`
+**M8.3** `cli/linter.py` — `rethlas linter [--mode fast]
+[--allow-concurrent] [--repair-nodes]`
 
 Milestone exit: `rethlas linter` reports zero violations on a clean
 workspace; flags injected errors in test cases.
