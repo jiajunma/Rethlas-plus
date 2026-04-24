@@ -327,8 +327,9 @@ Admission further requires that `target` refers to a node with
 `pass_count <= 0` at admission time. Attaching a hint to a node that is
 already verified (`pass_count >= 1`) is rejected at publish: the hint
 has no reachable consumer, because `repair_hint` is read only at
-generator repair dispatch (count = -1), and any path from the current
-count back to -1 goes through a `verification_hash` change that would
+generator repair dispatch (`pass_count = -1`), and any path from the
+current `pass_count` back to -1 goes through a `verification_hash`
+change that would
 clear `repair_hint` before the hint could be read (see §5.2, §5.4).
 Post-publish, if the node is deleted (currently impossible in Phase I)
 or the hash has changed between admission and apply, librarian records
@@ -731,7 +732,8 @@ report / hint; the user then revises the definition via
 `user.node_revised`.
 
 **All five kinds share the same Node schema** (statement + proof +
-hashes + count). They differ in:
+hashes + `pass_count` + `repair_count` + hints/reports). They differ
+in:
 
 - **Who can create them** (generator or user only)
 - **Whether proof is expected** (empty for axioms, content for
@@ -1094,6 +1096,31 @@ No mixed-history hash exists. "Latest verdict" and "any gap" agree on
 every hash. The simpler `last verdict` rule is used; the equivalence is
 preserved by the repair-must-change-hash invariant.
 
+**`repair_count` audit** (parallel definition for linter category D):
+
+```
+audit_repair_count(node) =
+  let T = iso_ms of the most recent event that caused node's
+          statement_hash to take its current value. This is either:
+    - a user.node_added / user.node_revised / generator.batch_committed
+      event that directly wrote node.label with the current
+      statement_hash, OR
+    - the upstream event that triggered the Merkle cascade which
+      brought node.statement_hash to its current value.
+
+  return count(
+    e in events where
+      e.type == "verifier.run_completed" and
+      e.target == node.label and
+      e.iso_ms > T and
+      e.applied_event.status == "applied" and
+      e.verdict in ("gap", "critical")
+  )
+```
+
+Linter asserts `audit_repair_count(node) == Node.repair_count` for
+every node. Drift = librarian bug.
+
 #### 5.5.2 Pre-dispatch hash revalidation
 
 **Before dispatching verifier on a node (or before verifier starts a
@@ -1126,13 +1153,18 @@ rather than silently mutating derived state outside the truth/projection path.
 
 **When any node's `statement` changes**, or when librarian re-parses
 explicit references from the current `statement` / `proof`, its
-`statement_hash` recomputes
-and Merkle propagation recomputes all dependents' hashes. For each
-dependent whose `statement_hash` changed:
-- If the dependent's `proof` is non-empty: `count = 0` (existing proof
-  now needs re-verification against new dep state)
-- If the dependent's `proof` is empty: `count = -1` (stays at -1,
-  still needs generator)
+`statement_hash` recomputes and Merkle propagation recomputes all
+dependents' hashes. For each dependent whose `statement_hash`
+changed:
+
+- `pass_count = initial_count(dependent.kind, dependent.proof)` per
+  §5.4 (so a definition dependent stays at 0 awaiting re-verification,
+  a proof-requiring dependent with non-empty proof goes to 0, and a
+  proof-requiring dependent with empty proof goes to -1).
+- `repair_count = 0` (the statement context shifted; prior failed
+  attempts were against the old context and don't carry over).
+- Since `verification_hash` also changed (because `statement_hash`
+  changed), clear `repair_hint` and `verification_report`.
 
 **Own `proof` changes do NOT propagate downstream.** They change my
 `verification_hash` but not my `statement_hash`; dependents only look at
@@ -1166,16 +1198,17 @@ with the new statement and proof. When the revision flips truth polarity
 1. Generator emits statement revision + proof events for X
 2. X's `statement_hash` changes (new statement content)
 3. X's `verification_hash` changes (new statement + new proof)
-4. X's `pass_count` resets to 0 (hash change)
+4. X's `pass_count` resets to 0 (hash change); X's `repair_count` resets to 0
 5. Via Merkle propagation, all transitive dependents of X also have their
-   `statement_hash` / `verification_hash` change → their count resets to 0
+   `statement_hash` / `verification_hash` change → their `pass_count`
+   resets per `initial_count(kind, proof)` and `repair_count` resets to 0
 6. Verifier re-runs on X (once eligible) — if new proof is valid,
-   `X.count` → 1
-7. Dependents with proofs reset to `count = 0` because their
+   `X.pass_count` → 1
+7. Dependents with proofs reset to `pass_count = 0` because their
    `verification_hash` changed
 8. Verifier re-runs on dependents once strict-monotone conditions hold
 9. If an old dependent proof no longer works, verifier returns
-   `gap/critical` and only then that dependent enters `count = -1`
+   `gap/critical` and only then that dependent enters `pass_count = -1`
 10. Coordinator dispatches repair on dependents
 11. Generator during repair reads `nodes/{X}.md` with its new statement
    and writes dependents' proofs accordingly
@@ -1199,7 +1232,7 @@ decisions directly from the atomic fields:
 | Question | Query |
 | --- | --- |
 | Needs fresh proof? | `proof is empty` and kind is proof-requiring |
-| Needs verification? | `pass_count == 0` and deps all `count > node.count` |
+| Needs verification? | `pass_count == 0` and every dep has `pass_count > node.pass_count` |
 | Needs repair? | `pass_count == -1` and kind is proof-requiring |
 | Complete? | `pass_count >= DESIRED_COUNT` (default 3) |
 | Blocked (deps broken)? | Any dep is missing |
@@ -1524,13 +1557,13 @@ Verifier start/fail/interrupt lifecycle belongs to `runtime/`, not `events/`.
 coordinator maintains three things in memory:
 
 1. **Generator queue** — `kind ∈ {lemma, theorem, proposition}` nodes
-   with `count = -1` (either no proof yet, or latest verdict was
+   with `pass_count = -1` (either no proof yet, or latest verdict was
    gap/critical), and with every explicit dependency already at
    `pass_count >= 1` so the dependency is present in `nodes/`. Generator
    reads history to decide fresh vs repair. Priority: by `label` (stable).
 2. **Verifier queue** — all nodes where:
-   - `0 ≤ count < DESIRED_COUNT`
-   - For every dep: `dep.count > node.count` (strict monotone)
+   - `0 ≤ pass_count < DESIRED_COUNT`
+   - For every dep: `dep.pass_count > node.pass_count` (strict monotone)
    Priority: `pass_count` ascending.
 3. **KB read handle** — opens `dag.kz/` read-only via `common/kb` to
    compute candidates for the two queues on each loop iteration
@@ -1574,8 +1607,8 @@ else:
 **Verifier dispatch condition** (strict monotone):
 
 A node enters the verifier queue when:
-1. `0 <= count < DESIRED_COUNT`
-2. For every dep: `dep.count > node.count` (strict greater-than)
+1. `0 <= pass_count < DESIRED_COUNT`
+2. For every dep: `dep.pass_count > node.pass_count` (strict greater-than)
 3. No broken deps
 
 **No axiom exemption.** Definitions and external_theorems participate in
@@ -2085,13 +2118,13 @@ to producers via the KB Protocol, to dashboard via `/api/rejected` and
 ### 9.3 A typical verification cycle
 
 ```
-1. coordinator reads KB: finds proof-requiring node with count=0 and every dep.count > node.count
+1. coordinator reads KB: finds proof-requiring node with pass_count=0 and every dep.pass_count > node.pass_count
 2. coordinator creates a verifier runtime job for `lem:foo`
 3. wrapper launches codex exec with nodes/ cwd, read-only sandbox
 4. Codex reads the target statement/proof from the prompt and dep files from `nodes/`; runs 3-stage skills
 5. wrapper parses verdict JSON and emits verifier.run_completed
-6. librarian applies verifier.run_completed: count increments if accepted+hash matches
-7. coordinator on next loop sees count=1; if DESIRED_COUNT=3 dispatches audit
+6. librarian applies verifier.run_completed: pass_count increments if accepted+hash matches (AppliedEvent records the outcome)
+7. coordinator on next loop sees pass_count=1; if DESIRED_COUNT=3 dispatches audit
 ```
 
 ### 9.4 Communication constraint
