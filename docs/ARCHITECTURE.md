@@ -1467,6 +1467,47 @@ its nominal target, so its effective write set is not known until decode
 finishes. Workspace-wide generator serialization avoids overlapping batch
 write sets. Verifier jobs may still run concurrently on distinct targets.
 
+**Cross-component write-set overlap is not prevented.** The "no
+concurrent same-target" and "one generator at a time" rules are not
+enough to guarantee that a verifier's snapshot of a target's
+dependency chain remains valid for the entire verifier run. Concrete
+scenario:
+
+- Verifier V is running on `thm:A`, which depends on `def:D`.
+- Concurrently, generator G is working on an unrelated theorem `thm:B`.
+  G's decoded batch happens to also revise `def:D` (a legitimate
+  generator side-effect allowed by §6.2).
+- G's batch is published; librarian applies it; `def:D.statement_hash`
+  changes → Merkle cascade → `thm:A.statement_hash` and
+  `thm:A.verification_hash` change.
+- V finishes and publishes `verifier.run_completed` carrying the
+  **old** `verification_hash` of `thm:A`.
+- Librarian applies V's event: hash does not match current
+  `Node.verification_hash` → `AppliedEvent(status=apply_failed,
+  reason=hash_mismatch)`, no change to `pass_count`.
+
+**Correctness is preserved by the hash-match gate** (§5.5.0 #5): a
+stale verdict cannot advance `pass_count`. The verifier's work for
+that run is wasted, but no false positive enters KB.
+
+**Phase I accepts the waste.** Coordinator does *not* attempt to pause
+verifier dispatch while a generator is in-flight, for two reasons:
+
+1. Generator's effective write set is unknown until decode completes,
+   so a sound mutex would have to pessimistically block all verifier
+   dispatch during any generator run — costing concurrency even when
+   the batch touches unrelated nodes (the common case).
+2. Correctness is already guaranteed by the hash-match gate +
+   `apply_failed(hash_mismatch)` record. Adding an optimization-level
+   mutex would trade concurrency for LLM savings; we defer that
+   trade-off until real usage data justifies it.
+
+**Expected dashboard behavior:** a small steady-state rate of
+`AppliedEvent(apply_failed, reason=hash_mismatch)` during active
+workspaces is **normal, not a fault**. The linter does not treat these
+as anomalies. If the rate becomes large enough to hurt throughput,
+Phase II can revisit with an optimization pass.
+
 **Six safeguards against infinite loops / over-verification:**
 
 1. **`pass_count` monotonic per hash**: only `+1` from accepted verdicts;
@@ -1474,8 +1515,9 @@ write sets. Verifier jobs may still run concurrently on distinct targets.
    cycling 0↔1 possible on a stable hash.
 2. **Upper bound**: coordinator skips nodes with
    `pass_count ≥ DESIRED_COUNT`. Over-verification impossible.
-3. **Hash-match check (librarian)**: verdicts with mismatched hash are
-   ignored. No stale verdict pollution.
+3. **Hash-match check (librarian)**: verdicts with mismatched hash
+   are recorded as `apply_failed(hash_mismatch)` and do not change
+   `pass_count`. No stale verdict pollution.
 4. **Pre-dispatch hash revalidation** (§5.5.2): catches Kuzu ↔ data
    drift before dispatch.
 5. **Codex log mtime timeout (30 min)**: kills stuck Codex processes
