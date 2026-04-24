@@ -102,11 +102,12 @@ Rethlas/
     ├── locks/
     │   └── supervise.lock          # advisory flock held by coordinator (§6.4)
     └── state/
-        ├── coordinator.json        # coordinator heartbeat / queue / children
-        ├── librarian.json          # librarian heartbeat / projection summary
-        ├── rejected_writes.jsonl   # recent decoder/admission rejections
-        └── drift_alerts.jsonl      # rare hash/runtime drift alerts
-                                    # (all surfaced via dashboard)
+        ├── coordinator.json              # coordinator heartbeat / queue / children
+        ├── librarian.json                # librarian heartbeat / projection summary
+        ├── rejected_writes.jsonl         # recent decoder/admission rejections
+        ├── drift_alerts.jsonl            # rare hash/runtime drift alerts
+        └── rebuild_in_progress.flag      # present only while rebuild is mid-run
+                                          # (presence ⇒ librarian re-runs rebuild on startup)
 ```
 
 Workspace `.gitignore`:
@@ -132,6 +133,20 @@ rethlas rebuild                            # rebuild dag.kz + nodes/ from events
 ```
 
 Default workspace is cwd. `--workspace <path>` overrides.
+
+**Exit codes (all CLIs):**
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success / clean shutdown |
+| `1` | Generic error (unexpected exception; check logs) |
+| `2` | Workspace `supervise.lock` already held (`supervise`, `rebuild`) OR workspace not initialized (`supervise`, `linter`, `rebuild` without prior `init`) |
+| `3` | Critical child crash loop that coordinator cannot recover from (librarian restarts more than once within 3 min, §6.4) |
+| `4` | Config error — malformed `rethlas.toml`, out-of-range value, unknown file/directory layout (§2.4) |
+| `5` | Linter found violations (only for `rethlas linter`) |
+| `6` | `rethlas init` refused because workspace already has `events/` or `rethlas.toml` |
+
+Codes are stable across Phase I CLIs for scripting and CI use.
 
 ### 2.4 Workspace config `rethlas.toml`
 
@@ -910,7 +925,9 @@ to `events/`):
 - `hash_mismatch` — `verifier.run_completed` carries a
   `verification_hash` that no longer matches the target node's current
   hash (stale verdict). `detail` carries the stale hash prefix + the
-  current hash prefix.
+  current hash prefix, each as **12 hex chars** (48 bits) — enough to
+  distinguish colliding snapshots in practice while keeping log lines
+  readable.
 - `kind_mutation` — a revision attempted to change a node's `kind`.
   `detail` carries both old and new kind.
 - `self_reference` — a node's own body `\ref{}`s itself (also caught at
@@ -1225,33 +1242,68 @@ audit_repair_count(node) =
 Linter asserts `audit_repair_count(node) == Node.repair_count` for
 every node. Drift = librarian bug.
 
-#### 5.5.2 Pre-dispatch hash revalidation
+#### 5.5.2 Pre-dispatch validation
 
-**Before dispatching verifier on a node (or before verifier starts a
-run), recompute `verification_hash` from current state.** If the freshly
-computed value differs from the stored value, do **not** mutate Kuzu from the
-coordinator or verifier layer. Instead, fail the dispatch closed and surface a
-runtime drift alert so librarian replay / `rethlas rebuild` can restore
-consistency.
+**Coordinator's policy runs one loop tick earlier than the worker's
+actual start.** Between the two moments, Kuzu may change (librarian
+applies a verdict, another worker publishes, Merkle cascade fires).
+Before the worker calls Codex, it must **re-verify that every dispatch
+condition still holds** against current Kuzu — not just the hash.
 
-```
-fresh_hash = verification_hash(current_node_state)
+Pre-dispatch validation is done **by the wrapper** (generator /
+verifier `role.py`), right after its process starts, before launching
+Codex. Coordinator writes a snapshot (`dispatch_hash`, §6.7.1) into
+the job file so the wrapper has a point of comparison, but the
+wrapper re-reads Kuzu and is the final gate.
 
-if fresh_hash != node.verification_hash:
-    record_runtime_hash_drift(node.label, fresh_hash, node.verification_hash)
-    abort_dispatch()
-```
+**Conditions re-checked** (covering both pools; specifics depend on
+`job.kind`):
 
-Purpose:
-- Catches any drift between stored hash and actual content (librarian bug,
-  corruption, concurrent modification race)
-- Ensures verifier always runs on a verified-fresh hash
+| Condition | Verifier | Generator |
+| --- | --- | --- |
+| target exists in Kuzu | ✓ | ✓ |
+| `node.verification_hash == dispatch_hash` | ✓ | ✓ |
+| `pass_count` in expected band (`[0, DESIRED_COUNT)` for verifier, `-1` for generator) | ✓ | ✓ |
+| strict-monotone dep condition | ✓ | — |
+| all deps at `pass_count >= 1` (so visible in `nodes/`) | — | ✓ |
+| kind == proof-requiring (lem/thm/prop) | ✓ (targets only) | ✓ |
+| no other in-flight job on the same target | ✓ | ✓ |
+| (repair mode only) most recent gap/critical verdict's `verification_hash` == `H_rejected` supplied in repair context | — | ✓ |
+
+If **any** condition fails, wrapper:
+1. Writes `status = "precheck_failed"` to its `runtime/jobs/{job_id}.json`
+   with `detail` naming the specific condition and observed value.
+2. Appends a line to `runtime/state/drift_alerts.jsonl` if the
+   failure is the hash mismatch (the "real drift" case — librarian
+   bug or corruption).
+3. Exits without calling Codex. Coordinator's next loop tick sees
+   terminal status, deletes the job file, frees the pool slot.
+
+**Purpose:**
+- Catches drift between `dispatch_hash` snapshot and current Kuzu
+  (librarian applied something between dispatch decision and worker
+  start — normal concurrency, not a bug).
+- Catches true drift between stored hash and actual content
+  (librarian bug, corruption, concurrent modification race).
+- Ensures worker always runs on a fresh, consistent state.
 - Preserves the invariant that only librarian mutates `dag.kz/` and
-  `pass_count`
+  `pass_count`.
 
-This is a **safety backstop**. In a bug-free librarian, hashes are always
-current; this check is a no-op. If it ever triggers, the system fails closed
-rather than silently mutating derived state outside the truth/projection path.
+Most of the time pre-dispatch validation passes and is a cheap no-op
+(one Kuzu read + a few field comparisons). When it fails due to
+normal concurrency, the "wasted" worker dispatch costs one spawned
+subprocess and one Kuzu read — no Codex invocation, no LLM tokens.
+When it fails due to corruption, the drift alert surfaces the bug to
+the operator. Both outcomes are cheap.
+
+**Record the snapshot too.** Coordinator's dispatch step still
+computes the current `verification_hash` and writes it into
+`runtime/jobs/{job_id}.json` as `dispatch_hash` (§6.7.1). This
+snapshot is the reference point for wrapper's re-check and the
+forensic anchor when triaging `apply_failed(hash_mismatch)` after a
+verdict has already been published. Coordinator's write is not a
+*gate* — the wrapper's gate is — but it's the **baseline** against
+which the wrapper compares.
 
 ### 5.6 Merkle cascade (statement changes only)
 
@@ -1696,10 +1748,20 @@ automatically (OS behavior).
   dashboard uses (§6.7). No direct sockets / pipes.
 - Coordinator polls each child's heartbeat file (`librarian.json`
   etc.) against staleness thresholds (§6.7.1) and inspects process
-  liveness (`os.kill(pid, 0)`). If a child is dead but should be
-  running, coordinator logs and either restarts it (Phase I
-  restart-once-then-degrade policy) or marks `status = "degraded"`
-  and keeps going.
+  liveness (`os.kill(pid, 0)`).
+
+**Restart policy** (Phase I, different per child because their
+failure modes have different blast radius):
+
+| Child | Policy on crash | On re-crash |
+| --- | --- | --- |
+| **librarian** | Restart **once** immediately; record restart in log | If it crashes again within 3 min → coordinator itself exits with code 3 (workspace unusable without librarian; `rethlas supervise` reports the loop to the operator, who should intervene — usually a config or corruption issue) |
+| **dashboard** | Restart up to **3 times** with 30 s backoff between attempts | After 3 failures → mark `children.dashboard.status = "degraded"` in `coordinator.json`; coordinator and librarian keep running; operator can manually `rethlas dashboard` when they want UI back |
+
+Rationale: librarian is on the critical path (no projection means no
+verification progress). Dashboard is UI only; losing it is annoying
+but does not affect correctness.
+
 - On SIGTERM / SIGINT, coordinator signals children in reverse
   dependency order (dashboard → coordinator workers → librarian),
   waits for graceful exit (up to 10 s each), then SIGKILL remnants,
@@ -2077,9 +2139,27 @@ Linter category E (§6.6) also audits `nodes/` ↔ Kuzu consistency on
 demand; startup reconciliation is the automatic safety net, linter
 is the periodic / post-incident verification.
 
-Full rebuild is triggered by `rethlas rebuild`. It deletes `dag.kz/`,
-`nodes/`, **and** the `AppliedEvent` table content, then replays every
-event from scratch. This is the authoritative reset.
+Full rebuild is triggered by `rethlas rebuild`. Sequence:
+
+1. Acquire `runtime/locks/supervise.lock` (fail if held by a live
+   supervise).
+2. Write `runtime/state/rebuild_in_progress.flag` atomically. Content:
+   `{"schema": "rethlas-rebuild-flag-v1", "started_at": "..."}`.
+3. Delete `dag.kz/`, `nodes/`, and the `AppliedEvent` table content.
+4. Replay every event from `events/` in `(iso_ms, seq, uid)` order
+   through librarian's normal apply path (each event gets an
+   `AppliedEvent` row as usual).
+5. Run the same `nodes/` reconciliation pass librarian does on
+   startup (§6.5).
+6. Delete `runtime/state/rebuild_in_progress.flag`.
+7. Release lock and exit 0.
+
+**Crash recovery**: if rebuild crashes between step 2 and step 6, the
+flag stays. On the next `rethlas supervise` startup, librarian
+**detects the flag** during its own startup and treats the workspace
+as "mid-rebuild" — it force-re-runs the full rebuild (steps 3–6)
+before accepting any normal event operations. This makes rebuild
+idempotent under partial-crash scenarios.
 
 Librarian writes no truth events in Phase I. `AppliedEvent` is a Kuzu
 projection table, not a truth log.
@@ -2396,6 +2476,10 @@ field.
 `status` enumeration (Phase I):
 - `starting` — coordinator wrote the file, wrapper has not yet started
   the Codex subprocess
+- `precheck_failed` — wrapper's pre-dispatch validation (§5.5.2)
+  found a condition no longer holds (hash drift, pass_count
+  advanced, dep became blocked, etc.); wrapper exited without calling
+  Codex. `detail` names the failed condition.
 - `running` — Codex subprocess is live; wrapper is monitoring
 - `publishing` — Codex finished; wrapper is staging / publishing truth
   event (brief)
@@ -2858,12 +2942,13 @@ Librarian reads all `events/` and rebuilds `dag.kz/` and `nodes/`.
 | Failure | Effect | Recovery |
 | --- | --- | --- |
 | Producer crashes mid-write | `.tmp` file lingers | Deleted on next startup |
-| Librarian crashes mid-apply | Kuzu transaction rolls back (both KB mutations and the `AppliedEvent` row roll back together) | Next startup re-processes the event deterministically |
+| Librarian crashes mid-apply | Kuzu transaction rolls back (both KB mutations and the `AppliedEvent` row roll back together); per-event `nodes/*.md` render may have been partial | Next startup re-processes the event deterministically; librarian's startup `nodes/` reconciliation (§6.5) repairs any stale or partial `.md` files |
 | `AppliedEvent` out-of-sync with KB | Only possible via manual Kuzu tampering | `rethlas rebuild` restores both from events |
 | Kuzu DB corrupt | Queries fail | `rethlas rebuild` |
-| Full workspace clone | No dag.kz | `rethlas rebuild` on first use |
+| Full workspace clone | No `dag.kz` | `rethlas rebuild` on first use |
 | Codex subprocess stuck | Log mtime stales | Coordinator timeout kills process group |
-| Supervise crash | Child daemons die | Restart supervise; runtime/ cleared |
+| Supervise (coordinator) crash | All children die | Restart `rethlas supervise`; runtime/ cleared |
+| `rethlas rebuild` itself crashes mid-run | `knowledge_base/` in partial state (half-deleted or half-rebuilt); `AppliedEvent` possibly partial | On next `rethlas supervise` startup, librarian sees `runtime/state/rebuild_in_progress.flag` (written by rebuild before the destructive step) and force-restarts the rebuild from scratch (wipe + full replay) before entering normal operation |
 
 ### 11.3 Schema evolution
 
@@ -3205,3 +3290,35 @@ See `PHASE1.md` for the concrete task list.
     supervise is running; holds the lock itself while rebuilding).
   - PHASE1 M2.2 / M2.3 / M3.4 / M6.4 / M6.5 / M8.1 / M8.3 updated to
     cover these CLI-level contracts.
+- **2026-04-24 (B1–B6 review)**:
+  - **B2 (broadened)**: §5.5.2 renamed "Pre-dispatch hash
+    revalidation" → "Pre-dispatch validation". The gate is now the
+    wrapper (not coordinator): on worker startup, before calling
+    Codex, wrapper re-checks **every** dispatch condition against
+    current Kuzu (target exists, hash matches `dispatch_hash` from
+    job file, pass_count in expected band, strict-monotone deps,
+    deps visible in `nodes/` for generator, no other in-flight job
+    on same target, repair-mode `H_rejected` still current). Failure
+    → `status = "precheck_failed"` with detail naming the condition;
+    exit without Codex call. Coordinator still writes the snapshot
+    `dispatch_hash` for forensic anchoring. New job status
+    `precheck_failed` added to §6.7.1 enum.
+  - **B1**: per-child restart policy pinned (§6.4):
+    librarian restarts once; re-crash → coordinator exits with
+    code 3 (workspace unusable). Dashboard restarts up to 3×
+    with 30 s backoff; further failures mark degraded but leave
+    librarian/coordinator running.
+  - **B3**: `rethlas rebuild` writes
+    `runtime/state/rebuild_in_progress.flag` before the destructive
+    step, deletes it on successful completion. Crash mid-rebuild
+    leaves the flag; librarian detects it on next startup and
+    force-reruns rebuild before normal operation. §2.2 tree +
+    §6.5 rebuild sequence + §11.2 recovery table updated.
+  - **B4**: `AppliedEvent.detail` uses 12-hex-char (48-bit)
+    prefixes for hash values.
+  - **B5**: `rethlas init` writes a fully-annotated `rethlas.toml`
+    listing every known field with its default and a one-line
+    comment (PHASE1 M2.2 updated with template).
+  - **B6**: §2.3 adds an exit-code table shared across all CLIs
+    (0 success, 1 generic, 2 lock/uninitialized, 3 critical child
+    crash loop, 4 config error, 5 linter violations, 6 init refused).

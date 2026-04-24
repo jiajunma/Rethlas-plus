@@ -141,8 +141,27 @@ Milestone exit: `common/` packages importable; tests green.
   ARCHITECTURE §6.4 one-shot CLI contract). `--force` allows
   overwriting `rethlas.toml` only; never touches `events/`.
 - On fresh workspace: create `events/`, `knowledge_base/`, `runtime/`
-  skeleton, write `rethlas.toml` with explicit defaults, write
-  workspace `.gitignore`
+  skeleton and write a **fully annotated** `rethlas.toml` that lists
+  every known field with its default value and a one-line comment
+  per field (so the user discovers all tunable knobs just by opening
+  the file). Template:
+  ```toml
+  # Rethlas workspace config. See ARCHITECTURE.md §2.4 for the full
+  # field list and validation bounds.
+  [scheduling]
+  # Per-node pass_count goal; coordinator stops dispatching once all
+  # nodes reach this value (§10.1).
+  desired_pass_count       = 3
+  # Max concurrent generator workers (§10.3).
+  generator_workers        = 2
+  # Max concurrent verifier workers (§10.3).
+  verifier_workers         = 4
+
+  [dashboard]
+  # HTTP bind address. Default loopback; no auth in Phase I (§6.7.1).
+  bind                     = "127.0.0.1:8765"
+  ```
+- Also write workspace `.gitignore` that matches ARCHITECTURE §2.2.
 
 **M2.3** `cli/rebuild.py` — `rethlas rebuild`
 - Refuses if `runtime/locks/supervise.lock` is held (supervise is
