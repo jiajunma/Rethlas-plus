@@ -161,8 +161,11 @@ the truth event stream alone.
      event alone plus the producer's local KB view at admission time —
      schema completeness, actor/type registration, label syntax,
      self-reference, batch-internal acyclicity, repair-must-change-hash
-     (§6.2). Structural failures never enter `events/`; they are
-     recorded in `runtime/state/rejected_writes.jsonl`.
+     (§6.2), and *semantically-unreachable* proposals (e.g.
+     `user.hint_attached(target=X)` where `X.pass_count >= 1` — the
+     hint could never be consumed, see §5.2). Structural failures
+     never enter `events/`; they are recorded in
+     `runtime/state/rejected_writes.jsonl`.
    - **Projection** (librarian, at apply time): checks **semantic
      cross-event** consistency that only the canonical event sequence
      can decide — label uniqueness against already-applied nodes, cycle
@@ -319,6 +322,18 @@ Hint events carry:
 
 `user.hint_attached` is also full-schema in Phase I: both `hint` and `remark`
 must be present. `remark` may be empty, but `hint` may not be empty.
+
+Admission further requires that `target` refers to a node with
+`pass_count <= 0` at admission time. Attaching a hint to a node that is
+already verified (`pass_count >= 1`) is rejected at publish: the hint
+has no reachable consumer, because `repair_hint` is read only at
+generator repair dispatch (count = -1), and any path from the current
+count back to -1 goes through a `verification_hash` change that would
+clear `repair_hint` before the hint could be read (see §5.2, §5.4).
+Post-publish, if the node is deleted (currently impossible in Phase I)
+or the hash has changed between admission and apply, librarian records
+`apply_failed(reason=hint_target_missing)` or the admission-time check
+against `pass_count >= 1` is re-evaluated as `hint_target_unreachable`.
 
 Verdict events carry:
 
@@ -758,6 +773,11 @@ Defined `reason` codes for `status = "apply_failed"` (Phase I):
 - `ref_missing` — an explicit `\ref{}` target does not exist at apply
   time
 - `hint_target_missing` — `user.hint_attached` target label not found
+- `hint_target_unreachable` — `user.hint_attached` target exists but
+  has `pass_count >= 1` at apply time (the hint is semantically
+  dormant; see §5.2). Admission already rejects this at publish time;
+  this apply-time reason only fires when a concurrent verdict advanced
+  the target between admission and apply.
 - `hash_mismatch` — `verifier.run_completed` carries a
   `verification_hash` that no longer matches the target node's current
   hash (stale verdict)
@@ -777,11 +797,35 @@ Defined `reason` codes for `status = "apply_failed"` (Phase I):
   `verifier.run_completed` event arrives — contains the latest
   three-stage structured report (what the verifier found). Generator
   reads this during repair.
-- **`repair_hint`**: current aggregated hints for the next repair attempt.
-  Sources:
-  - Extracted from verifier's report on wrong verdict (e.g., "step 5 has a gap")
-  - Set by `user.hint_attached` events
-  - Cleared when generator emits a new statement/proof for the node
+- **`repair_hint`**: a textual message generator reads at the start of
+  the next repair attempt. Internally structured as one
+  verifier-maintained section followed by zero or more
+  user-contributed sections, separated by `---` lines:
+
+  ```
+  <verifier section — latest verifier gap/critical hint for current hash>
+  ---
+  [user @ 20260424T143015.123]
+  <user hint body>
+  ---
+  [user @ 20260424T160212.004]
+  <another user hint body>
+  ```
+
+  Three update rules (§5.4):
+  - `verifier.run_completed(gap/critical, hash matches)` **overwrites
+    the verifier section**; any user sections stay.
+  - `user.hint_attached(target=X)` **appends a new user section** at
+    the end (with `---` separator and `[user @ <iso_ms>]` header).
+  - When a `generator.batch_committed` or `user.node_revised` changes
+    the node's `verification_hash`, `repair_hint` **and**
+    `verification_report` are both **cleared entirely** (all prior
+    hints/reports apply to a stale hash).
+
+  Admission rule: `user.hint_attached(target=X)` is rejected pre-publish
+  if `X.pass_count >= 1` (§3.1.6). Hints are only meaningful while the
+  node is awaiting generator repair or verifier check; attaching to an
+  already-verified node has no effect in any future path.
 - **`remark`**: free-form human-facing note; field always present, value may be empty
 - **`source_note`**: source/citation note; field always present, value may be
   empty except for `external_theorem`, where it is required to be non-empty
@@ -893,14 +937,14 @@ verifier.
 
 | Event | Effect on target Node |
 | --- | --- |
-| `user.node_added` | Create node with the full authored state; `count = initial_count(kind, proof)` |
-| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `count = initial_count(kind, proof)`; Merkle propagates to dependents when statement changes |
-| `generator.batch_committed` | Apply the committed node batch atomically; for each included node, create or replace current statement/proof/metadata, recompute hashes, and set `count = initial_count(kind, proof)` |
+| `user.node_added` | Create node with the full authored state; `count = initial_count(kind, proof)`; `repair_hint` and `verification_report` start empty |
+| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `count = initial_count(kind, proof)`; if `verification_hash` changed, clear `repair_hint` and `verification_report`; Merkle propagates to dependents when statement changes |
+| `generator.batch_committed` | Apply the committed node batch atomically; for each included node, create or replace current statement/proof/metadata, recompute hashes, and set `count = initial_count(kind, proof)`; for every node in the batch whose `verification_hash` changed, clear `repair_hint` and `verification_report` |
 | `verifier.run_completed(accepted, hash matches)` | `count += 1`; set `verification_report` |
-| `verifier.run_completed(gap, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (local fix suggestions) |
-| `verifier.run_completed(critical, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (may need statement rewrite) |
+| `verifier.run_completed(gap, hash matches)` | `count = -1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (local fix suggestions); user sections untouched |
+| `verifier.run_completed(critical, hash matches)` | `count = -1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (may need statement rewrite); user sections untouched |
 | `verifier.run_completed(hash mismatch)` | Record `AppliedEvent(status=apply_failed, reason=hash_mismatch)`; no KB change (stale verdict) |
-| `user.hint_attached(target=X)` | If `X` exists: append to `X.repair_hint`. Otherwise record `apply_failed(reason=hint_target_missing)` and no KB change |
+| `user.hint_attached(target=X)` | **Admission** rejects if `X.pass_count >= 1` (hint has no reachable effect). Otherwise at apply time: if `X` exists, **append** a new user section `---\n[user @ <iso_ms>]\n<hint body>` to `X.repair_hint`. If `X` does not exist, record `apply_failed(reason=hint_target_missing)` |
 
 ### 5.5 Auditability and safety checks
 

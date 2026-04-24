@@ -165,12 +165,21 @@ runs (no-op with empty events).
   `verification_report` and `repair_hint`
 - verifier hash mismatch → record `AppliedEvent(apply_failed,
   reason=hash_mismatch)`; no KB change
-- user.hint_attached: if target exists, append to `repair_hint`;
-  otherwise record `AppliedEvent(apply_failed,
-  reason=hint_target_missing)`
-- Generator.batch_committed clears the target's `repair_hint` and
-  `verification_report` when the node's `verification_hash` changes
-  (fresh attempt invalidates prior hint/report)
+- user.hint_attached:
+  - Structural admission: reject if `target.pass_count >= 1` at
+    admission time (event never reaches `events/`)
+  - Semantic apply: if target missing → `apply_failed(reason=hint_target_missing)`;
+    if target.count advanced to ≥ 1 between admission and apply →
+    `apply_failed(reason=hint_target_unreachable)`; otherwise append
+    a new user section to `repair_hint` with format
+    `\n---\n[user @ <iso_ms>]\n<hint body>`
+- verifier.run_completed(gap/critical) on hash match: overwrite the
+  **verifier section** of `repair_hint` (everything before the first
+  `---` line); preserve any user sections following it
+- Generator.batch_committed / user.node_revised whose write changes
+  `verification_hash` of a touched node: clear that node's
+  `repair_hint` **and** `verification_report` entirely (old content
+  applies to a stale hash)
 - No -1 propagation rule (strict-monotone dispatch handles it)
 - Counter-example = statement revision inside a normal
   `generator.batch_committed` (no dedicated event)
