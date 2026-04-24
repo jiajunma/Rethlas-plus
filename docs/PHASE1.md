@@ -50,14 +50,21 @@ Test layers used throughout:
 - `system`: full workspace runs through CLI entry points
 - `fault-injection`: crash / timeout / restart / stale-state scenarios
 
-Recommended test layout:
+**Fault-injection tests live under `tests/integration/` or
+`tests/system/` physically, marked with `@pytest.mark.fault`** (marker
+registered in `pyproject.toml`). CI selects them via `-m "fault"`
+or excludes them via `-m "not fault"`; tests are **never filtered by
+name substring** (`-k fault`) since that misses tests whose names
+don't happen to contain the word.
+
+Test layout:
 
 ```text
 tests/
 ├── unit/
-├── integration/
-├── system/
-└── fixtures/
+├── integration/       # includes fault-marked integration tests
+├── system/            # includes fault-marked system tests
+└── fixtures/          # shared helper modules (delivered by M1 / M5)
 ```
 
 Recommended helper infrastructure:
@@ -113,6 +120,13 @@ Recommended helper infrastructure:
 - `system`: `rethlas` with **no subcommand** prints help to stderr
   and exits with code **1** (argparse convention — a missing
   required subcommand is an error, not a successful help display)
+- `unit`: the admission layer resolves `producers.toml` from the
+  **Rethlas installation root** (next to `pyproject.toml`), not
+  from the workspace (ARCHITECTURE §2.1, §3.5). Fixture: set up
+  a workspace containing a conflicting `producers.toml` → admission
+  still uses the installation copy (prevents an admission-bypass
+  attack where a compromised workspace overrides the producer
+  registry).
 
 **Exit**
 
@@ -149,6 +163,26 @@ Recommended helper infrastructure:
 - `common/kb/hashing.py`
   - deterministic `statement_hash`
   - deterministic `verification_hash`
+- **Test fixture baseline** delivered alongside M1 so subsequent
+  milestones inherit a stable harness — these are real deliverables,
+  not "recommended" helpers:
+  - `tests/fixtures/tmp_workspace.py` — pytest context manager that
+    creates a temp workspace with `events/`, `knowledge_base/`,
+    `runtime/jobs/`, `runtime/logs/`, `runtime/locks/`,
+    `runtime/state/` skeleton; optionally seeds a `rethlas.toml`
+    matching the annotated template
+  - `tests/fixtures/fake_clock.py` — deterministic
+    `utc_wall_clock_now()` substitute; step-forward helper; can
+    simulate wall-clock backward jumps for H5 tests
+  - `tests/fixtures/inject.py` — `inject_applied_event(...)`,
+    `inject_node(...)`, `inject_event_file(...)` helpers that
+    write directly into Kuzu / `events/` for tests that need to
+    bypass admission or librarian (used extensively by M2, M3, M9,
+    M10 tests)
+  - `tests/fixtures/event_bytes.py` — `write_event_with_bytes(...)`
+    helper that writes an event file with exactly specified raw
+    bytes (for `event_sha256` determinism tests and linter F
+    tampering fixtures)
 
 **Tests**
 
@@ -483,6 +517,32 @@ Recommended helper infrastructure:
 - timeout handling
 - orphan reaper helpers
 - sliding-window outcome tracking helpers
+- **`tests/fixtures/fake_codex.py`** — real deliverable, not a
+  vague helper. A Python script that emulates `codex exec` for all
+  tests downstream of M5 (M6 / M7 / M8 / M11 depend on it). Takes
+  the same CLI args as real Codex (`-C`, `-m`, `--sandbox`, prompt
+  positional). Behavior selected at test time via env var
+  `FAKE_CODEX_SCRIPT=<json>` whose schema is:
+  ```json
+  {
+    "stdout_lines": [{"text": "...", "delay_s": 0.0}, ...],
+    "stderr_lines": [{"text": "...", "delay_s": 0.0}, ...],
+    "silent_seconds": 0,
+    "exit_code": 0,
+    "malformed": false
+  }
+  ```
+  `delay_s` paces output so log mtime timing can be exercised
+  (F1 / F2). `silent_seconds` simulates long reasoning (10–20 min)
+  without blocking the test suite — the fake accepts a scale
+  factor env var `FAKE_CODEX_TIME_SCALE=0.01` so tests run in
+  milliseconds while the production default stays at 1.0.
+  `malformed=true` emits partial `<node>` or bogus verdict JSON
+  to exercise §7.5 crash paths.
+- **`tests/fixtures/scripted_codex.py`** — ergonomic test-side
+  composer that produces `FAKE_CODEX_SCRIPT` JSON for common
+  scenarios (valid generator batch, verdict=accepted, verdict=gap,
+  silent-timeout, parse-failure, etc.)
 
 **Tests**
 
@@ -560,6 +620,10 @@ Recommended helper infrastructure:
 - `integration`: wrapper pre-dispatch validation returns `precheck_failed` without calling Codex when conditions drift
 - `integration`: decoder rejections append to `runtime/state/rejected_writes.jsonl`
 - `system`: `rethlas generator --target ... --mode fresh|repair` works in a temp workspace with fake Codex
+- `system`: `rethlas generator --target ... --mode xyz` (invalid
+  mode) is rejected by argparse itself — exit code 2, usage
+  message to stderr, no `runtime/jobs/*.json` created, no Codex
+  invocation attempted
 
 **Exit**
 
@@ -809,6 +873,14 @@ Recommended helper infrastructure:
 - `system`: JSON report is written to
   `runtime/state/linter_report.json` and exit code 5 on violations
   (§2.3 exit-code table)
+- `system`: **clean-workspace success path** — a workspace that
+  just went through `rethlas init` + a handful of valid user events
+  applied by a brief supervise run, with no drift anywhere, passes
+  `rethlas linter` with exit code **0**. `linter_report.json` has
+  every category's `violations` array empty and a `summary` that
+  reads "0 violations". Without this test, an implementation that
+  always reports "violations found" would still pass the failure-
+  path tests and only fail in production.
 
 **Exit**
 
@@ -899,13 +971,15 @@ Phase I is not done until all of the following are green:
 - fault-injection tests
 - linter on a clean fixture workspace
 
-Minimum CI stages:
+Minimum CI stages (use the `fault` pytest marker, not name
+substring; register the marker in `pyproject.toml`):
 
 1. `pytest tests/unit`
-2. `pytest tests/integration`
-3. `pytest tests/system`
-4. `pytest tests/system -k fault`
-5. `pytest tests/integration -k golden`
+2. `pytest tests/integration -m "not fault"`
+3. `pytest tests/system -m "not fault"`
+4. `pytest tests -m "fault"` (fault-injection stage, both
+   integration and system fault-marked tests together)
+5. `pytest tests/integration -m "golden"` (golden-snapshot stage)
 6. `rethlas linter` against a golden clean fixture
 
 **Platform matrix.** CI runs the full gate on both **Linux**
