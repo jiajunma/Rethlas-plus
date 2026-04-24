@@ -2630,6 +2630,13 @@ Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
   <label>"`. Each timeout costs the configured silent window of
   LLM budget, so surfacing promptly lets the operator intervene
   (raise timeout, revise statement, attach hint, or pause).
+- Targets with 3 consecutive `status = "apply_failed"` job outcomes
+  with the **same** `AppliedEvent.reason` (e.g. repeated
+  `label_conflict` because generator keeps picking the same aux
+  label; repeated `cycle` because generator keeps closing the same
+  dependency loop). Labelled `"<kind> stuck on <label>: 3× <reason>"`.
+  Coordinator maintains this per-(target, reason) counter so L2-class
+  generator wheel-spin is visible, not silent.
 
 **Should remain useful even when services are partly down:**
 - If coordinator is down but Kuzu is readable, dashboard still renders the last
