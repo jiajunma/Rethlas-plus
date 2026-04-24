@@ -117,7 +117,7 @@ Milestone exit: `common/` packages importable; tests green.
 - `rethlas supervise` (M6)
 - `rethlas dashboard` (M7)
 - `rethlas linter` (M8)
-- `rethlas rebuild` (M4)
+- `rethlas rebuild` (M2.3 defines it; replays events via librarian)
 - `rethlas generator` (M4)
 - `rethlas verifier` (M5)
 - `rethlas status` (Phase II candidate; stub)
