@@ -445,27 +445,46 @@ Where:
 - `prefix ∈ {def, ext, lem, prop, thm}`
 - `slug ∈ [a-z0-9_]+`
 
+**Prefix ↔ kind strict mapping** (enforced at admission):
+
+| Prefix | Kind |
+| --- | --- |
+| `def` | `definition` |
+| `ext` | `external_theorem` |
+| `lem` | `lemma` |
+| `prop` | `proposition` |
+| `thm` | `theorem` |
+
+The prefix must correspond to the node's `kind`. A label like
+`thm:foo` with `kind: lemma` is rejected at admission (in both user
+CLI and generator decoder). Since `kind` is immutable (§5.1), this
+mapping is stable for the lifetime of the node and gives dashboard /
+linter / Codex a reliable visual cue.
+
 Rules:
 - Label should roughly describe the mathematical content or role of the node
 - Label must remain meaningful when read in isolation later
 - Local / positional names are invalid
+- Prefix must match kind per the table above
 
 Invalid examples:
-- `thm:main`
-- `lem:helper`
-- `prop:claim1`
-- `lem:key_step`
-- `def:object`
+- `thm:main` (placeholder)
+- `lem:helper` (placeholder)
+- `prop:claim1` (placeholder)
+- `lem:key_step` (placeholder)
+- `def:object` (placeholder)
+- `thm:barbasch_signed_tableau_rule` with `kind: external_theorem`
+  (prefix/kind mismatch; should be `ext:...`)
 
 Valid style examples:
-- `def:primary_object`
-- `ext:barbasch_signed_tableau_rule`
-- `lem:block_form_for_x0_plus_u`
-- `prop:symplectic_sign_pair_for_even_block`
-- `thm:maximal_orbits_equal_open_orbits`
+- `def:primary_object` (kind=definition)
+- `ext:barbasch_signed_tableau_rule` (kind=external_theorem)
+- `lem:block_form_for_x0_plus_u` (kind=lemma)
+- `prop:symplectic_sign_pair_for_even_block` (kind=proposition)
+- `thm:maximal_orbits_equal_open_orbits` (kind=theorem)
 
-Librarian validates label syntax and rejects placeholder-style labels in
-Phase I.
+Admission validates label syntax, placeholder rejection, and
+prefix/kind correspondence in Phase I.
 
 ### 3.6 Per-event cost tracking
 
@@ -663,7 +682,7 @@ class KnowledgeBase(Protocol):
     def dependency_closure(self, label: str) -> list[Node]: ...
     def detect_cycles(self) -> list[list[str]]: ...
     def latest_verdict(self, label: str, hash: str) -> Event | None: ...
-    def count_repair_attempts(self, label: str, hash: str) -> int: ...
+    def repair_count(self, label: str) -> int: ...   # reads Node.repair_count
 
     # reads — projection decisions (§3.1.6 / §6.5)
     def applied_event_status(
@@ -696,11 +715,20 @@ Only Python components use this. Codex does not import KB code.
 
 | Kind | Generator can create? | Initial count | Fix on wrong verdict |
 | --- | --- | --- | --- |
-| `definition` | ✓ | **0** (needs verify) | user (primary); generator as side-effect of a proof-requiring repair |
+| `definition` | ✓ | **0** (needs verify) | user only |
 | `external_theorem` | ✗ (user only) | **0** | user only |
 | `lemma` | ✓ | **-1** | generator (dispatched auto) |
 | `theorem` | ✓ | **-1** | generator |
 | `proposition` | ✓ | **-1** | generator |
+
+**Generator's write scope per batch** (§6.2): generator may write *only*
+to its own target label (itself a proof-requiring kind — `lemma`,
+`theorem`, or `proposition`) and to **brand-new labels not currently in
+KB**. It may not revise any other pre-existing node, including existing
+definitions. If a generator's repair path seems to require sharpening an
+upstream definition, the generator conveys that through the repair
+report / hint; the user then revises the definition via
+`user.node_revised`.
 
 **All five kinds share the same Node schema** (statement + proof +
 hashes + count). They differ in:
@@ -741,7 +769,8 @@ CREATE NODE TABLE Node (
   proof STRING,                        -- empty for axioms or unproved
   statement_hash STRING,
   verification_hash STRING,
-  pass_count INT DEFAULT -1,   -- -1 / 0 / positive
+  pass_count INT DEFAULT -1,           -- -1 / 0 / positive, indexed by verification_hash
+  repair_count INT DEFAULT 0,          -- gap/critical verdicts since last statement_hash change
   verification_report STRING,          -- latest verifier report (stage details + verdict)
   repair_hint STRING,                  -- accumulated hints for next repair attempt
   remark STRING,
@@ -792,7 +821,20 @@ Defined `reason` codes for `status = "apply_failed"` (Phase I):
   nodes that currently have no proof.
 - **Hashes**: for Merkle propagation and verdict matching.
 - **`pass_count`**: `-1` means needs generator; `0` means needs
-  verifier; `≥ 1` means verified that many times.
+  verifier; `≥ 1` means verified that many times against the current
+  `verification_hash`.
+- **`repair_count`**: number of `gap` / `critical` verdicts accumulated
+  against the node's **current `statement_hash`**. Resets to 0 whenever
+  `statement_hash` changes (for any reason: user revision, generator
+  batch that touches this node with new statement, or Merkle cascade
+  from an upstream statement change). Proof-only rewrites do **not**
+  reset `repair_count` — they are successive attempts at the same
+  statement. Generator reads `repair_count` during repair dispatch; if
+  it is large (e.g. ≥ 3), generator should consider that the statement
+  itself may be wrong and pursue a statement revision or counter-example
+  instead of another local patch. Phase I coordinator imposes no hard
+  threshold — `repair_count` is advisory signal to the generator
+  (§6.2, §10.4).
 - **`verification_report`**: set by librarian whenever a
   `verifier.run_completed` event arrives — contains the latest
   three-stage structured report (what the verifier found). Generator
@@ -937,12 +979,12 @@ verifier.
 
 | Event | Effect on target Node |
 | --- | --- |
-| `user.node_added` | Create node with the full authored state; `count = initial_count(kind, proof)`; `repair_hint` and `verification_report` start empty |
-| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `count = initial_count(kind, proof)`; if `verification_hash` changed, clear `repair_hint` and `verification_report`; Merkle propagates to dependents when statement changes |
-| `generator.batch_committed` | Apply the committed node batch atomically; for each included node, create or replace current statement/proof/metadata, recompute hashes, and set `count = initial_count(kind, proof)`; for every node in the batch whose `verification_hash` changed, clear `repair_hint` and `verification_report` |
-| `verifier.run_completed(accepted, hash matches)` | `count += 1`; set `verification_report` |
-| `verifier.run_completed(gap, hash matches)` | `count = -1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (local fix suggestions); user sections untouched |
-| `verifier.run_completed(critical, hash matches)` | `count = -1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (may need statement rewrite); user sections untouched |
+| `user.node_added` | Create node with the full authored state; `pass_count = initial_count(kind, proof)`; `repair_count = 0`; `repair_hint` and `verification_report` start empty |
+| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `pass_count = initial_count(kind, proof)`; if `statement_hash` changed, `repair_count = 0`; if `verification_hash` changed, clear `repair_hint` and `verification_report`; Merkle propagates to dependents when statement changes (dependents' `statement_hash` changes → their `repair_count` resets to 0 too) |
+| `generator.batch_committed` | Apply the committed node batch atomically; for each included node: create or replace current statement/proof/metadata, recompute hashes, and set `pass_count = initial_count(kind, proof)`; if the node's `statement_hash` changed, `repair_count = 0`; if the node's `verification_hash` changed, clear `repair_hint` and `verification_report`; cascaded dependents reset `repair_count` when their `statement_hash` changes via Merkle propagation |
+| `verifier.run_completed(accepted, hash matches)` | `pass_count += 1`; set `verification_report`; `repair_count` unchanged |
+| `verifier.run_completed(gap, hash matches)` | `pass_count = -1`; `repair_count += 1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (local fix suggestions); user sections untouched |
+| `verifier.run_completed(critical, hash matches)` | `pass_count = -1`; `repair_count += 1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (may need statement rewrite); user sections untouched |
 | `verifier.run_completed(hash mismatch)` | Record `AppliedEvent(status=apply_failed, reason=hash_mismatch)`; no KB change (stale verdict) |
 | `user.hint_attached(target=X)` | **Admission** rejects if `X.pass_count >= 1` (hint has no reachable effect). Otherwise at apply time: if `X` exists, **append** a new user section `---\n[user @ <iso_ms>]\n<hint body>` to `X.repair_hint`. If `X` does not exist, record `apply_failed(reason=hint_target_missing)` |
 
@@ -1192,20 +1234,35 @@ Produces `<node>` blocks via Codex. Two modes:
 - **repair**: fix a rejected proof using prior attempt + verdict as context
 
 **Generator's allowed output kinds:**
-- `definition` — creating new definitions or revising existing ones
-- `lemma`, `theorem`, `proposition` — proof-requiring kinds
+- `definition` — only as a **brand-new** node (new label)
+- `lemma`, `theorem`, `proposition` — proof-requiring kinds (brand-new
+  or, for the batch's own target label, a revision)
 - **NOT** `external_theorem` — user-only (requires citation)
 
 Generator role layer rejects any `<node>` block with `kind: external_theorem`
 and reports the failure in runtime logs.
 
+**Generator write-scope invariant** (enforced by decoder, §6.2 failure
+modes): each `<node>` block in a batch must be either
+1. the batch's primary `target` label (being generated or repaired), or
+2. a label that does **not currently exist** in KB (a brand-new node
+   introduced by this attempt).
+
+No `<node>` block may target an existing non-target label. Generator
+cannot revise an existing definition, an existing auxiliary lemma
+(even one it authored in a prior batch), or any other existing node.
+If repair would benefit from sharpening an existing upstream
+definition, generator surfaces the issue through its
+`verification_report` / `repair_hint` so the user can revise it via
+`user.node_revised`; or generator introduces a replacement node under
+a fresh label.
+
 **Multi-node output is expected.** One generator attempt for a target
 theorem typically produces:
 - Proof of the target theorem (one `<node>` for the target)
-- Several auxiliary sub-lemmas or sub-theorems (multiple `<node>` blocks
-  for supporting results)
-- New definitions introduced by the generator (optional)
-- Possibly revisions to existing definitions the new proof re-interprets
+- Several auxiliary sub-lemmas or sub-theorems **under brand-new
+  labels** (multiple `<node>` blocks for supporting results)
+- New definitions introduced under brand-new labels (optional)
 
 **Decoder pipeline** (inside generator role.py):
 
@@ -1215,10 +1272,17 @@ Codex stdout
 decoder:
   1. scan for <node>...</node> blocks
   2. for each block: parse YAML frontmatter + markdown body
-  3. validate: full node-schema fields present, non-empty statement, no duplicate labels in batch, label format, kind is allowed,
-     explicit `\ref{label}` references resolve (or will resolve by end of attempt)
+  3. validate: full node-schema fields present, non-empty statement, no
+     duplicate labels in batch, label format, prefix matches kind
+     (§3.5.2), kind is allowed, explicit `\ref{label}` references
+     resolve (or will resolve by end of attempt)
   4. assemble the full node batch for this run
-  5. validate the staged batch against the current KB snapshot (kind immutability, label conflicts, cycle introduction)
+  5. validate the staged batch against the current KB snapshot:
+     - write-scope invariant: every batch label is either the batch's
+       target or absent from current KB
+     - kind immutability (for the target, which may already exist)
+     - cycle introduction against post-batch graph
+     - repair-must-change-hash (mode=repair only), see below
   6. stage the admitted batch
   7. atomically publish one `generator.batch_committed`
   ↓
@@ -1233,7 +1297,10 @@ nodes, each entering its own verify-or-regenerate cycle.
 **Decoder failure modes:**
 - `<node>` block malformed → reject attempt (runtime failure; no truth event emitted)
 - `kind: external_theorem` appears → reject (user-only)
-- label uniqueness conflict → reject
+- label prefix does not match `kind` (§3.5.2 mapping, e.g. `thm:foo` with `kind: lemma`) → reject
+- non-target existing label in `nodes[]` → reject (violates the
+  write-scope invariant — generator can touch only the batch's target
+  or brand-new labels)
 - placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
 - unresolved `\ref{}` to non-existent label (and not produced in same attempt) → reject
 - **Repair-must-change-hash** (mode=repair only): decoder must verify
@@ -1245,11 +1312,12 @@ nodes, each entering its own verify-or-regenerate cycle.
   1. Compute each batch node's `statement_hash` using strict
      batch-internal topological order of `\ref{}` edges. Values
      resolved as follows:
-     - if the `\ref{}` target label appears in the staged batch, use
-       the **batch's** `statement_hash` for that label (the new value
-       this batch will commit);
+     - if the `\ref{}` target label appears in the staged batch (a
+       brand-new node introduced by this batch, or the batch's own
+       target), use the **batch's** `statement_hash` for that label;
      - otherwise use the **current KB** `statement_hash` for that
-       label.
+       label (existing deps cannot change, per the write-scope
+       invariant above).
   2. Assemble the target's post-batch dependency set (resolved via
      the same rule above).
   3. Compute the target's post-batch `verification_hash = H_new`
@@ -1257,14 +1325,13 @@ nodes, each entering its own verify-or-regenerate cycle.
      `statement_hash`es.
   4. If `H_new == H_rejected`, reject the entire batch.
 
-  Rationale: a common legitimate repair path is "my proof was fine;
-  the upstream `def:D` needed sharpening". The batch revises `def:D`
-  and reprints the target's proof verbatim. Using current-KB
-  `def:D.statement_hash` (pre-batch) would compute `H_new ==
-  H_rejected` and falsely reject the batch. Using the staged batch's
-  post-application view captures the real effect of the commit and
-  admits this path. The guard still blocks genuine no-ops (generator
-  re-emits identical content with no upstream change).
+  Rationale: `H_new` must reflect the batch's actual commit effect.
+  The target's new `verification_hash` depends on its own committed
+  statement/proof plus any newly-introduced dep nodes' `statement_hash`
+  values (which live in the batch, not in KB yet). Using the staged
+  batch's post-application view captures this correctly; it also
+  still blocks genuine no-ops (generator re-emits identical content
+  with no new helpers).
 
 **Intra-batch ordering.** Within one generator batch, the wrapper
 topologically orders the included node states by their explicit `\ref{}`
@@ -1279,9 +1346,14 @@ batch in that order inside one batch transaction.
 3. **Latest batch rejection report** (if any) — runtime-only structural
    rejection summary from the decoder/admission layer, such as cycle
    introduction or unresolved reference
-4. **Repair history summary** — current repair round count and brief
-   history summary, so generator can decide between local repair,
-   statement revision, or counter-example
+4. **Repair history summary** — the target's current `repair_count`
+   (number of gap/critical verdicts accumulated against the current
+   `statement_hash`). If `repair_count` is small (0-2), generator is
+   expected to try a local proof repair; if it is larger (≥ 3),
+   generator should seriously consider that the statement itself is
+   wrong and pursue a revised statement or a counter-example.
+   Coordinator imposes no hard threshold — `repair_count` is an
+   advisory signal for the generator's own decision (§10.4).
 5. **Target's current state** — statement (if present) and previous
    proof attempt (if any)
 
@@ -1412,9 +1484,12 @@ seeing `critical` considers deeper rewrites or counter-example.
   judges if the statement is coherent, not self-contradictory, domain
   terminology correct)
 - Full DESIRED audits (runs 3 times like proof-requiring kinds)
-- On wrong verdict: `count = -1`; user revises via
-  `user.node_revised(kind=definition)` (or generator revises as side-effect of
-  repairing a dependent proof-requiring node)
+- On wrong verdict: `count = -1`; **only the user** can fix by
+  publishing `user.node_revised(kind=definition)`. Generator never
+  touches existing definitions (§6.2 write-scope invariant). If a
+  dependent proof-requiring node's repair looks like it needs a
+  sharper upstream definition, generator surfaces that in its
+  repair report / hint so the user can act.
 
 **For external_theorems (independent kind, distinct semantics):**
 - Structurally similar to definitions (empty proof) but **semantically
@@ -1538,13 +1613,16 @@ write sets. Verifier jobs may still run concurrently on distinct targets.
 concurrent same-target" and "one generator at a time" rules are not
 enough to guarantee that a verifier's snapshot of a target's
 dependency chain remains valid for the entire verifier run. Concrete
-scenario:
+scenario (narrower after the §6.2 write-scope invariant, but still
+reachable):
 
-- Verifier V is running on `thm:A`, which depends on `def:D`.
-- Concurrently, generator G is working on an unrelated theorem `thm:B`.
-  G's decoded batch happens to also revise `def:D` (a legitimate
-  generator side-effect allowed by §6.2).
-- G's batch is published; librarian applies it; `def:D.statement_hash`
+- Verifier V is running on `thm:A`, which transitively depends on
+  `thm:B` (via its proof `\ref{thm:B}`).
+- Concurrently, generator G is working on its own target `thm:B` in
+  repair mode. G's batch revises `thm:B`'s statement (counter-example
+  case — G flips `thm:B` to `¬thm:B`) within its permitted write
+  scope.
+- G's batch is published; librarian applies it; `thm:B.statement_hash`
   changes → Merkle cascade → `thm:A.statement_hash` and
   `thm:A.verification_hash` change.
 - V finishes and publishes `verifier.run_completed` carrying the
@@ -1712,15 +1790,21 @@ Read-only audit. Phase I scope:
 - **A. Event stream integrity**: filename ↔ JSON body consistency,
   `event_id` uniqueness, references to prior events exist
 - **B. KB structural invariants**: no cycles, label uniqueness,
-  kind-appropriate fields
+  kind-appropriate fields, label prefix matches kind (§3.5.2)
 - **C. `pass_count` audit** (§5.5.1): for every node, recompute
   `audit_count` from the event stream and assert it matches stored
   `Node.pass_count`. Catches librarian drift on the one field that drives
   all scheduling decisions.
+- **D. `repair_count` audit**: for every node, recompute `repair_count`
+  from the event stream (count `verifier.run_completed(gap|critical,
+  hash matches)` events since the most recent `statement_hash`-changing
+  event on that node, including Merkle cascade from upstream statement
+  changes) and assert it matches stored `Node.repair_count`.
 
 Phase I does NOT implement:
 - Full projection drift detection (replay all events into a fresh KB and
-  diff against live Kuzu). Only `pass_count` is audited in Phase I.
+  diff against live Kuzu). Only `pass_count` and `repair_count` are
+  audited in Phase I.
 - Clock skew detection
 
 Linter writes no truth events in Phase I.
@@ -1794,8 +1878,12 @@ Pages:
 Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
 
 **Must prominently surface (so user doesn't miss):**
-- Definitions / external_theorems at `pass_count=-1`
-- Proof-requiring nodes with repeated-no-progress repair episodes
+- Definitions / external_theorems at `pass_count=-1` (user must
+  revise)
+- Proof-requiring nodes with high `repair_count` (e.g. ≥ 3) —
+  generator has already tried multiple proofs of the same statement
+  unsuccessfully; user may want to intervene (revise statement, attach
+  a hint, or confirm the generator's counter-example direction)
 - Recent runtime admission failures / rejected generator batches
 - Any runtime drift alert raised by pre-dispatch hash revalidation
 
@@ -2047,19 +2135,28 @@ completion.
 
 ### 10.4 Repair rounds
 
-Phase I does **not** impose a hard repair budget. Proof-requiring nodes at
-`count = -1` continue to be dispatched to generator.
+Phase I does **not** impose a hard repair budget. Proof-requiring
+nodes at `pass_count = -1` continue to be dispatched to generator.
 
-Coordinator and dashboard still track repair round count as derived
-observability data. Generator receives that history in repair mode so it can
-decide whether to:
+`Node.repair_count` tracks gap/critical verdicts against the current
+`statement_hash` (§5.2, §5.4) — i.e. how many different proofs of the
+same statement have already failed. It is the canonical "how stuck is
+this statement?" signal. Generator reads `repair_count` in its repair
+prompt (§6.2) and decides between:
 
-- continue local proof repair
-- revise the statement
-- pursue a counter-example / negation route
+- continue local proof repair (typical when `repair_count` is small
+  and verdicts have been `gap` rather than `critical`)
+- revise the statement (when `repair_count` is growing and the
+  verifier keeps flagging semantic/structural issues)
+- pursue a counter-example / negation route (when the pattern
+  suggests the original statement may be false)
 
-Repeated repair without progress is therefore advisory signal, not a hard
-dispatch stop condition.
+Coordinator imposes no hard threshold on `repair_count` in Phase I.
+Dashboard surfaces high-`repair_count` nodes under "Human attention"
+(§6.7) so the user can intervene if generator keeps spinning without
+progress. The decision of "when to give up on a proof path" belongs
+to the generator (and, as a backstop, the user), not to the
+coordinator.
 
 ---
 
@@ -2130,6 +2227,19 @@ projection logic.
     publishers allocate independently; replay order is decided by the
     `(iso_ms, seq, uid)` total sort; conflicts resolve deterministically
     at apply time.
+17. **Generator write-scope invariant.** A generator batch may only
+    write to (i) its own target label and (ii) brand-new labels not
+    currently in KB. It may not revise any other existing node,
+    including existing definitions and auxiliary lemmas (§6.2).
+18. **Label prefix ↔ kind strict mapping (§3.5.2).**
+    `def → definition`, `ext → external_theorem`, `lem → lemma`,
+    `prop → proposition`, `thm → theorem`. Admission rejects
+    prefix/kind mismatch.
+19. **Two counts per node.** `pass_count` tracks accepted verdicts
+    against current `verification_hash` (scheduler dispatch signal).
+    `repair_count` tracks gap/critical verdicts against current
+    `statement_hash` (generator decision signal: "is this statement
+    itself stuck?"). Both audited by linter.
 
 ---
 
@@ -2252,3 +2362,35 @@ See `PHASE1.md` for the concrete task list.
     event (admission escape). Apply_failed is terminal — failed events
     are never retried. Producers poll `AppliedEvent` to learn their
     proposal's fate. No publish-time lock.
+- **2026-04-24 (evening review, H3–H5)**:
+  - H3: explicit statement that verifier/generator write-set overlap
+    is not prevented (§6.4.1). Correctness is preserved by the
+    hash-match gate + `apply_failed(hash_mismatch)`; Phase I accepts
+    the LLM waste and does not pause verifier dispatch during
+    generator runs.
+  - H4: `repair_hint` internal format pinned (verifier section +
+    user-appended sections separated by `---`). Rules: verifier
+    verdict overwrites verifier section only; user hint appends a new
+    user section; hash change clears everything. Admission rejects
+    `user.hint_attached` targeting a node with `pass_count >= 1`.
+    New reason code `hint_target_unreachable` for the narrow race.
+  - H5: repair-must-change-hash computes the target's post-batch
+    verification_hash with staged-batch resolution for batch-internal
+    deps; existing deps (unchanged per write-scope) use KB values.
+- **2026-04-24 (evening review, H7–H9)**:
+  - H7: generator write-scope invariant (§6.2) — every batch label
+    must be either the batch's target or absent from current KB.
+    Generator cannot revise existing definitions, aux lemmas, or any
+    other existing node. "Definition fix on wrong verdict" reduces to
+    user-only (§5.1).
+  - H8: label prefix ↔ kind strict mapping enforced at admission
+    (§3.5.2 table). Prevents misleading labels and gives dashboard /
+    Codex / linter a reliable visual cue on kind.
+  - H9: new `Node.repair_count` field (§5.2, §5.4). Tracks gap/critical
+    verdicts against current `statement_hash`. Resets to 0 on any
+    `statement_hash` change (including Merkle cascade). Generator
+    reads `repair_count` in its repair prompt to decide between local
+    patch vs statement revision vs counter-example. `KnowledgeBase`
+    Protocol's `count_repair_attempts(label, hash)` renamed to
+    `repair_count(label)`. Linter category D audits this field
+    against event-stream replay.

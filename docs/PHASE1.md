@@ -96,9 +96,10 @@ stub subcommands.
   `rebuild_from_events(events_dir)`
 
 **M1.4** `common/kb/kuzu_backend.py` — Kuzu implementation
-- Schema init: `Node`, `DependsOn`, `ProjectionState`, `AppliedEvent`
-  (per ARCHITECTURE §5.2)
-- All Protocol methods
+- Schema init: `Node` (including `repair_count INT DEFAULT 0`),
+  `DependsOn`, `ProjectionState`, `AppliedEvent` (per ARCHITECTURE §5.2)
+- All Protocol methods (note: `repair_count(label)` replaces the
+  previously planned `count_repair_attempts(label, hash)`)
 - Single-writer enforcement via Kuzu's built-in locking
 - `apply_event` wraps projection + `AppliedEvent` insert in one
   Kuzu transaction (both commit or both roll back)
@@ -157,12 +158,18 @@ runs (no-op with empty events).
 - Use the `initial_count(kind, proof)` helper from §5.4 for every
   node-rewriting event (`user.node_added`, `user.node_revised`,
   `generator.batch_committed`):
-  - `kind ∈ {definition, external_theorem}` → `count = 0`
-  - `kind ∈ {lemma, theorem, proposition}`, proof non-empty → `count = 0`
-  - `kind ∈ {lemma, theorem, proposition}`, proof empty → `count = -1`
-- verifier accepted + hash match → `count += 1`; set `verification_report`
-- verifier gap/critical + hash match → `count = -1`; set
-  `verification_report` and `repair_hint`
+  - `kind ∈ {definition, external_theorem}` → `pass_count = 0`
+  - `kind ∈ {lemma, theorem, proposition}`, proof non-empty → `pass_count = 0`
+  - `kind ∈ {lemma, theorem, proposition}`, proof empty → `pass_count = -1`
+- `repair_count` transitions per §5.4:
+  - any node whose `statement_hash` changes (direct rewrite or Merkle
+    cascade) → `repair_count = 0`
+  - verifier gap/critical with hash match → `repair_count += 1`
+  - other events (accepted verdict, hint_attached, proof-only rewrite
+    that doesn't change statement_hash) → `repair_count` unchanged
+- verifier accepted + hash match → `pass_count += 1`; set `verification_report`
+- verifier gap/critical + hash match → `pass_count = -1`; set
+  `verification_report` and overwrite verifier section of `repair_hint`
 - verifier hash mismatch → record `AppliedEvent(apply_failed,
   reason=hash_mismatch)`; no KB change
 - user.hint_attached:
@@ -248,18 +255,30 @@ AGENTS.md instructions to require `<node>` block output format and
   args): target label + mode + optional repair context refs. Dispatch
   is **not** a truth event in Phase I (coordinator is not a truth
   producer per ARCHITECTURE §3.5).
-- Assemble minimal Codex prompt
+- Assemble the Codex prompt per ARCHITECTURE §6.2 prompt composition,
+  including for `mode=repair`: target's `verification_report`,
+  current `repair_hint` (verifier section + any user sections), and
+  the current `repair_count` value as an advisory signal.
 - Invoke `codex exec` via `common/runtime/codex_runner`
   - cwd = `<workspace>/knowledge_base/nodes/`
   - `--sandbox read-only`
 - Parse stdout for `<node>` blocks
+- Decoder enforces per ARCHITECTURE §6.2 failure modes, including:
+  - label prefix matches kind (§3.5.2 mapping table)
+  - write-scope invariant: every batch label is either the batch's
+    target or absent from current KB (generator cannot modify any
+    other existing node)
+  - repair-must-change-hash (mode=repair) computed with staged-batch
+    resolution for any batch-internal deps
 - Stage the batch outside `events/` until fully validated, then atomically
   publish exactly **one** `generator.batch_committed` truth event (per
   ARCHITECTURE §3.7.2). No per-node truth events, no `attempt_started` /
   `attempt_failed` truth events.
+- Poll `AppliedEvent` after publish to capture
+  `applied / apply_failed(reason)` into the runtime job file.
 - Runtime-only artifacts (pid, codex log path, crash info) go to
   `runtime/jobs/{job_id}.json` and `runtime/logs/{job_id}.codex.log`.
-  Decoder rejections are appended to `runtime/state/rejected_batches.jsonl`.
+  Decoder rejections are appended to `runtime/state/rejected_writes.jsonl`.
 
 **M4.6** `cli/generator.py` — `rethlas generator --target <label>
 --mode {fresh|repair}` invokes `generator/role.py`
@@ -359,10 +378,17 @@ Milestone exit: browser at `localhost:8765` shows workspace state.
 
 ## M8 — Linter (minimal)
 
-**M8.1** `linter/checks.py` — category A + B + C (pass_count audit) checks
-- A: event filename ↔ frontmatter consistency; unique event_ids;
+**M8.1** `linter/checks.py` — categories A + B + C + D checks
+- **A**: event filename ↔ JSON body consistency; unique event_ids;
   referenced event_ids exist
-- B: no cycles in Kuzu; label uniqueness; kind-field consistency
+- **B**: no cycles in Kuzu; label uniqueness; kind-field consistency;
+  label prefix matches kind per ARCHITECTURE §3.5.2
+- **C**: `pass_count` audit (§5.5.1) — recompute `audit_count` from
+  event stream, assert matches `Node.pass_count`
+- **D**: `repair_count` audit — recompute gap/critical verdicts per
+  label since the most recent `statement_hash`-changing event (direct
+  rewrite or Merkle cascade from upstream statement change), assert
+  matches `Node.repair_count`
 
 **M8.2** `linter/main.py` — one-shot run
 - Load events, rebuild KB in memory (or query existing), run checks
