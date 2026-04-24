@@ -916,6 +916,33 @@ see logically-impossible states mid-commit.
   every `\ref`-ed dep, and for generator `mode=repair` the repair
   context (`verification_report`, `repair_hint`, `repair_count`,
   `H_rejected`). Worker trusts; never re-reads Kuzu.
+- `integration`: **generator mode selection** (ARCHITECTURE §10.2.3).
+  Two fixtures on the same proof-requiring target:
+  - `pass_count = -1`, `repair_count = 0` (fresh `user.node_added`
+    with empty proof) → coordinator writes `mode = "fresh"`;
+    job file omits `verification_report` / `repair_hint` /
+    `H_rejected` (no repair context to ship).
+  - `pass_count = -1`, `repair_count = 2` (two stored gap verdicts
+    against the current `statement_hash`) → coordinator writes
+    `mode = "repair"`; job file carries `verification_report`,
+    `repair_hint`, `repair_count = 2`, and `H_rejected` equal to the
+    `verification_hash` of the most-recent rejected verdict.
+- `integration`: **generator pool tie-break by `repair_count`**
+  (ARCHITECTURE §10.2.2). Fixture with three proof-requiring
+  candidates all at `pass_count = -1` and all with deps ready:
+  `lem:a(repair_count=0)`, `lem:b(repair_count=5)`,
+  `lem:c(repair_count=0)`. With `generator_workers = 1` and the
+  "no concurrent same-target" rule, coordinator dispatches in order
+  `lem:a` → `lem:c` → `lem:b` across three ticks (fresh candidates
+  first, then label ASC within equal `repair_count`, stuck
+  candidate last).
+- `integration`: **verifier pool ordering by `pass_count`**
+  (ARCHITECTURE §10.2.1). Fixture with three candidates whose deps
+  are verified: `thm:x(pass_count=2)`, `def:y(pass_count=0)`,
+  `lem:z(pass_count=1)`. With `verifier_workers = 1`, coordinator
+  dispatches in order `def:y` → `lem:z` → `thm:x` (count ASC, label
+  ASC tiebreak within a count). Confirms `def` is a valid verifier
+  target (not restricted to proof-requiring kinds).
 - `integration`: **coordinator is the AppliedEvent poller**
   (ARCHITECTURE §6.7.1 step 3). After a wrapper exits with job
   file `status = "publishing"`, coordinator on its next tick polls

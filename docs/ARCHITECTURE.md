@@ -1272,9 +1272,11 @@ to occur in the first place:
    current `Node.verification_hash`. Stale verdicts are recorded as
    `apply_failed(reason=hash_mismatch)` and never affect count.
 
-6. **Pre-dispatch hash revalidation** (§5.5.2). Before verifier runs,
-   role layer confirms the hash is current. Catches drift *before* a
-   new verdict can pollute count.
+6. **Pre-dispatch validation** (§5.5.2). Coordinator re-reads Kuzu
+   immediately before writing the job file and rejects any
+   candidate whose hash / `pass_count` / dep readiness no longer
+   matches its earlier selection snapshot. Catches drift *before*
+   a new verdict can pollute count.
 
 7. **Canonical hash inputs.** `statement_hash` and `verification_hash`
    use canonical JSON (UTF-8, sorted keys, compact separators,
@@ -1406,9 +1408,10 @@ depend on `job.kind`):
 | target exists in Kuzu | ✓ | ✓ |
 | `node.verification_hash == dispatch_hash` (coordinator's own snapshot from a moment earlier — self-consistency) | ✓ | ✓ |
 | `pass_count` in expected band (`[0, DESIRED_COUNT)` for verifier, `-1` for generator) | ✓ | ✓ |
-| strict-monotone dep condition | ✓ | — |
+| strict-monotone dep condition (`dep.pass_count > node.pass_count`) | ✓ | — |
 | all deps at `pass_count >= 1` (so visible in `nodes/`) | — | ✓ |
-| kind == proof-requiring (lem/thm/prop) | ✓ (targets only) | ✓ |
+| kind is proof-requiring (`lem` / `thm` / `prop`) | — | ✓ |
+| kind is any of `lem` / `thm` / `prop` / `def` / `ext_thm` (verifier handles well-formedness for `def` / `ext_thm` too — §6.3) | ✓ | — |
 | no other in-flight job on the same target (check `runtime/jobs/*.json`) | ✓ | ✓ |
 | (repair mode only) most recent gap/critical verdict's `verification_hash` is known and recorded as `H_rejected` | — | ✓ |
 
@@ -1421,7 +1424,9 @@ trace "why didn't target X get dispatched this tick". No
 
 If all conditions pass, coordinator writes the initial job file with
 `status = "starting"` and every context a worker needs:
-- `target`, `mode`, `kind`
+- `target`, `mode`, `kind` — for generator, `mode` is determined by
+  the §10.2.3 rule (`fresh` iff `repair_count = 0`, else `repair`);
+  for verifier, `mode = "single"` (§6.7.1)
 - `dispatch_hash` (target's `verification_hash` at precheck time)
 - target's `statement` and `proof` text (so worker doesn't need to
   reconstruct from Kuzu)
@@ -1574,6 +1579,10 @@ Hard invariants:
 Produces `<node>` blocks via Codex. Two modes:
 - **fresh**: produce proof for target label from scratch
 - **repair**: fix a rejected proof using prior attempt + verdict as context
+
+Coordinator decides the mode per §10.2.3 (`fresh` iff
+`repair_count = 0`, else `repair`) and writes it into the job file;
+generator `role.py` trusts the value and does not reclassify.
 
 **Generator's allowed output kinds:**
 - `definition` — only as a **brand-new** node (new label)
@@ -2210,8 +2219,10 @@ enough to hurt throughput, Phase II can revisit with an optimization pass.
 3. **Hash-match check (librarian)**: verdicts with mismatched hash
    are recorded as `apply_failed(hash_mismatch)` and do not change
    `pass_count`. No stale verdict pollution.
-4. **Pre-dispatch hash revalidation** (§5.5.2): catches Kuzu ↔ data
-   drift before dispatch.
+4. **Pre-dispatch validation** (§5.5.2): coordinator re-checks every
+   dispatch condition against current Kuzu immediately before
+   writing the job file — catches drift between candidate selection
+   and dispatch.
 5. **Codex log mtime timeout (30 min)**: kills stuck Codex processes
    via `killpg`.
 6. **Cycle detection (admission + replay validation)**: any candidate
@@ -2724,7 +2735,8 @@ Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
   unsuccessfully; user may want to intervene (revise statement, attach
   a hint, or confirm the generator's counter-example direction)
 - Recent runtime admission failures / rejected generator batches
-- Any runtime drift alert raised by pre-dispatch hash revalidation
+- Any runtime drift alert raised by coordinator's pre-dispatch
+  validation (§5.5.2)
 - Coordinator `idle_reason_code = corruption_or_drift` (red banner —
   projection halted, operator action required)
 - Librarian `status = degraded` with non-empty `last_error` (librarian
@@ -3459,15 +3471,74 @@ desired_pass_count`.
 - Phase II with audit backend: could be 1 primary + 2 audits across
   different backends.
 
-### 10.2 Verification dispatch priority
+### 10.2 Dispatch priority
 
-Candidate nodes are filtered by:
-- `proof` non-empty (or kind is definition / external_theorem)
-- `pass_count in [0, DESIRED_COUNT)`
-- For every dep: `dep.pass_count > node.pass_count` (strict monotone, §6.4)
+Each pool has its own candidate filter and tie-break rule. Both are
+evaluated by coordinator from Kuzu once per tick; selection is
+deterministic so two supervisors that read the same Kuzu snapshot
+would pick the same targets.
 
-Sorted by `pass_count` ascending (count=0 first, then count=1, etc.).
-Ties broken by `label`.
+#### 10.2.1 Verifier candidates
+
+Filter:
+- `pass_count in [0, DESIRED_COUNT)` — at 0 the node is awaiting its
+  first verdict; at `DESIRED_COUNT` it is done.
+- `kind ∈ {lem, thm, prop, def, ext_thm}` — verifier handles
+  well-formedness for `def` and `ext_thm` too (§6.3), not just
+  proof-requiring kinds. For proof-requiring kinds, `proof` is
+  guaranteed non-empty at `pass_count = 0` by the `initial_count`
+  rule (§5.4) — an empty proof would force `pass_count = -1`.
+- For every dep: `dep.pass_count > node.pass_count` (strict-monotone
+  scheduling, §6.4.1).
+
+Priority ordering:
+1. `pass_count` ascending (nodes with fewer passes first — count=0
+   before count=1 before count=2). This ensures every node gets its
+   first verdict before any node gets its second, keeping `nodes/`
+   visibility broad early.
+2. `label` ascending (deterministic tiebreak).
+
+#### 10.2.2 Generator candidates
+
+Filter:
+- `pass_count = -1` — "needs generator" is the only generator band
+  (§5.4). Nodes at `pass_count ≥ 0` never enter the generator pool.
+- `kind ∈ {lem, thm, prop}` — proof-requiring only. `def` and
+  `ext_thm` at `pass_count = -1` are user-blocked (§6.4.1 L2246–2248)
+  and coordinator **never** auto-dispatches generator on them; they
+  only unblock via `user.node_revised`.
+- All deps at `pass_count ≥ 1` (so they are rendered in `nodes/` and
+  reachable via bash, §6.2). Deps below that threshold are still
+  being verified; generator must wait.
+
+Priority ordering:
+1. `repair_count` ascending (fresh candidates first; the node has
+   never been retried for this statement). This avoids repeatedly
+   hammering a stuck target while other ready targets wait — the
+   stuck one is surfaced under Dashboard "Human attention" (§6.4.1,
+   §6.7) instead.
+2. `label` ascending (deterministic tiebreak).
+
+#### 10.2.3 Mode selection (generator only)
+
+For each generator candidate the coordinator also picks `mode`:
+- `mode = "fresh"` iff `repair_count = 0` — no prior
+  gap/critical verdict exists against the current `statement_hash`,
+  so there is no repair context to feed the prompt. This covers (a)
+  a freshly `user.node_added` node with empty proof, and (b) a node
+  whose statement just changed (via `user.node_revised` or Merkle
+  cascade from a dep) and whose `repair_count` was therefore reset
+  to 0 per §5.4.
+- `mode = "repair"` iff `repair_count ≥ 1` — there is at least one
+  stored gap/critical verdict against the current `statement_hash`,
+  so `verification_report` + `repair_hint` are populated and worth
+  shipping as prompt context (§6.2 "Repair context"). Coordinator
+  copies them into the job file at precheck time and sets
+  `H_rejected` = the most-recent rejected `verification_hash` (§5.5.2).
+
+A candidate with `pass_count = -1` but no resolvable `H_rejected`
+**in repair mode** is a precheck failure (§5.5.2 last row); it is
+skipped and logged, not dispatched.
 
 ### 10.3 Concurrency — worker pools
 
