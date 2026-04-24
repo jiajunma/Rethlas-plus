@@ -153,7 +153,7 @@ always resolves to an absolute path before use.
 | `1` | Generic error (unexpected exception; check logs) |
 | `2` | Workspace `supervise.lock` already held (`supervise`, `rebuild`) OR workspace not initialized (`supervise`, `linter`, `rebuild` without prior `init`) |
 | `3` | Critical child crash loop that coordinator cannot recover from (librarian restarts more than once within 3 min, §6.4) |
-| `4` | Config error — malformed `rethlas.toml`, out-of-range value, unknown file/directory layout (§2.4) |
+| `4` | Config error — malformed `rethlas.toml`, out-of-range value, unknown file/directory layout (§2.4), or workspace not writable (cannot create `runtime/locks/supervise.lock`) |
 | `5` | Linter found violations (only for `rethlas linter`) |
 | `6` | `rethlas init` refused because workspace already has `events/` or `rethlas.toml` |
 
@@ -263,7 +263,12 @@ the truth event stream alone.
 {iso_ms}--{event_type}--{target_or_none}--{actor}--{seq}--{uid}.json
 ```
 
-- **`iso_ms`**: compact ISO with millisecond precision (`20260423T143015.123`)
+- **`iso_ms`**: compact ISO with millisecond precision
+  (`20260423T143015.123`), **always expressed in UTC**. The `Z`
+  suffix is omitted for brevity, but the value is strictly UTC so
+  that `(iso_ms, seq, uid)` lexicographic sort is a faithful global
+  causal-order extension even when the event stream is shared
+  across machines in different local time zones (§11.4).
 - **`event_type`**: dotted name (`user.node_added`, `verifier.run_completed`)
 - **`target_or_none`**: DAG node label with `:` escaped to `_`, or `none`
 - **`actor`**: producer identifier `{kind}:{instance}` with `:` escaped to `_`
@@ -634,7 +639,9 @@ always `0001`.
 **Allocation rules for producers** (no cross-producer global
 monotonicity required):
 
-1. `iso_ms = wall_clock_now()` at the moment of event construction.
+1. `iso_ms = utc_wall_clock_now()` at the moment of event
+   construction. Use `datetime.datetime.now(tz=datetime.timezone.utc)`
+   in Python (or equivalent) — not local time, not naive datetime.
 2. `seq`: per-producer, per-ms counter. Starts at `0001`; increments
    only if the same producer publishes multiple events in the same
    millisecond (rare in Phase I). Scope resets on every new ms.
@@ -714,6 +721,18 @@ node events and generator batch commits.
   hash revalidation per §5.5.2 and for polling `AppliedEvent` after
   publish per §9.1). The Codex subprocesses themselves never touch
   Kuzu — only their Python wrappers do.
+
+**Concurrency model assumption.** Phase I assumes Kuzu's embedded
+mode provides **snapshot isolation** for concurrent readers against
+a single writer — i.e. a read transaction never observes partial
+state of an in-flight writer commit. If the version of Kuzu in use
+does not guarantee this, wrapper's pre-dispatch validation (§5.5.2)
+is the safety net: any apparent inconsistency (hash mismatch
+against current Node state) is caught and reported as
+`precheck_failed` before the worker does any expensive work. The
+hash-match gate in §5.5.0 provides the same backstop for verdict
+apply. So even if Kuzu isolation turns out to be weaker, correctness
+survives.
 
 ### 4.2 Per-node markdown files
 
@@ -1521,7 +1540,8 @@ decoder:
      - write-scope invariant: every batch label is either the batch's
        target or absent from current KB
      - kind immutability (for the target, which may already exist)
-     - cycle introduction against post-batch graph
+     - cycle introduction against post-batch graph (see algorithm
+       below)
      - repair-must-change-hash (mode=repair only), see below
   6. stage the admitted batch
   7. atomically publish one `generator.batch_committed`
@@ -1577,6 +1597,24 @@ nodes, each entering its own verify-or-regenerate cycle.
 topologically orders the included node states by their explicit `\ref{}`
 dependency edges before handing the batch to librarian. Librarian applies the
 batch in that order inside one batch transaction.
+
+**Cycle detection algorithm.** Admission needs to reject a batch if
+applying it would close a dependency cycle. Phase I algorithm:
+
+1. Read the current `DependsOn` edge set from Kuzu (one query:
+   `MATCH (u)-[:DependsOn]->(v) RETURN u.label, v.label`).
+2. Build an in-memory directed graph from those edges.
+3. For each node in the staged batch, add out-edges for every
+   `\ref{label}` in its combined `statement` + `proof`. Batch
+   labels not yet in KB are added as new nodes.
+4. Run DFS / Tarjan on the post-batch graph; if any back-edge is
+   found → batch rejected at admission with reason `cycle` and
+   detail naming the cycle path (e.g. `"cycle: thm:a → lem:b → thm:a"`).
+
+Librarian additionally runs Kuzu's native cycle check inside its
+apply transaction as defense-in-depth (on the rare canonical event
+that bypassed admission). That check is O(V+E) on current DAG and
+fails the whole event with `apply_failed(reason=cycle)` per §3.1.6.
 
 **Prompt composition** (assembled by `role.py`):
 
@@ -1821,6 +1859,25 @@ reaper cleared them 5 minutes later.
 - Coordinator polls each child's heartbeat file (`librarian.json`
   etc.) against staleness thresholds (§6.7.1) and inspects process
   liveness (`os.kill(pid, 0)`).
+
+**Startup grace period.** After spawning a child subprocess, there
+is a window (1–5 s typical, up to ~30 s in cold cases) before the
+child finishes its own initialization (Python import, Kuzu connect,
+watchdog setup, startup reconciliation) and writes its first
+`runtime/state/{librarian,dashboard}.json` heartbeat. During this
+window the heartbeat file does not yet exist. Coordinator **must
+not** treat this as "down":
+
+- Coordinator records each child's `spawned_at` timestamp when it
+  starts the subprocess.
+- While `now - spawned_at < 30 s`, coordinator only checks process
+  liveness via `os.kill(pid, 0)`; heartbeat staleness is ignored.
+- After the 30 s grace, staleness checks apply normally
+  (§6.7.1 table).
+- If a child is still alive but has not written a first heartbeat
+  by 30 s, coordinator records `startup_timeout` and triggers the
+  restart policy below (the child is considered to have failed to
+  start).
 
 **Restart policy** (Phase I, different per child because their
 failure modes have different blast radius):
@@ -2912,7 +2969,7 @@ arxiv search.
 truth-event producer (admission layer, pre-publish):
   construct event payload
   allocate event_id:
-    iso_ms = wall_clock_now()
+    iso_ms = utc_wall_clock_now()   # §3.2 — strictly UTC
     seq    = next same-ms seq for this producer (almost always 0001)
     uid    = random 16 hex
   run structural_check (§3.1.6) against current KB snapshot
@@ -3162,11 +3219,12 @@ commits, but the runtime is **not** multi-master:
 - Operator B `git pull` brings new event files into `events/`.
 - If B's `rethlas supervise` is running during the pull, B's
   librarian's watchdog will see new files and try to apply them.
-  Events that were committed by A on A's machine carry A's wall
-  clock in their `iso_ms`; B's librarian applies them in sorted
-  order and everything works **as long as A and B did not both
-  author conflicting events while disconnected** (label collision,
-  cycle-closing edges, etc.).
+  Events from A carry UTC `iso_ms` (§3.2), so B's librarian sorts
+  them correctly against B's own local events even if A and B are
+  in different time zones. Everything works **as long as A and B
+  did not both author conflicting events while disconnected** (label
+  collision, cycle-closing edges, etc.) — those race to first-apply
+  and the loser gets `apply_failed`.
 - For cleanness, Phase I recommends: when pulling in externally
   committed events, stop B's supervise first, run `rethlas rebuild`
   on the merged `events/`, then restart supervise. Rebuild is
@@ -3340,6 +3398,13 @@ These are resolved at implementation time without blocking design:
    treats it as free-form text (operator convention, BibTeX key or
    DOI or plain citation). Phase II can add structured parsing if
    downstream tooling (importers, citation checks) needs it.
+8. **Orphan aux-node GC** — a generator aux lemma that no live
+   node transitively depends on (e.g. the target that introduced it
+   was later revised to a counter-example with a different proof
+   structure) stays in KB forever. Phase I accepts this as harmless
+   noise; Phase II may add a "reachability from top-level theorems"
+   garbage-collection sweep (report-only or opt-in delete via a
+   compaction event).
 
 See `PHASE1.md` for the concrete task list.
 
@@ -3624,3 +3689,25 @@ See `PHASE1.md` for the concrete task list.
   - **D8**: §14 Open Items adds **structured `source_note` for
     external_theorem** as Phase II (Phase I treats it as free-form
     operator-convention text — BibTeX key / DOI / plain citation).
+- **2026-04-24 (E1–E6 review)**:
+  - **E1**: `iso_ms` pinned to **UTC** (§3.2) — no local-time
+    ambiguity, so cross-timezone git collaboration (§11.4) sorts
+    events correctly.
+  - **E2**: 30-second **startup grace period** (§6.4) — coordinator
+    only checks `os.kill(pid, 0)` liveness for the first 30 s after
+    spawning a child; heartbeat staleness is ignored until then.
+    Missing first heartbeat after 30 s → `startup_timeout` →
+    restart policy kicks in.
+  - **E3**: batch **cycle detection algorithm pinned** (§6.2) —
+    admission builds post-batch graph in memory (KB `DependsOn`
+    edges + batch `\ref` edges), runs DFS / Tarjan, reports the
+    cycle path in `detail`. Librarian's apply-time check is Kuzu
+    native cycle query as defense-in-depth.
+  - **E4**: exit code 4 now explicitly covers **workspace not
+    writable** (cannot create `runtime/locks/`).
+  - **E5**: §4.1 documents the **Kuzu concurrency assumption** —
+    snapshot isolation is assumed for readers; if weaker, the
+    pre-dispatch hash gate + verdict hash-match gate catch any
+    inconsistency before it corrupts truth.
+  - **E6**: §14 Open Items adds **orphan aux-node GC** as Phase II
+    (accepted noise in Phase I).
