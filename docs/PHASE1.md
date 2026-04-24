@@ -332,21 +332,25 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 - Respects `DESIRED_COUNT`; no hard repair cap in Phase I (repair rounds
   are advisory only — generator keeps being dispatched on count=-1 until
   hash escapes)
-- Concurrency rules (ARCHITECTURE §6.4.1, §10.3):
-  - no two in-flight jobs targeting the same label (generator or
-    verifier)
-  - at most `N` generator jobs in flight per workspace, where `N` is
-    `rethlas.toml [scheduling] max_concurrent_generators` (default 2)
-  - verifier jobs may run concurrently on distinct targets within the
-    remaining `codex_budget` slots
+- Concurrency via two independent worker pools (ARCHITECTURE §10.3):
+  - generator pool size = `rethlas.toml [scheduling] generator_workers`
+    (default 2)
+  - verifier pool size = `rethlas.toml [scheduling] verifier_workers`
+    (default 4)
+  - per-tick dispatch loops are independent for each pool — no shared
+    slot contention or cross-pool precedence
+  - the "no concurrent same-target dispatch" rule applies across
+    pools (a target in flight in one pool blocks dispatch in the
+    other)
 
 **M6.2** `coordinator/loop.py` — main loop
 - Read KB + runtime jobs
-- Compute dispatches via policy
-- For each dispatch: acquire budget slot, launch wrapper subprocess,
-  record runtime job file under `runtime/jobs/{job_id}.json` per
-  ARCHITECTURE §6.7.1 schema (schema, job_id, kind, target, mode,
-  dispatch_hash, pid, pgid, started_at, updated_at, status, log_path)
+- Compute dispatches via policy (two independent pools)
+- For each dispatch: check pool has capacity, launch wrapper
+  subprocess, record runtime job file under
+  `runtime/jobs/{job_id}.json` per ARCHITECTURE §6.7.1 schema
+  (schema, job_id, kind, target, mode, dispatch_hash, pid, pgid,
+  started_at, updated_at, status, log_path)
 - Monitor in-flight dispatches (via codex log mtime)
 - On timeout: kill process group; write `status = "timed_out"` to the
   job file, then delete it

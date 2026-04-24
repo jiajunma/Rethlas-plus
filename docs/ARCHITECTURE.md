@@ -131,6 +131,34 @@ rethlas rebuild                            # rebuild dag.kz + nodes/ from events
 
 Default workspace is cwd. `--workspace <path>` overrides.
 
+### 2.4 Workspace config `rethlas.toml`
+
+Known sections in Phase I:
+
+```toml
+[scheduling]
+desired_pass_count       = 3    # §10.1
+generator_workers        = 2    # §10.3
+verifier_workers         = 4    # §10.3
+
+[dashboard]
+bind                     = "127.0.0.1:8765"    # §6.7.1
+```
+
+- **Missing file**: all fields default as shown above.
+- **Missing section**: that section's fields default as shown.
+- **Missing field**: defaults to the shown value.
+- **Unknown field**: logged as a startup warning; value ignored.
+- **Malformed TOML (parse error) or out-of-range value** (e.g. negative
+  `generator_workers`, `desired_pass_count < 1`): startup fails with a
+  non-zero exit code and a human-readable error pointing at the offending
+  line. Fail-fast rather than silently falling back to defaults, since a
+  malformed config is almost always a user error worth surfacing.
+
+Reload semantics: `rethlas.toml` is read once at process startup
+(supervise / dashboard / linter each load independently). Editing it
+while `rethlas supervise` is running has no effect until restart.
+
 ---
 
 ## 3. Truth Layer: `events/`
@@ -802,27 +830,44 @@ CREATE NODE TABLE AppliedEvent (
   event_id STRING PRIMARY KEY,
   status STRING,      -- "applied" | "apply_failed"
   reason STRING,      -- "" for applied; failure code otherwise
+  detail STRING,      -- human-readable context for apply_failed rows;
+                      -- "" for applied rows
   applied_at STRING   -- ISO timestamp when librarian decided
 );
 ```
 
-Defined `reason` codes for `status = "apply_failed"` (Phase I):
-- `label_conflict` — node with this label already exists
-- `cycle` — applying this event would introduce a dependency cycle
+Defined `reason` codes for `status = "apply_failed"` (Phase I). For
+each row where `status = "apply_failed"`, librarian also populates
+`detail` with a short human-readable explanation pointing at the
+specific trigger (so dashboard can render it without cross-joining
+to `events/`):
+
+- `label_conflict` — node with this label already exists.
+  `detail` example: `"label thm:foo already applied by event 202604...-a7b2c912d4f1e380"`
+- `cycle` — applying this event would introduce a dependency cycle.
+  `detail` example: `"would close cycle: thm:a -> lem:b -> thm:a"`
 - `ref_missing` — an explicit `\ref{}` target does not exist at apply
-  time
-- `hint_target_missing` — `user.hint_attached` target label not found
+  time. `detail` example: `"\ref{lem:aux_missing} not found"`
+- `hint_target_missing` — `user.hint_attached` target label not found.
+  `detail` example: `"target lem:x does not exist"`
 - `hint_target_unreachable` — `user.hint_attached` target exists but
   has `pass_count >= 1` at apply time (the hint is semantically
   dormant; see §5.2). Admission already rejects this at publish time;
   this apply-time reason only fires when a concurrent verdict advanced
-  the target between admission and apply.
+  the target between admission and apply. `detail` carries the
+  target label + pass_count at apply time.
 - `hash_mismatch` — `verifier.run_completed` carries a
   `verification_hash` that no longer matches the target node's current
-  hash (stale verdict)
-- `kind_mutation` — a revision attempted to change a node's `kind`
+  hash (stale verdict). `detail` carries the stale hash prefix + the
+  current hash prefix.
+- `kind_mutation` — a revision attempted to change a node's `kind`.
+  `detail` carries both old and new kind.
 - `self_reference` — a node's own body `\ref{}`s itself (also caught at
-  admission; included here for defense-in-depth)
+  admission; included here for defense-in-depth). `detail` carries
+  the offending label.
+
+`detail` is capped at 512 bytes; librarian truncates longer strings
+with a trailing `...`.
 
 **Node contents** (logical schema):
 
@@ -1644,22 +1689,24 @@ or verifier on a node, coordinator checks current-runtime job state for that
 target. If a live/in-flight job exists, skip this loop. Prevents racing
 attempts producing conflicting events on the same node.
 
-**At most `N` generator jobs in flight per workspace.** `N` is
-configurable via `rethlas.toml [scheduling] max_concurrent_generators`;
-default is **2**. Generator write scope is narrow (§6.2): a batch may
-touch only its own target label plus brand-new labels. With the
-existing "no concurrent same-target dispatch" rule, any `N >= 1`
-generator overlap is tolerable — the only cross-batch race is two
-concurrent batches independently inventing the same brand-new label,
-resolved deterministically by `(iso_ms, seq, uid)` ordering: the
-first to apply wins, the loser gets `apply_failed(label_conflict)`.
-Higher `N` trades slightly more wasted work (on rare label collisions)
-for more parallelism; the default 2 is a conservative starting point.
-Verifier jobs may still run concurrently on distinct targets within
-the remaining `codex_budget` slots.
+**Generator and verifier run as two independent worker pools** (§10.3).
+The generator pool's capacity is `rethlas.toml [scheduling]
+generator_workers` (default 2); the verifier pool's capacity is
+`verifier_workers` (default 4). Each pool dispatches independently
+from its own queue; there is no shared slot contention between them.
+
+Generator write scope is narrow (§6.2): a batch may touch only its own
+target label plus brand-new labels. With the "no concurrent same-target
+dispatch" rule, any `generator_workers >= 1` is safe — the only
+cross-batch race is two or more concurrent batches independently
+inventing the same brand-new label, resolved deterministically by
+`(iso_ms, seq, uid)` ordering: the first to apply wins, the loser
+gets `apply_failed(label_conflict)`. Higher `generator_workers` trades
+slightly more wasted work (on rare label collisions) for more
+parallelism; the default 2 is a conservative starting point.
 
 **Cross-component write-set overlap is not prevented.** The "no
-concurrent same-target" and "at most `N` generators at a time" rules are not
+concurrent same-target" and the per-pool capacity rules are not
 enough to guarantee that a verifier's snapshot of a target's
 dependency chain remains valid for the entire verifier run. Concrete
 scenario (narrower after the §6.2 write-scope invariant, but still
@@ -1808,8 +1855,10 @@ dashboard's loop-level explanation. Phase I codes:
 - `corruption_or_drift` — loop is intentionally not dispatching because runtime
   drift / projection inconsistency needs operator attention
 
-Dashboard may use `idle_reason_detail` as human-facing prose, but it should not
-infer scheduler meaning from free text.
+Dashboard may use `idle_reason_detail` as human-facing prose, but it
+should not infer scheduler meaning from free text. Coordinator caps
+`idle_reason_detail` at **512 bytes**; longer strings are truncated
+with a trailing `...`.
 
 Dashboard uses `updated_at` age to classify coordinator health. If the file is
 missing or stale, dashboard marks coordinator health degraded/down but still
@@ -1847,10 +1896,11 @@ for each new event file (sorted globally by (iso_ms, seq, uid)):
             halt projection; surface corruption on dashboard / CLI
             break
 
-        semantic_ok, reason = semantic_check(e, current_projection)
+        semantic_ok, reason, detail = semantic_check(e, current_projection)
         if not semantic_ok:
             insert AppliedEvent(e.event_id, status="apply_failed",
-                                reason=reason, applied_at=now())
+                                reason=reason, detail=detail,
+                                applied_at=now())
             commit transaction
             continue                   # no KB change; terminal for e
 
@@ -1859,7 +1909,7 @@ for each new event file (sorted globally by (iso_ms, seq, uid)):
             recompute affected hashes (BFS through dependents)
             update pass_count per §5.4
         insert AppliedEvent(e.event_id, status="applied",
-                            reason="", applied_at=now())
+                            reason="", detail="", applied_at=now())
         commit transaction
 
         re-render nodes/*.md for each affected node (atomic writes)
@@ -2172,6 +2222,21 @@ stuck-detection on timeout / orphan cleanup).
 dispatch mode (`fresh` / `repair`); for verifier it is `single` in
 Phase I.
 
+`dispatch_hash` is the target node's `verification_hash` as read from
+Kuzu at the moment coordinator enqueues this job. Defined for all
+pools and modes:
+- `generator fresh`: target exists with empty proof; `verification_hash`
+  is still well-defined (hash of statement_hash + empty proof).
+- `generator repair`: target's current `verification_hash` (i.e., the
+  hash that the last gap/critical verdict rejected).
+- `verifier single`: target's current `verification_hash`.
+
+The field is a debugging / drift anchor: if the target's hash changes
+between dispatch and apply (concurrent generator touched it, or a
+Merkle cascade flipped it), the eventual `apply_failed(hash_mismatch)`
+on a verdict can be traced back to the original dispatch via this
+field.
+
 `status` enumeration (Phase I):
 - `starting` — coordinator wrote the file, wrapper has not yet started
   the Codex subprocess
@@ -2296,6 +2361,11 @@ shard's filenames, and streams filenames until `limit` have been
 collected. `AppliedEvent` provides the `status` enrichment via a
 single Kuzu `WHERE event_id IN (...)` query after the filenames are
 chosen. No separate "recent events" projection table is maintained.
+
+**`limit` is clamped to `[1, 500]`.** Requests exceeding 500 are
+silently capped; `limit` below 1 is rejected with HTTP 400. This
+prevents a client from forcing dashboard to scan the entire `events/`
+directory in one request.
 
 Phase II may add an index if Phase I profiling shows this scan is
 slow at realistic workspace size.
@@ -2488,7 +2558,8 @@ begin Kuzu transaction:
     on failure (label_conflict / cycle / ref_missing /
                 hint_target_missing / hash_mismatch / ...):
       insert AppliedEvent(event_id, status="apply_failed",
-                          reason=<code>, applied_at=now())
+                          reason=<code>, detail=<context>,
+                          applied_at=now())
       commit; done with e (terminal)
 
   # semantic check passed — apply to KB
@@ -2496,7 +2567,7 @@ begin Kuzu transaction:
   recompute affected nodes' hashes (BFS through dependents)
   update pass_count per §5.4
   insert AppliedEvent(event_id, status="applied",
-                      reason="", applied_at=now())
+                      reason="", detail="", applied_at=now())
 commit
 
 re-render nodes/*.md for each affected node (atomic writes)
@@ -2551,16 +2622,40 @@ Candidate nodes are filtered by:
 Sorted by `pass_count` ascending (count=0 first, then count=1, etc.).
 Ties broken by `label`.
 
-### 10.3 Concurrency
+### 10.3 Concurrency — worker pools
 
-Existing `common/codex_budget` slot mechanism caps concurrent Codex
-subprocesses. Coordinator acquires slot before dispatching; releases on
-completion.
+Phase I schedules generator and verifier as **two independent worker
+pools**. Each pool has its own queue, its own fixed capacity, and
+draws work independently; there is no cross-pool precedence and no
+shared slot contention.
 
-Within that budget, generator concurrency is additionally capped at
-`N` per workspace (§6.4.1), configurable via `rethlas.toml
-[scheduling] max_concurrent_generators` with default **2**. Verifier
-jobs use the remaining available slots.
+**Configuration** (`rethlas.toml [scheduling]`):
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `generator_workers` | `2` | Max concurrent generator jobs per workspace |
+| `verifier_workers` | `4` | Max concurrent verifier jobs per workspace |
+| `desired_pass_count` | `3` | Per-node pass_count goal (§10.1) |
+
+Coordinator's per-tick dispatch is **two independent loops**:
+
+1. For each empty generator slot (`generator_workers - in_flight_generators`):
+   pick the highest-priority generator candidate whose target is not
+   already in flight, dispatch.
+2. For each empty verifier slot (`verifier_workers - in_flight_verifiers`):
+   pick the highest-priority verifier candidate whose target is not
+   already in flight, dispatch.
+
+The "no concurrent same-target dispatch" rule (§6.4.1) still applies
+across both pools: if a target is in flight in pool A, pool B must skip
+it. Otherwise the two pools run independently and their combined
+concurrency is simply `generator_workers + verifier_workers`.
+
+Both defaults are conservative starting points for Phase I single-backend
+Codex; operators tune via `rethlas.toml` as they gain throughput data.
+There is no separate Codex-wide budget mechanism in Phase I — the
+`common/codex_budget` shared-slot concept from the original Rethlas is
+superseded by the per-pool caps above.
 
 ### 10.4 Repair rounds
 
@@ -2881,3 +2976,30 @@ See `PHASE1.md` for the concrete task list.
   - Phase I M6.1 updated to spell out the new concurrency rules
     (no concurrent same-target, at most `N` generators from config,
     verifiers share the remaining `codex_budget` slots).
+- **2026-04-24 (evening review, worker pools + review nits R2–R6)**:
+  - §10.3 rewritten: generator and verifier run as **two independent
+    worker pools** with separate configurable capacities
+    (`generator_workers`, default 2; `verifier_workers`, default 4).
+    The old `common/codex_budget` shared-slot mechanism is superseded
+    — each pool has its own queue and no cross-pool precedence
+    contention.
+  - §6.4.1 concurrency intro rewritten to match the worker-pool model.
+  - R2: `AppliedEvent` gains a `detail STRING` column (capped 512
+    bytes). Librarian populates a short human-readable explanation
+    for every apply_failed row so dashboard can surface concrete
+    failure context without cross-joining to `events/` content.
+    Semantic-check signature updated in §6.5 / §9.2 pseudocode.
+  - R3: `runtime/jobs/*.json` `dispatch_hash` semantics pinned for
+    all three modes (generator fresh / generator repair / verifier
+    single) — always the target's `verification_hash` read from Kuzu
+    at dispatch time.
+  - R4: `/api/events?limit=N` is clamped to `[1, 500]` — requests
+    above 500 are silently capped; < 1 returns HTTP 400. Prevents a
+    single request from scanning the entire events directory.
+  - R5 + new §2.4: `rethlas.toml` parse and validation behavior
+    spelled out — missing file / section / field all fall back to
+    defaults; malformed TOML or out-of-range values fail-fast at
+    startup. Config is read once at process start (no hot reload in
+    Phase I).
+  - R6: `idle_reason_detail` capped at 512 bytes (truncated with
+    `...`).
