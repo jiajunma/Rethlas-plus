@@ -792,8 +792,8 @@ see logically-impossible states mid-commit.
   `verifier.run_completed`; emitted event body asserts every field
   required by ARCHITECTURE §3.5.1:
   - `verdict ∈ {"accepted", "gap", "critical"}`
-  - `verification_hash` equals the value the wrapper computed from
-    Kuzu at dispatch time (`Node.verification_hash`)
+  - `verification_hash` equals the `dispatch_hash` stored in the job
+    file, which coordinator populated from Kuzu at dispatch time
   - `verification_report` has all 5 required subfields (`summary`,
     `checked_items`, `gaps`, `critical_errors`,
     `external_reference_checks`) — keys present, lists may be
@@ -864,9 +864,6 @@ see logically-impossible states mid-commit.
   (§6.4 E2):
   - librarian: restart once; if the second attempt also fails to
     heartbeat within 30 s, coordinator exits with code 3
-  - dashboard: restart up to 3× with 30 s backoff; after the third
-    failure, mark `children.dashboard.status = "degraded"` and keep
-    coordinator + librarian running
 - `integration`: startup cleanup removes zombie runtime state from prior crash
   - deletes stale `runtime/jobs/*.json`
   - deletes stale `runtime/state/coordinator.json` and
@@ -1014,6 +1011,11 @@ see logically-impossible states mid-commit.
 - `integration`: coordinator child-management for dashboard
   - dashboard restart three times then degrade
   - dashboard startup grace period honored before first heartbeat
+  - dashboard startup-timeout path: after the 30 s grace window
+    without a first heartbeat, coordinator restarts up to 3× with
+    30 s backoff; after the 3rd failure, marks
+    `children.dashboard.status = "degraded"` and keeps coordinator +
+    librarian running
   - `children.dashboard.status` reflected in `coordinator.json`
 - `integration`: graceful shutdown order with dashboard present is
   dashboard → in-flight workers → librarian
