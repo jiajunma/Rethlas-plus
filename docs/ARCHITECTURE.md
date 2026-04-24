@@ -763,12 +763,16 @@ node events and generator batch commits.
 - Native Cypher query language
 - Good for graph queries (closure, cycles, recursion)
 - Python binding is first-class
-- Sole writer: librarian. Librarian is **passive**: it applies an
-  event to Kuzu only when coordinator sends it an "apply event"
-  command (§6.5 / §6.4). Librarian itself does not watch `events/`.
-- Readers (direct Kuzu access): coordinator, dashboard, linter, and
-  the user CLI (for AppliedEvent polling in §9.1). Librarian is also
-  a reader of its own writes.
+- **Sole process holding the Kuzu handle: librarian.** Librarian is
+  **passive**: it applies an event to Kuzu only when coordinator sends
+  it an "apply event" command (§6.5 / §6.4). Librarian itself does
+  not watch `events/`. It also serves **read** queries that other
+  processes need, over the same IPC command channel.
+- **Readers** (coordinator, dashboard, linter, user CLI for
+  `AppliedEvent` polling in §9.1) do **not** open Kuzu directly —
+  they send a `QUERY` command over librarian's IPC channel and
+  receive a structured reply (§6.5). Librarian is also a reader of
+  its own writes.
 - **Workers** (generator / verifier `role.py` wrappers) **do not
   access Kuzu at all.** Workers are pure file-I/O: they read their
   own `runtime/jobs/{job_id}.json` for pre-validated context
@@ -778,23 +782,29 @@ node events and generator batch commits.
   their own job file. Pre-dispatch validation is coordinator's job
   (§5.5.2); AppliedEvent polling on a worker's published event is
   also coordinator's job (§6.7.1). This keeps workers trivial to
-  test and keeps Kuzu connections bounded to the long-running
-  daemons.
+  test and keeps Kuzu connections bounded to one daemon.
 
-**Concurrency model assumption.** Phase I's Kuzu requirements reduce
-to **single-writer / multi-reader (SWMR)** across OS processes:
-- One writer process (librarian) holds the Kuzu write connection.
-- Several reader processes (coordinator, dashboard, linter, user
-  CLI invocations) open read connections concurrently.
-- Workers do not open Kuzu at all.
-
-The design assumes Kuzu's embedded mode provides snapshot isolation
-for concurrent readers against a single writer — a read transaction
-never observes partial state of an in-flight writer commit. If the
-adopted Kuzu version does not guarantee this, the hash-match gate
-in §5.5.0 is the correctness backstop: stale verdicts or
-inconsistent read snapshots cannot advance `pass_count`. See PHASE1
-pre-M2 sanity check for the explicit validation step.
+**Revised concurrency model (2026-04-25).** Phase I's pre-M2 Kuzu
+stress validation (PHASE1.md L106-145) discovered that Kuzu 0.11.3
+uses an **exclusive file lock** on the database directory regardless
+of read/write intent — see
+[Kuzu concurrency docs](https://docs.kuzudb.com/concurrency). The
+original "single-writer / multi-reader" assumption across OS
+processes is therefore not achievable: while librarian holds the
+write lock, no other OS process can open the DB even read-only.
+Phase I pivots to a **single-process model**:
+- Only **librarian** opens the Kuzu database. One process, one
+  handle.
+- Multiple **in-process connections** (`kuzu.Connection`) inside
+  librarian serve concurrent read RPCs; this is the "multi-reader"
+  mode that Kuzu does support.
+- Every non-librarian process that needs KB state reaches it via
+  librarian's IPC channel. The same channel already carries
+  `APPLY(event_id, path)` writes (§6.5 K2); it now also carries
+  `QUERY(...)` reads returning JSON.
+- The hash-match gate in §5.5.0 remains the correctness backstop
+  for any drift between coordinator's pre-dispatch snapshot and
+  librarian's apply-time state.
 
 ### 4.2 Per-node markdown files
 
@@ -4336,3 +4346,22 @@ See `PHASE1.md` for the concrete task list.
     `AppliedEvent(event_id)` on its next tick and writes the
     terminal status (`applied` / `apply_failed` + reason +
     detail) into the job file before deleting it.
+- **2026-04-25 (pre-M2 Kuzu stress validation — single-process
+  Kuzu)**:
+  - **L1**: PHASE1 pre-M2 stress tests against Kuzu 0.11.3 showed
+    Kuzu uses an exclusive file lock on the database directory
+    regardless of read/write intent. The §4.1 "single-writer /
+    multi-reader across OS processes" assumption therefore cannot
+    be met — while librarian holds the write lock, no other OS
+    process can open the DB even read-only.
+  - **L2**: §4.1 pivoted to a **single-process Kuzu model**.
+    Librarian is the only process that opens `dag.kz/`. Multiple
+    `kuzu.Connection` handles inside the librarian process serve
+    concurrent read RPCs. Every other process (coordinator,
+    dashboard, linter, user CLI) reaches KB state via librarian's
+    IPC command channel — the same channel that already carries
+    `APPLY(event_id, path)` writes (K2). A `QUERY(...)` command
+    was added to the channel for reads.
+  - **L3**: The hash-match gate in §5.5.0 remains the correctness
+    backstop for coordinator-snapshot vs apply-time drift, exactly
+    as before.
