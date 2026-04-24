@@ -343,10 +343,16 @@ belong to derived `knowledge_base/nodes/*.md`, not to `events/`.
 | `type`           | ✓        | `{producer_kind}.{action}` dotted name       |
 | `actor`          | ✓        | `{kind}:{instance}` string                   |
 | `target`         | —        | DAG node label if applicable                 |
-| `parent_event_id`| —        | Optional direct causal predecessor           |
-| `ts`             | ✓        | Full ISO timestamp (matches `event_id` prefix)|
+| `ts`             | ✓        | Full ISO timestamp (matches `event_id` prefix) in local time with offset (§2.4 trailer — truth event bodies keep local-offset form; all other timestamps use UTC Z) |
 | `cost`           | —        | Per-event resource consumption, see §3.6     |
 | `payload`        | ✓        | Structured event payload                     |
+
+Phase I has **no `parent_event_id` / explicit causal-chain field**.
+Causality is implicit from `(iso_ms, seq, uid)` replay order and from
+semantic references like a verifier verdict's `verification_hash`
+matching the node's current hash. Phase II may add an explicit
+predecessor link if downstream tooling (provenance graphs, replay
+debugging) needs one.
 
 ### 3.5 Producer openness
 
@@ -664,6 +670,17 @@ monotonicity required):
 1. `iso_ms = utc_wall_clock_now()` at the moment of event
    construction. Use `datetime.datetime.now(tz=datetime.timezone.utc)`
    in Python (or equivalent) — not local time, not naive datetime.
+   **Clock-backward defense**: each long-running producer (coordinator,
+   librarian, generator wrapper, verifier wrapper) remembers the
+   `iso_ms` of its last-emitted event in memory (`last_emitted_iso_ms`).
+   At allocation, if `utc_wall_clock_now() <= last_emitted_iso_ms`
+   (NTP step-back, manual clock change, VM migration, etc.), the
+   producer uses `last_emitted_iso_ms + 1 ms` instead of the raw wall
+   clock. This preserves per-producer strict monotonicity without
+   coordination. It does **not** enforce cross-producer monotonicity
+   (§3.7.1 explicitly drops that requirement); per-producer
+   monotonicity is enough because `(iso_ms, seq, uid)` total sort
+   still orders events deterministically for replay.
 2. `seq`: per-producer, per-ms counter. Starts at `0001`; increments
    only if the same producer publishes multiple events in the same
    millisecond (rare in Phase I). Scope resets on every new ms.
@@ -2256,7 +2273,13 @@ for each new event file (sorted globally by (iso_ms, seq, uid)):
     e = load_event(file)
 
     if e.event_id in AppliedEvent:
-        continue                       # idempotent replay
+        # idempotent replay — verify content hash matches; same hash
+        # means same event, skip. Different hash means rare uid
+        # collision or tampering — halt projection as workspace
+        # corruption (§3.1.6).
+        if AppliedEvent[e.event_id].event_sha256 != sha256(bytes(file)):
+            halt projection; corruption
+        continue
 
     begin Kuzu transaction:
         structural_ok, err = structural_check(e)
@@ -2649,9 +2672,19 @@ reads them.
 | `<= 60 s` | `healthy` |
 | `60 s < age <= 5 min` | `degraded` (yellow) |
 | `> 5 min` or file missing | `down` (red) |
+| file present but JSON parse fails | `down` (red) — treated as missing; error + file path logged to `runtime/logs/dashboard.log`, dashboard continues serving other components |
 
 These thresholds are dashboard UI classifications only; the
 components themselves do not self-reap based on them.
+
+Writers use atomic `.tmp + rename` (§9.1 convention), so under normal
+operation a reader sees either the previous complete version or the
+new complete version — never a partial write. A JSON parse failure
+therefore indicates an abnormal event (manual tampering, filesystem
+corruption, writer bug); dashboard's role is to keep itself running
+and make the abnormal state visible to the operator, not to repair
+it. Fixing requires `rethlas rebuild` or operator inspection of the
+log.
 
 The `status` field inside `coordinator.json` / `librarian.json` is the
 component's **self-reported** runtime state (e.g. `running`,
@@ -2989,6 +3022,17 @@ codex exec \
 `runtime/logs/{job_id}.codex.log`. Every token Codex streams updates
 mtime; during long silent reasoning (xhigh can sit quiet for 10–20
 minutes per §13.9), mtime stays put.
+
+**Log file contents: stdout + stderr merged.** Wrapper launches
+`codex exec` with `stderr` redirected into the same log file as
+`stdout` (`subprocess.Popen(..., stdout=log_fd, stderr=STDOUT)` in
+Python). Rationale: Codex and its MCP subprocesses may write
+warnings, rate-limit notices, and genuine errors to stderr; losing
+those on crash-diagnosis hurts triage. The wrapper's parser only
+reads stdout for `<node>` blocks / verdict JSON — stderr is captured
+for humans, not for the parser. A side effect: stderr writes also
+update log mtime, so any Codex-side activity (including warnings)
+keeps the liveness signal fresh.
 
 **Rule:** If log mtime > `codex_silent_timeout_seconds` (default
 1800 = 30 min, configurable via `rethlas.toml [scheduling]`, §2.4),
@@ -3558,6 +3602,15 @@ These are resolved at implementation time without blocking design:
    noise; Phase II may add a "reachability from top-level theorems"
    garbage-collection sweep (report-only or opt-in delete via a
    compaction event).
+9. **Filesystem event delivery on network / container FS** —
+   Phase I's dashboard and librarian rely on `watchdog` (Linux
+   inotify / macOS FSEvents). These work on local ext4/APFS but
+   **may silently drop events on NFS, docker bind mounts with
+   inconsistent eventing, or certain remote filesystems**.
+   Symptom: new events land on disk but dashboard doesn't fire SSE,
+   librarian doesn't pick them up until next full scan. Phase I
+   recommends running the workspace on local disk; Phase II can add
+   a periodic polling fallback for network / container FS.
 
 See `PHASE1.md` for the concrete task list.
 
