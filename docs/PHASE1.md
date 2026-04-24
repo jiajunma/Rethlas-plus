@@ -620,7 +620,7 @@ see logically-impossible states mid-commit.
   `(kind, type)` pair does not match `producers.toml` (simulating a
   hand-drop past admission). On startup replay, librarian halts as
   **workspace corruption** per §3.1.6 rather than silently applying
-  or skipping; dashboard surfaces the corruption.
+  or skipping; coordinator records the corruption/degraded state.
 
 **Exit**
 
