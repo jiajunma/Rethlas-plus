@@ -95,12 +95,14 @@ Rethlas/
 │       └── {kind_prefix}_{label}.md
 └── runtime/                        # ephemeral, gitignored
     ├── jobs/                       # one file per in-flight job
-    │   └── {job_id}.json           # pid, target, mode, started_at
+    │   └── {job_id}.json           # pid, kind, target, mode, dispatch_hash,
+    │                               # started_at, status
     ├── logs/
     │   └── {job_id}.codex.log      # Codex subprocess stdout
     └── state/
-        └── rejected_batches.jsonl  # recent decoder/librarian rejections
-                                    # (surface via dashboard)
+        ├── rejected_writes.jsonl   # recent decoder/admission rejections
+        └── drift_alerts.jsonl      # rare hash/runtime drift alerts
+                                    # (both surfaced via dashboard)
 ```
 
 Workspace `.gitignore`:
@@ -117,6 +119,8 @@ pip install -e ~/mycodes/Rethlas           # install tool once
 
 cd ~/mycodes/my_project                    # in workspace
 rethlas init                               # initialize events/ skeleton + rethlas.toml
+rethlas add-node ...                       # publish a user node event
+rethlas attach-hint ...                    # publish a user hint event
 rethlas supervise                          # run librarian + coordinator + dashboard
 rethlas dashboard --port 8765              # dashboard only
 rethlas linter --mode fast                 # one-shot audit
@@ -150,6 +154,11 @@ the truth event stream alone.
    means whole-batch atomic publish. No partial truth is visible.
 5. **Only knowledge actors write truth events.** In Phase I, only
    `user`, `generator`, and `verifier` write to `events/`.
+6. **Only admitted events enter canonical truth.** Producers validate
+   schema/business rules before atomic rename into `events/`. Librarian
+   re-validates during replay as a defensive invariant check; an invalid
+   canonical event is treated as workspace corruption, not as a routine
+   rejected batch.
 
 ### 3.2 File naming
 
@@ -173,7 +182,8 @@ Examples:
 
 Directories sharded by date: `events/{YYYY-MM-DD}/`.
 
-Filename metadata is informational; frontmatter / JSON body is authoritative.
+In Phase I, filename metadata is informational and the JSON body is
+authoritative.
 Linter checks filename-body consistency.
 
 ### 3.3 Event formats
@@ -214,8 +224,9 @@ belong to derived `knowledge_base/nodes/*.md`, not to `events/`.
 
 Truth-event producers are an intentionally small set in Phase I. New
 producers are possible in later phases, but Phase I truth events are limited
-to `user`, `generator`, and `verifier`. The librarian rejects truth events
-whose `actor` / `type` don't match registered patterns.
+to `user`, `generator`, and `verifier`. Admission rejects truth events whose
+`actor` / `type` don't match registered patterns; librarian re-validates the
+same rule during replay.
 
 Phase I truth producers:
 - `user:<name>` — human author
@@ -435,7 +446,9 @@ observability.
 ### 3.7 Writing truth events
 
 This section collects the rules for how truth events reach `events/` in a
-form that librarian can replay deterministically.
+form that librarian can replay deterministically. Canonical `events/`
+contains admitted truth only: producers validate before publish, then
+librarian re-validates on replay as a defensive check.
 
 #### 3.7.1 Stable event ordering
 
@@ -449,6 +462,12 @@ Librarian replay order must be stable and deterministic. Sorting is by:
 Within a same-millisecond producer batch, `seq` is the canonical order. This
 is especially important for generator-emitted statement/proof pairs and
 topologically ordered multi-node output.
+
+Phase I also requires **monotone publication order**: before atomic rename,
+the producer must verify that the new event sorts strictly after the current
+workspace maximum event id. Backfilled / backdated canonical events are
+invalid in Phase I. This makes librarian's `last_applied_event_id`
+watermark safe for incremental replay.
 
 #### 3.7.2 Generator batch atomicity
 
@@ -760,14 +779,27 @@ Higher `pass_count` = more confidence.
 
 **Update rules:**
 
+Let `initial_count(kind, proof)` be the count assigned whenever a node's
+authored state (statement / proof / kind) is freshly set by a truth event:
+
+- `kind ∈ {definition, external_theorem}` → `0`
+  (these kinds never carry a proof; count=0 means "awaiting verifier
+  well-formedness check", not "needs generator")
+- `kind ∈ {lemma, theorem, proposition}` and `proof` non-empty → `0`
+  (has proof; awaiting verifier)
+- `kind ∈ {lemma, theorem, proposition}` and `proof` empty → `-1`
+  (needs generator to produce a proof)
+
+Rationale: `-1` is reserved for "needs generator". Definitions /
+external_theorems have no proof by design, so "empty proof" is not a
+signal that a generator is needed; they go to `0` and wait for the
+verifier.
+
 | Event | Effect on target Node |
 | --- | --- |
-| `user.node_added(kind=definition)` | Create kind=definition, `count = 0` |
-| `user.node_added(kind=external_theorem)` | Create kind=external_theorem, `count = 0` |
-| `user.node_added(kind ∈ {lemma, proposition, theorem})` with empty proof | Create node, `count = -1` |
-| `user.node_added(kind ∈ {lemma, proposition, theorem})` with non-empty proof | Create node, `count = 0` |
-| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `count = 0` if proof non-empty else `-1`; Merkle propagates to dependents when statement changes |
-| `generator.batch_committed` | Apply the committed node batch atomically; for each included node, create or replace current statement/proof/metadata, recompute hashes, and set `count = 0` if proof non-empty else `-1` |
+| `user.node_added` | Create node with the full authored state; `count = initial_count(kind, proof)` |
+| `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `count = initial_count(kind, proof)`; Merkle propagates to dependents when statement changes |
+| `generator.batch_committed` | Apply the committed node batch atomically; for each included node, create or replace current statement/proof/metadata, recompute hashes, and set `count = initial_count(kind, proof)` |
 | `verifier.run_completed(accepted, hash matches)` | `count += 1`; set `verification_report` |
 | `verifier.run_completed(gap, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (local fix suggestions) |
 | `verifier.run_completed(critical, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (may need statement rewrite) |
@@ -883,27 +915,29 @@ preserved by the repair-must-change-hash invariant.
 
 **Before dispatching verifier on a node (or before verifier starts a
 run), recompute `verification_hash` from current state.** If the freshly
-computed value differs from the stored value, reset `count` to 0 and
-update the stored hash.
+computed value differs from the stored value, do **not** mutate Kuzu from the
+coordinator or verifier layer. Instead, fail the dispatch closed and surface a
+runtime drift alert so librarian replay / `rethlas rebuild` can restore
+consistency.
 
 ```
 fresh_hash = verification_hash(current_node_state)
 
 if fresh_hash != node.verification_hash:
-    node.verification_hash = fresh_hash
-    node.pass_count = 0    # old accepted verdicts don't match new hash
+    record_runtime_hash_drift(node.label, fresh_hash, node.verification_hash)
+    abort_dispatch()
 ```
 
 Purpose:
 - Catches any drift between stored hash and actual content (librarian bug,
   corruption, concurrent modification race)
 - Ensures verifier always runs on a verified-fresh hash
-- Invalidates prior accepted verdicts if state changed without proper
-  hash maintenance
+- Preserves the invariant that only librarian mutates `dag.kz/` and
+  `pass_count`
 
 This is a **safety backstop**. In a bug-free librarian, hashes are always
-current; this check is a no-op. But if the check ever triggers, the
-system self-heals by resetting count.
+current; this check is a no-op. If it ever triggers, the system fails closed
+rather than silently mutating derived state outside the truth/projection path.
 
 ### 5.6 Merkle cascade (statement changes only)
 
@@ -1043,8 +1077,9 @@ decoder:
   3. validate: full node-schema fields present, non-empty statement, no duplicate labels in batch, label format, kind is allowed,
      explicit `\ref{label}` references resolve (or will resolve by end of attempt)
   4. assemble the full node batch for this run
-  5. stage the batch
-  6. atomically publish one `generator.batch_committed`
+  5. validate the staged batch against the current KB snapshot (kind immutability, label conflicts, cycle introduction)
+  6. stage the admitted batch
+  7. atomically publish one `generator.batch_committed`
   ↓
 events/ directory
   ↓
@@ -1078,8 +1113,8 @@ batch in that order inside one batch transaction.
 2. **Repair context** (if mode=repair) — the target's
    `verification_report` and `repair_hint` from the latest verdict
 3. **Latest batch rejection report** (if any) — runtime-only structural
-   rejection summary from librarian/coordinator, such as cycle introduction
-   or unresolved reference
+   rejection summary from the decoder/admission layer, such as cycle
+   introduction or unresolved reference
 4. **Repair history summary** — current repair round count and brief
    history summary, so generator can decide between local repair,
    statement revision, or counter-example
@@ -1251,8 +1286,9 @@ coordinator maintains three things in memory:
 
 1. **Generator queue** — `kind ∈ {lemma, theorem, proposition}` nodes
    with `count = -1` (either no proof yet, or latest verdict was
-   gap/critical). Generator reads history to decide fresh vs repair.
-   Priority: by `label` (stable).
+   gap/critical), and with every explicit dependency already at
+   `pass_count >= 1` so the dependency is present in `nodes/`. Generator
+   reads history to decide fresh vs repair. Priority: by `label` (stable).
 2. **Verifier queue** — all nodes where:
    - `0 ≤ count < DESIRED_COUNT`
    - For every dep: `dep.count > node.count` (strict monotone)
@@ -1279,8 +1315,10 @@ if any dep is missing: skip (blocked)
 if node.pass_count == -1:
     if node.kind in [definition, external_theorem]:
         skip (waiting for user revision; no generator auto-fix)
-    else:
-        → dispatch generator
+    for dep in node.depends_on:
+        if dep.pass_count < 1:
+            skip (generator can only read verified deps from nodes/)
+    → dispatch generator
 
 elif node.pass_count >= DESIRED_COUNT:
     skip (done)
@@ -1326,6 +1364,12 @@ or verifier on a node, coordinator checks current-runtime job state for that
 target. If a live/in-flight job exists, skip this loop. Prevents racing
 attempts producing conflicting events on the same node.
 
+**At most one generator job in flight per workspace in Phase I.** A generator
+batch may create auxiliary nodes or revise shared definitions in addition to
+its nominal target, so its effective write set is not known until decode
+finishes. Workspace-wide generator serialization avoids overlapping batch
+write sets. Verifier jobs may still run concurrently on distinct targets.
+
 **Six safeguards against infinite loops / over-verification:**
 
 1. **`pass_count` monotonic per hash**: only `+1` from accepted verdicts;
@@ -1339,8 +1383,9 @@ attempts producing conflicting events on the same node.
    drift before dispatch.
 5. **Codex log mtime timeout (30 min)**: kills stuck Codex processes
    via `killpg`.
-6. **Cycle detection (librarian)**: any truth event that would introduce
-   a dependency cycle is rejected at event-application time.
+6. **Cycle detection (admission + replay validation)**: any candidate
+   event that would introduce a dependency cycle is rejected before truth
+   publication; replay validation catches corrupted history.
 
 Strict-monotone scheduling relies on this DAG invariant. With no cycles,
 leaves can always advance first. If the system stops making progress, the
@@ -1375,13 +1420,14 @@ Dashboard must make this obvious.
 Coordinator writes no truth events in Phase I. Dispatch, start, timeout, and
 crash records are runtime state only.
 
-If librarian rejects a generator batch (for example due to a dependency cycle,
-unresolved reference, or malformed batch), the entire batch is discarded and
-no truth event is applied from it. The rejection is recorded in runtime state
-as a **batch rejection report**. This is distinct from a verifier
-`verification_report`: verifier reports are mathematical judgments on a
-single node/proof, while batch rejection reports are structural/runtime
-diagnostics about why a proposed generator batch could not enter truth.
+If a generator batch fails pre-publication admission (for example due to a
+dependency cycle, unresolved reference, kind immutability violation, or
+malformed batch), the entire batch is discarded and **no truth event is
+written**. The rejection is recorded in runtime state as a **batch rejection
+report**. This is distinct from a verifier `verification_report`: verifier
+reports are mathematical judgments on a single node/proof, while batch
+rejection reports are structural/runtime diagnostics about why a proposed
+generator batch could not enter truth.
 
 ### 6.5 Librarian
 
@@ -1391,14 +1437,18 @@ the derived state.
 Main loop:
 ```
 watch events/ for new files
-for each new event (ordered by event_id):
+for each new event (ordered by (iso_ms, seq, uid)):
     validate schema + business rules
     apply to Kuzu transactionally
     recompute hashes for affected nodes (BFS through dependents)
     update pass_count per rules
     re-render nodes/*.md for each affected node
-    on validation failure: record runtime validation failure
+    on validation failure: stop projection and surface workspace corruption
 ```
+
+Routine admission failures are expected to be caught before canonical publish
+and recorded in `runtime/`; librarian-side validation failure means canonical
+truth itself is inconsistent with the architecture invariants.
 
 Startup: regenerate all `nodes/*.md` from Kuzu (ensures consistency even
 after crash).
@@ -1413,7 +1463,7 @@ status are reported via runtime logs / CLI output.
 
 Read-only audit. Phase I scope:
 
-- **A. Event stream integrity**: filename ↔ frontmatter consistency,
+- **A. Event stream integrity**: filename ↔ JSON body consistency,
   `event_id` uniqueness, references to prior events exist
 - **B. KB structural invariants**: no cycles, label uniqueness,
   kind-appropriate fields
@@ -1434,15 +1484,61 @@ Linter writes no truth events in Phase I.
 HTTP server, read-only. Phase I is a **linear HTML view**, no interactive
 graph.
 
+The old `integration/rethlas/status_dashboard.py` got one high-level thing
+right: the dashboard is an **observer**, not part of the proving loop. Phase I
+keeps that separation:
+
+- Dashboard restart must not restart coordinator, librarian, generator, or verifier
+- Coordinator / supervisor health logic must not depend on dashboard availability
+- Dashboard reads KB + runtime state only
+- No control actions from the dashboard in Phase I
+
+The old dashboard also surfaced rich proof-session statuses such as
+`provisional`, `invalidated`, and per-pass section summaries. Those were useful
+for the old session-local scheduler, but they should **not** be copied into the
+new event-sourced model as stored state. In Phase I, dashboard status labels are
+derived only from current node fields, dependency relations, and runtime jobs.
+
+**Primary page layout (`GET /`):**
+- **Health**: librarian/coordinator/dashboard process health, active job counts,
+  recent event timestamp, recent drift alerts, recent admission failures
+- **Progress**: theorem counts by `pass_count` band, active jobs, desired pass
+  threshold, recent truth activity
+- **Human Attention**: user-blocked nodes, repeated-no-progress repair episodes,
+  rejected writes, drift alerts
+- **Theorem Table**: all `kind=theorem` nodes with current derived status,
+  `pass_count`, dependency counts, and latest verdict summary
+- **Active Work**: all in-flight runtime jobs with target, kind, mode,
+  dispatch hash, started time, elapsed time, and latest log age
+
+**Per-node detail (`GET /api/node/{label}` and linked drilldown view):**
+- current authored state: label, kind, statement, proof presence, remark,
+  source note
+- current derived state: `pass_count`, `statement_hash`, `verification_hash`,
+  dependencies, dependents
+- current runtime state: active job if any, latest log age, latest drift alert
+- current repair context: latest verifier report summary, current `repair_hint`,
+  recent relevant events
+
+**Dashboard-derived status vocabulary** (display only, not stored in Kuzu):
+- `done`: `pass_count >= DESIRED_COUNT`
+- `verified`: `1 <= pass_count < DESIRED_COUNT`
+- `needs_verification`: `pass_count = 0` and verifier-dispatchable now
+- `blocked_on_dependency`: `pass_count = 0` but some dependency is not strictly ahead
+- `needs_generation`: proof-requiring node with `pass_count = -1`
+- `user_blocked`: `definition` / `external_theorem` with `pass_count = -1`
+- `in_flight`: runtime job currently active on the node (rendered as an overlay,
+  not a replacement for the underlying mathematical state)
+
+This keeps the UI expressive without re-introducing a stored status enum.
+
 Pages:
-- `GET /` — workspace overview (theorems list + health + stuck nodes + rejected events)
-- `GET /api/theorems` — JSON: all `kind=theorem` nodes and their progress
+- `GET /` — workspace overview (health + progress + human attention + theorem table + active work)
+- `GET /api/overview` — JSON payload backing the main page
+- `GET /api/theorems` — JSON: all `kind=theorem` nodes with dashboard-derived status
 - `GET /api/active` — JSON: currently in-flight runtime jobs
-- `GET /api/stuck` — JSON: nodes with `pass_count=-1` that need human:
-  - kind ∈ {definition, external_theorem} at count=-1 (user must revise)
-  - proof-requiring kinds with many repair rounds and no visible progress
-- `GET /api/rejected` — JSON: recent runtime validation failures so user sees
-  which dropped files failed validation
+- `GET /api/attention` — JSON: nodes / runtime alerts that need human attention
+- `GET /api/rejected` — JSON: recent runtime admission failures and drift alerts
 - `GET /api/events?limit=50` — JSON: recent events, filterable by actor/type
 - `GET /api/node/{label}` — JSON: full node info
 - `GET /events/stream` — SSE: push new events to connected browsers
@@ -1450,11 +1546,22 @@ Pages:
 Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
 
 **Must prominently surface (so user doesn't miss):**
-- Definitions / external_theorems at `pass_count=-1` (user must revise;
-  no auto-recovery)
-- Proof-requiring nodes with many repeated repair rounds (advisory; user
-  may want to intervene)
-- Recent runtime validation failures / rejected generator batches
+- Definitions / external_theorems at `pass_count=-1`
+- Proof-requiring nodes with repeated-no-progress repair episodes
+- Recent runtime admission failures / rejected generator batches
+- Any runtime drift alert raised by pre-dispatch hash revalidation
+
+**Should remain useful even when services are partly down:**
+- If coordinator is down but Kuzu is readable, dashboard still renders the last
+  truth-derived node state and marks runtime health as degraded
+- If verifier is down, dashboard still renders current KB state plus runtime
+  jobs / stale-job warnings
+- If only runtime state is missing, dashboard still renders theorem/node views
+  from Kuzu
+
+This follows the useful part of the old dashboard design: show both proof
+progress and operational health in one place, but do it from read-only state
+and without coupling scheduler correctness to UI-only concepts.
 
 Phase II will add interactive DAG visualization (Cytoscape.js) and Blueprint
 LaTeX export.
@@ -1565,6 +1672,8 @@ arxiv search.
 truth-event producer:
   construct event payload
   allocate event_id ({iso_ms}-{seq}-{uid})
+  validate schema + business rules against current KB snapshot
+  confirm event_id sorts after current max event_id
   compose filename per §3.2
   write .tmp file in events/{date}/
   fsync
@@ -1572,7 +1681,10 @@ truth-event producer:
 ```
 
 **Who writes truth events:**
-- **User**: writes event files by hand or via a helper CLI (`rethlas add-definition`, etc. — future helper CLI). Phase I uses `.json` truth files in `events/{date}/`.
+- **User**: publishes through helper CLI commands (`rethlas add-node`,
+  `rethlas revise-node`, `rethlas attach-hint`, etc.). Manual drafting may
+  happen outside `events/`, but direct hand-drops into canonical `events/`
+  are unsupported in Phase I.
 - **Generator / verifier**: their wrapper code (Python, NOT Codex) writes truth events. Codex subprocess is read-only sandboxed; it outputs to stdout which the wrapper captures and converts to truth events.
 
 **Codex never writes files.** Only Python wrappers do.
