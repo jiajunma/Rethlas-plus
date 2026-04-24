@@ -106,7 +106,10 @@ Rethlas/
     │   └── {job_id}.json           # pid, kind, target, mode, dispatch_hash,
     │                               # started_at, updated_at, status
     ├── logs/
-    │   └── {job_id}.codex.log      # Codex subprocess stdout
+    │   ├── {job_id}.codex.log      # Codex subprocess stdout
+    │   ├── supervise.log           # coordinator (incl. supervisor role) own log
+    │   ├── librarian.log           # librarian daemon own log
+    │   └── dashboard.log           # dashboard daemon own log
     ├── locks/
     │   └── supervise.lock          # advisory flock held by coordinator (§6.4)
     └── state/
@@ -197,6 +200,23 @@ Validation bounds:
 Reload semantics: `rethlas.toml` is read once at process startup
 (supervise / dashboard / linter each load independently). Editing it
 while `rethlas supervise` is running has no effect until restart.
+
+**Timestamp convention (workspace-wide).** All timestamps Rethlas
+writes to `runtime/`, `AppliedEvent`, admin JSONL logs, and CLI
+stdout / dashboard display use **UTC ISO 8601 with `Z` suffix**
+(e.g. `2026-04-24T14:05:12.123Z`). This covers
+`coordinator.json.{started_at, updated_at}`,
+`librarian.json.{started_at, updated_at, last_rebuild_at}`,
+`AppliedEvent.applied_at`, `runtime/jobs/*.json.{started_at,
+updated_at}`, `rejected_writes.jsonl.ts`, `drift_alerts.jsonl.ts`,
+`linter_report.json.ts`, and `rebuild_in_progress.flag.started_at`.
+
+The one exception is the truth event body's `ts` field (§3.3), which
+keeps its full local-offset ISO form (e.g.
+`2026-04-23T14:30:15.123+08:00`) to preserve the producing
+operator's wall-clock context as historical metadata. Sorting /
+ordering never reads `ts`; only `iso_ms` drives replay order, and
+that's already UTC (§3.2 / E1).
 
 ---
 
@@ -1896,7 +1916,16 @@ but does not affect correctness.
 - On SIGTERM / SIGINT, coordinator signals children in reverse
   dependency order (dashboard → coordinator workers → librarian),
   waits for graceful exit (up to 10 s each), then SIGKILL remnants,
-  then releases the lock and exits.
+  then releases the lock and exits. Pressing Ctrl+C in the
+  terminal that launched `rethlas supervise` sends SIGINT to the
+  foreground process group and triggers exactly this cascade; a
+  second Ctrl+C during the 10 s wait escalates directly to SIGKILL
+  of remaining children (operator escape hatch). SIGKILL on
+  coordinator itself (from another shell) skips graceful shutdown
+  entirely — children die with their parent via process-group
+  kill; the lock is released by the OS; `runtime/jobs/*.json` and
+  `coordinator.json` / `librarian.json` are left as they were and
+  get swept by D4 cleanup on the next `rethlas supervise` startup.
 
 Coordinator's own heartbeat file is `runtime/state/coordinator.json`
 (§6.4.2), which also carries the children's status so dashboard shows
@@ -1913,6 +1942,27 @@ the whole tree in one place.
   in the report header.
 - `rethlas init` refuses if `events/` or `rethlas.toml` already exist;
   `--force` allows overwriting `rethlas.toml` only (never `events/`).
+
+**Startup dispatch gate.** Coordinator's scheduler loop ticks as
+soon as coordinator is up, but it **suppresses all worker dispatch**
+while either of the following is true (read from
+`runtime/state/librarian.json`):
+
+- `startup_phase != "ready"` — librarian is still replaying events
+  and/or running the `nodes/` reconciliation pass. During this
+  window Kuzu's state is in flux and a worker's pre-dispatch
+  validation would either see phantom missing nodes or compute the
+  wrong hash.
+- `rebuild_in_progress == true` — a rebuild is actively wiping and
+  re-populating Kuzu.
+
+In both states coordinator sets `idle_reason_code =
+"librarian_starting"` and keeps writing heartbeats, but no new
+`runtime/jobs/*.json` are created. Existing in-flight jobs (if any
+survived from before the gate engaged) are allowed to complete
+normally. Dashboard surfaces this to the operator so they see
+"scheduler is waiting for librarian" instead of "scheduler is idle
+for no reason".
 
 **Coordinator's state model:** based on current KB plus runtime job state,
 coordinator maintains three things in memory:
@@ -2170,6 +2220,11 @@ dashboard's loop-level explanation. Phase I codes:
   are the only remaining source of progress
 - `corruption_or_drift` — loop is intentionally not dispatching because runtime
   drift / projection inconsistency needs operator attention
+- `librarian_starting` — librarian is still in its startup phase
+  (event replay or `nodes/` reconciliation, or a rebuild is
+  in-progress); coordinator holds off all dispatch until librarian
+  signals `startup_phase = "ready"` and `rebuild_in_progress = false`
+  (§6.4 / §6.5)
 
 Dashboard may use `idle_reason_detail` as human-facing prose, but it
 should not infer scheduler meaning from free text. Coordinator caps
@@ -2306,11 +2361,12 @@ after each event projection attempt, periodically while idle (every
 {
   "schema": "rethlas-librarian-v1",
   "pid": 12346,
-  "started_at": "2026-04-24T10:03:11.003+08:00",
-  "updated_at": "2026-04-24T14:05:11.000+08:00",
+  "started_at": "2026-04-24T02:03:11.003Z",
+  "updated_at": "2026-04-24T06:05:11.000Z",
   "status": "running | idle | degraded | rebuilding",
-  "last_seen_event_id": "20260424T140500.000-0001-a1b2c3d4e5f6a7b8",
-  "last_applied_event_id": "20260424T140500.000-0001-a1b2c3d4e5f6a7b8",
+  "startup_phase": "replaying | reconciling | ready",
+  "last_seen_event_id": "20260424T060500.000-0001-a1b2c3d4e5f6a7b8",
+  "last_applied_event_id": "20260424T060500.000-0001-a1b2c3d4e5f6a7b8",
   "events_applied_total": 1284,
   "events_apply_failed_total": 7,
   "projection_backlog": 0,
@@ -2320,13 +2376,24 @@ after each event projection attempt, periodically while idle (every
 }
 ```
 
+- `startup_phase` reflects librarian's progress through its startup
+  sequence (§6.5):
+  - `"replaying"` — walking `events/` applying un-processed events
+  - `"reconciling"` — running `nodes/` reconciliation pass
+  - `"ready"` — past the startup sequence; projecting new events
+    live
+  Coordinator reads this field and **does not dispatch any worker
+  while `startup_phase != "ready"`** (see §6.4 startup gate).
+  Coordinator's own `idle_reason_code = "librarian_starting"`
+  during this window.
 - `projection_backlog` = number of files in `events/` without a
   matching `AppliedEvent` row. Dashboard displays as "librarian
   catching up" when > 0.
 - `rebuild_in_progress` flips to `true` before librarian unlinks
   `dag.kz/` during `rethlas rebuild`, and back to `false` after the
   replay finishes. Dashboard serves 503 for Kuzu-dependent endpoints
-  while it is `true` (see §6.7.1).
+  while it is `true` (see §6.7.1). Coordinator also treats this as
+  a dispatch gate (same treatment as `startup_phase != "ready"`).
 
 Dashboard uses this file for librarian liveness and projection
 progress. The canonical projection watermark remains in Kuzu /
@@ -2668,12 +2735,21 @@ does not need to know the derivation rule.
 
 1. Coordinator creates the file with `status = "starting"` (atomic
    `.tmp` + rename) just before spawning the wrapper process. The
-   wrapper subprocess is spawned with the environment variable
-   `RETHLAS_WORKSPACE=<absolute path of workspace root>` and the
-   positional argument `job_id`; the wrapper uses these to locate
+   wrapper subprocess is spawned with:
+   - Full environment inheritance from the `rethlas supervise`
+     process (so user-configured API keys — `OPENAI_API_KEY`,
+     `ANTHROPIC_API_KEY`, `PATH`, `HOME`, proxy settings, etc. —
+     flow through to Codex unchanged).
+   - Additional env var `RETHLAS_WORKSPACE=<absolute path of
+     workspace root>` overlaid on top.
+   - Positional argument `job_id`.
+   The wrapper uses `RETHLAS_WORKSPACE` + `job_id` to locate
    `knowledge_base/dag.kz`, `runtime/jobs/{job_id}.json`, and
    `runtime/logs/{job_id}.codex.log` without having to inherit cwd
-   or re-discover the workspace.
+   or re-discover the workspace. Operators configure API keys by
+   exporting them in the shell before invoking
+   `rethlas supervise`; Phase I does not attempt to read API keys
+   from `rethlas.toml` or any secret store.
 2. Wrapper updates `status` through the enumeration above as it
    progresses. Every update is an atomic `.tmp` + rename.
 3. On clean terminal state (`applied` / `apply_failed`), the **wrapper**
@@ -2730,6 +2806,23 @@ safely within that bound:
 **never rotated automatically**. `rethlas rebuild` truncates them.
 Operator may truncate manually when they grow large. Phase II can add
 size-based rotation.
+
+#### Python daemon logs (not Codex logs)
+
+Distinct from the per-job Codex subprocess logs
+(`runtime/logs/{job_id}.codex.log`), each long-running Python daemon
+writes its own log file:
+- `runtime/logs/supervise.log` — coordinator (incl. child supervision)
+- `runtime/logs/librarian.log` — librarian daemon
+- `runtime/logs/dashboard.log` — dashboard daemon
+
+Format: standard Python `logging` output, one record per line,
+prefixed with UTC ISO timestamp + log level. Use for operator triage:
+when a daemon marks itself degraded or hits an unexpected exception,
+the corresponding `.log` file contains the stack trace and the lead-up
+context. Retention same as JSONL logs: append-only, truncated by
+`rethlas rebuild`, no automatic rotation in Phase I (Phase II Open
+Item §14).
 
 #### Linter report: `runtime/state/linter_report.json`
 
@@ -3018,9 +3111,13 @@ truth-event producer (admission layer, pre-publish):
     on failure: record to runtime/state/rejected_writes.jsonl; return
                 failure to caller. Nothing reaches events/.
   compose filename per §3.2
-  write .tmp file in events/{date}/
-  fsync
-  atomic rename to canonical filename
+  write_bytes(tmp_fd, event_json_bytes)
+  fsync(tmp_fd)                              # event bytes hit disk
+  close(tmp_fd)
+  rename(tmp_path, canonical_path)           # atomic rename
+  dir_fd = open(events/{date}/, O_RDONLY)
+  fsync(dir_fd)                              # directory entry hits disk
+  close(dir_fd)
 
 producer (or CLI wrapper) then optionally polls the librarian for fate:
   loop until timeout (30 s):
@@ -3052,6 +3149,12 @@ yet). Non-zero exits are reserved for structural admission failure
 (§3.1.6) — event never reached `events/`.
 
 Notes:
+- **fsync the file and its parent directory.** Without the parent
+  `fsync(dir)` after rename, on a kernel / power crash the event
+  file's data is on disk but its directory entry may still be in
+  page cache — the file is effectively "written but the name is
+  missing". Both fsyncs are required so every event that returned
+  success from `rethlas add-node` is durable as truth.
 - **No cross-producer lock, no "sort after workspace max" check.**
   Concurrent publishers allocate event_ids from their own wall clock;
   replay order is decided by the `(iso_ms, seq, uid)` sort, and
@@ -3433,8 +3536,11 @@ These are resolved at implementation time without blocking design:
 2. **Generator `memory_*` MCP tools** — keep as-is or migrate to event-driven notes
 3. **Frontend minimal HTML/JS** — exact markup and style for Phase I
    dashboard
-4. **API key management** — likely environment variables; respect existing
-   Codex conventions
+4. **API key management** — environment variables inherited from
+   the `rethlas supervise` shell into Codex wrappers (§6.7.1 job
+   lifecycle step 1). Phase I does not add Rethlas-specific key
+   storage; operators use whatever Codex expects (`OPENAI_API_KEY`
+   etc.).
 5. **Windows support** — Phase II. Requires replacing `flock`,
    process groups, and POSIX signals with Windows equivalents
    (named mutexes, Job Objects, `signal.CTRL_C_EVENT`).
@@ -3778,3 +3884,34 @@ See `PHASE1.md` for the concrete task list.
     fresh wrapper heartbeat + stale log mtime ⇒ Codex is reasoning
     silently (normal); stale wrapper heartbeat ⇒ wrapper itself
     is unhealthy. PHASE1 M4.5 / M5.5 / M6.2 updated accordingly.
+- **2026-04-24 (G1–G6 review)**:
+  - **G1**: Workspace-wide timestamp convention pinned in §2.4
+    trailer: all runtime timestamps (coordinator.json, librarian.json,
+    AppliedEvent.applied_at, runtime/jobs/*.json, jsonl `ts`, linter
+    report, rebuild flag) are UTC ISO 8601 with `Z` suffix. Truth
+    event body's `ts` keeps its local-offset form for operator
+    context; sorting never reads it.
+  - **G2**: Librarian startup is now a tracked phase —
+    `librarian.json.startup_phase ∈ {replaying, reconciling, ready}`.
+    Coordinator's scheduler loop suppresses all worker dispatch
+    while `startup_phase != "ready"` or `rebuild_in_progress`;
+    `idle_reason_code = "librarian_starting"`. Closes the "worker
+    pre-dispatch reads half-projected Kuzu" hole on large workspaces.
+  - **G3**: §9.1 write pseudocode pinned — `fsync(tmp_fd)` then
+    rename, then `fsync(parent_dir_fd)`. Without the parent dir
+    fsync, a crash between rename and cache flush can leave the
+    event file's bytes on disk but its name invisible. Both fsyncs
+    are required for durability of the event-as-truth contract.
+  - **G4**: Wrapper spawn now explicitly inherits the full env from
+    `rethlas supervise` (API keys, PATH, etc.) plus
+    `RETHLAS_WORKSPACE` overlay. §14 Open Items API-key-management
+    entry updated accordingly.
+  - **G5**: §6.7.1 adds Python daemon log files
+    (`runtime/logs/{supervise,librarian,dashboard}.log`) distinct
+    from per-job Codex logs. Same no-rotation policy; `rethlas
+    rebuild` truncates.
+  - **G6**: §6.4 spells out Ctrl+C handling — SIGINT to process
+    group triggers the graceful shutdown cascade; second Ctrl+C
+    during the 10 s wait escalates to SIGKILL; external SIGKILL of
+    coordinator is handled by OS (children die via process group)
+    plus D4 startup cleanup on next supervise.
