@@ -752,11 +752,18 @@ see logically-impossible states mid-commit.
 - `integration`: staged publish is atomic
 - `integration`: wrapper **reads** its full dispatch context from
   `runtime/jobs/{job_id}.json` (target statement/proof,
-  `dispatch_hash`, `dep_statement_hashes`, and for `mode=repair`
-  the `verification_report` / `repair_hint` / `repair_count` /
-  `H_rejected`) — coordinator populated these before spawn
-  (ARCHITECTURE §5.5.2); the wrapper trusts and does not re-check
-  against Kuzu
+  `dispatch_hash`, `dep_statement_hashes`, `repair_hint` whenever
+  non-empty in **either** mode, and for `mode=repair` additionally
+  `verification_report` / `repair_count` / `H_rejected`) —
+  coordinator populated these before spawn (ARCHITECTURE §5.5.2);
+  the wrapper trusts and does not re-check against Kuzu
+- `integration`: **prompt assembly — fresh mode with user hint**
+  (ARCHITECTURE §6.2 step 2). Fixture: job file `mode=fresh`,
+  `repair_hint` contains a single user section with a known body.
+  After `role.py` assembles the Codex prompt, assert the prompt
+  contains an "Initial guidance" section with the user-hint body
+  verbatim and no "Repair context" section. Guards against the
+  "hint dropped on fresh dispatch" regression.
 - `integration`: decoder rejections append to `runtime/state/rejected_writes.jsonl`
 - `static`: `generator/role.py` and its transitive imports do **not**
   import `common/kb` (enforces Kuzu-free worker invariant)
@@ -913,15 +920,23 @@ see logically-impossible states mid-commit.
   pre-validated context** when precheck passes (ARCHITECTURE §6.7.1
   step 1): `target`, `mode`, `kind`, `dispatch_hash`, target's
   `statement`, target's `proof`, `dep_statement_hashes` map for
-  every `\ref`-ed dep, and for generator `mode=repair` the repair
-  context (`verification_report`, `repair_hint`, `repair_count`,
-  `H_rejected`). Worker trusts; never re-reads Kuzu.
+  every `\ref`-ed dep, `repair_hint` whenever non-empty (both
+  modes, §10.2.3), and for generator `mode=repair` additionally
+  `verification_report`, `repair_count`, `H_rejected`. Worker
+  trusts; never re-reads Kuzu.
 - `integration`: **generator mode selection** (ARCHITECTURE §10.2.3).
-  Two fixtures on the same proof-requiring target:
-  - `pass_count = -1`, `repair_count = 0` (fresh `user.node_added`
-    with empty proof) → coordinator writes `mode = "fresh"`;
-    job file omits `verification_report` / `repair_hint` /
-    `H_rejected` (no repair context to ship).
+  Three fixtures on proof-requiring targets:
+  - `pass_count = -1`, `repair_count = 0`, `repair_hint = ""`
+    (plain fresh `user.node_added` with empty proof) → coordinator
+    writes `mode = "fresh"`; job file omits `repair_hint`,
+    `verification_report`, `H_rejected` (nothing to ship).
+  - `pass_count = -1`, `repair_count = 0`, `repair_hint` has a
+    user section (fresh node that received `user.hint_attached`
+    before first generator run) → coordinator writes
+    `mode = "fresh"` **and** `repair_hint` (the user section
+    verbatim). Job file still omits `verification_report` and
+    `H_rejected` (no verdict yet). Guards the "hint on fresh node
+    lost through `verification_hash` change" regression.
   - `pass_count = -1`, `repair_count = 2` (two stored gap verdicts
     against the current `statement_hash`) → coordinator writes
     `mode = "repair"`; job file carries `verification_report`,

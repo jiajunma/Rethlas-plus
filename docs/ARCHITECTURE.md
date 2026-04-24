@@ -460,17 +460,24 @@ Hint events carry:
 must be present. `remark` may be empty, but `hint` may not be empty.
 
 Admission further requires that `target` refers to a node with
-`pass_count <= 0` at admission time. Attaching a hint to a node that is
-already verified (`pass_count >= 1`) is rejected at publish: the hint
-has no reachable consumer, because `repair_hint` is read only at
-generator repair dispatch (`pass_count = -1`), and any path from the
-current `pass_count` back to -1 goes through a `verification_hash`
-change that would
-clear `repair_hint` before the hint could be read (see §5.2, §5.4).
-Post-publish, if the node is deleted (currently impossible in Phase I)
-or the hash has changed between admission and apply, librarian records
-`apply_failed(reason=hint_target_missing)` or the admission-time check
-against `pass_count >= 1` is re-evaluated as `hint_target_unreachable`.
+`pass_count <= 0` at admission time. Attaching a hint to a node that
+is already verified (`pass_count >= 1`) is rejected at publish: the
+hint has no reachable consumer, because `repair_hint` is read only
+on a generator dispatch (`pass_count = -1`), and any path from
+`pass_count >= 1` back to -1 goes through a `verification_hash`
+change that would clear `repair_hint` before the hint could be read
+(see §5.2, §5.4). Within the admitted band (`pass_count ∈ {-1, 0}`)
+the hint is guaranteed reachable: at `pass_count = 0` it survives
+into any subsequent gap/critical verdict (verifier events do not
+change `verification_hash`), and at `pass_count = -1` it is shipped
+into the generator's job file in both fresh and repair mode per
+§10.2.3 — so the hint reaches the first attempt even on a
+never-verified node. Post-publish, if the node is deleted (currently
+impossible in Phase I) or the hash has changed between admission
+and apply, librarian records
+`apply_failed(reason=hint_target_missing)` or the admission-time
+check against `pass_count >= 1` is re-evaluated as
+`hint_target_unreachable`.
 
 Verdict events carry:
 
@@ -1434,8 +1441,13 @@ If all conditions pass, coordinator writes the initial job file with
   covering every label the target's content `\ref{}`s — lets
   generator's decoder compute post-batch `verification_hash`
   without reading Kuzu (§6.2 repair-must-change-hash)
-- for generator repair mode: `verification_report`, `repair_hint`,
-  `repair_count`, `H_rejected`
+- `repair_hint` — shipped whenever non-empty, in **both** fresh
+  and repair mode (§10.2.3). In fresh mode the non-empty value
+  comes only from `user.hint_attached` (no verifier section
+  possible at `repair_count = 0`); in repair mode it may carry
+  both verifier and user sections.
+- for generator repair mode only (`repair_count ≥ 1`):
+  `verification_report`, `repair_count`, `H_rejected`
 
 After the job file is written, coordinator spawns the worker with
 `RETHLAS_WORKSPACE` env + `job_id` positional arg (§6.7.1). Worker
@@ -1711,12 +1723,21 @@ fails the whole event with `apply_failed(reason=cycle)` per §3.1.6.
 **Prompt composition** (assembled by `role.py`):
 
 1. **Generation prompt** — task description for the target label
-2. **Repair context** (if mode=repair) — the target's
-   `verification_report` and `repair_hint` from the latest verdict
-3. **Latest batch rejection report** (if any) — runtime-only structural
+2. **Initial guidance** (if mode=fresh **and** `repair_hint` is
+   non-empty) — the user-contributed sections of `repair_hint` as
+   shipped by coordinator (§10.2.3). Fresh mode never has a
+   verifier section (`repair_count = 0` ⇒ no gap/critical verdict
+   yet), so this is always user-authored steering for the first
+   attempt. Without this step the hint would be discarded unread
+   when the first batch bumps `verification_hash` and §5.4 clears
+   `repair_hint`.
+3. **Repair context** (if mode=repair) — the target's
+   `verification_report` and `repair_hint` (which may carry both
+   verifier and user sections) from the latest verdict
+4. **Latest batch rejection report** (if any) — runtime-only structural
    rejection summary from the decoder/admission layer, such as cycle
    introduction or unresolved reference
-4. **Repair history summary** — the target's current `repair_count`
+5. **Repair history summary** — the target's current `repair_count`
    (number of gap/critical verdicts accumulated against the current
    `statement_hash`). If `repair_count` is small (0-2), generator is
    expected to try a local proof repair; if it is larger (≥ 3),
@@ -1724,7 +1745,7 @@ fails the whole event with `apply_failed(reason=cycle)` per §3.1.6.
    wrong and pursue a revised statement or a counter-example.
    Coordinator imposes no hard threshold — `repair_count` is an
    advisory signal for the generator's own decision (§10.4).
-5. **Target's current state** — statement (if present) and previous
+6. **Target's current state** — statement (if present) and previous
    proof attempt (if any)
 
 Codex can **freely explore `nodes/` directory** via bash to see verified
@@ -3521,24 +3542,39 @@ Priority ordering:
 
 #### 10.2.3 Mode selection (generator only)
 
-For each generator candidate the coordinator also picks `mode`:
-- `mode = "fresh"` iff `repair_count = 0` — no prior
-  gap/critical verdict exists against the current `statement_hash`,
-  so there is no repair context to feed the prompt. This covers (a)
-  a freshly `user.node_added` node with empty proof, and (b) a node
-  whose statement just changed (via `user.node_revised` or Merkle
-  cascade from a dep) and whose `repair_count` was therefore reset
-  to 0 per §5.4.
+For each generator candidate the coordinator picks `mode` by
+`repair_count` only:
+- `mode = "fresh"` iff `repair_count = 0` — no prior gap/critical
+  verdict exists against the current `statement_hash`, so there is
+  no rejected proof to fix. This covers (a) a freshly
+  `user.node_added` node with empty proof, and (b) a node whose
+  statement just changed (via `user.node_revised` or Merkle cascade
+  from a dep) and whose `repair_count` was therefore reset to 0
+  per §5.4.
 - `mode = "repair"` iff `repair_count ≥ 1` — there is at least one
   stored gap/critical verdict against the current `statement_hash`,
-  so `verification_report` + `repair_hint` are populated and worth
-  shipping as prompt context (§6.2 "Repair context"). Coordinator
-  copies them into the job file at precheck time and sets
-  `H_rejected` = the most-recent rejected `verification_hash` (§5.5.2).
+  so a rejected proof plus `verification_report` exist. Coordinator
+  sets `H_rejected` = the most-recent rejected `verification_hash`
+  (§5.5.2).
 
-A candidate with `pass_count = -1` but no resolvable `H_rejected`
-**in repair mode** is a precheck failure (§5.5.2 last row); it is
-skipped and logged, not dispatched.
+**Hint shipping is orthogonal to mode.** `user.hint_attached` may
+append a user section to `repair_hint` any time `pass_count ≤ 0`
+(§3.1.6 admission rule), including on a fresh never-attempted node.
+In that case `repair_count` is still 0 so mode = fresh, but the
+hint must reach the generator before its first try — otherwise the
+batch it produces will bump `verification_hash` and §5.4 will clear
+`repair_hint`, discarding the hint unread.
+
+Therefore: **coordinator ships `repair_hint` into the job file
+whenever it is non-empty, in both modes.** `verification_report`
+and `H_rejected` are still repair-mode-only (they have no meaning
+without a prior verdict). Generator's prompt composition (§6.2)
+uses the shipped `repair_hint` as initial guidance in fresh mode
+and as repair context in repair mode.
+
+A candidate with `pass_count = -1` and `repair_count ≥ 1` but no
+resolvable `H_rejected` is a precheck failure (§5.5.2 last row);
+it is skipped and logged, not dispatched.
 
 ### 10.3 Concurrency — worker pools
 
