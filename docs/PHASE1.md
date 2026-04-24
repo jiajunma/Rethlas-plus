@@ -85,18 +85,37 @@ Recommended helper infrastructure:
   - `dashboard/`
   - `linter/`
   - `cli/`
-- Add `pyproject.toml` with `rethlas` entry point
+- Create `common/` subpackage skeleton (empty modules with
+  `__init__.py`) so M1 can populate them without introducing new
+  top-level structure:
+  - `common/config/`
+  - `common/events/`
+  - `common/kb/`
+  - `common/runtime/`
+- Stub `cli/main.py` with an `argparse`-based dispatcher that at least
+  recognises every Phase I subcommand (`init`, `add-node`,
+  `revise-node`, `attach-hint`, `supervise`, `dashboard`, `linter`,
+  `rebuild`, `generator`, `verifier`) and prints a placeholder
+  message + exit 0 for each (real implementations arrive in later
+  milestones). This lets `rethlas --help` work from M0 onward.
+- Add `pyproject.toml` with `rethlas` entry point pointing at
+  `cli.main:main`
 - Add root `producers.toml`
 
 **Tests**
 
-- `unit`: import smoke for all top-level packages
-- `system`: `rethlas --help` shows the expected subcommands
+- `unit`: import smoke for all top-level packages **and** all
+  `common/` subpackages
+- `system`: `rethlas --help` lists every expected subcommand
+- `system`: each stub subcommand (`rethlas <cmd> --help`) exits 0 with
+  a recognisable placeholder (prevents M0 from accidentally shipping
+  a broken entry point)
 
 **Exit**
 
 - Editable install works
-- CLI binary resolves
+- CLI binary resolves and every Phase I subcommand is at least
+  reachable from argparse
 
 ---
 
@@ -180,8 +199,17 @@ Recommended helper infrastructure:
 - `integration`: replay determinism under restart boundaries
   - apply event stream in one pass
   - apply the same stream split across multiple restarts
-  - final `Node`, `DependsOn`, `AppliedEvent`, and rendered `nodes/`
-    outputs must be identical
+  - final `Node`, `DependsOn`, and `AppliedEvent` tables must be
+    identical (M2 scope is Kuzu projection only; `nodes/*.md`
+    byte-determinism is M4's renderer test, §M4)
+- `fault-injection`: same `event_id`, different on-disk bytes
+  - apply an event once so `AppliedEvent(event_id, event_sha256=H1)`
+    exists
+  - mutate the canonical event file bytes without changing its
+    filename/body `event_id`
+  - next librarian replay must detect `event_sha256 != sha256(file)`
+    and halt as workspace corruption, not silently treat it as an
+    idempotent replay
 - `integration`: `pass_count` transitions for:
   - user add/revise
   - generator batch
@@ -242,13 +270,44 @@ Recommended helper infrastructure:
 - `system`: `rethlas init` on empty workspace creates expected tree
 - `system`: `rethlas init --force` overwrites config only, never `events/`
 - `system`: user publish CLI writes canonical event file
-- `integration`: publish CLI polls `AppliedEvent` and reports:
-  - `applied`
-  - `apply_failed(reason)`
-  - timeout while supervise not running
-  - timeout while supervise running but librarian behind
+- `integration`: publish CLI polls `AppliedEvent` and reports each
+  of the four outcomes from ARCHITECTURE §9.1 D2. Setup for each
+  (M3 does not depend on M4 or M8 being implemented — the tests
+  use fixtures to simulate the needed states):
+  - `applied`: test fixture **writes an `AppliedEvent(status=applied)`
+    row directly** into Kuzu (bypassing librarian) so the CLI poll
+    resolves with "applied".
+  - `apply_failed(reason)`: test fixture writes an
+    `AppliedEvent(status=apply_failed, reason=label_conflict, …)`
+    row directly; CLI poll reports it.
+  - timeout while supervise not running: no fixture setup; CLI
+    polls, nothing arrives, the `supervise.lock` file does not
+    exist; CLI reports "queued, supervise not running" + exit 0.
+  - timeout while supervise running but librarian behind: test
+    fixture **takes `runtime/locks/supervise.lock` externally** (a
+    simple `flock` held by the test harness) but **does not** write
+    any `AppliedEvent` row; CLI sees the lock is held, polls times
+    out, and reports "queued, librarian behind" + exit 0.
 - `system`: `rethlas rebuild` refuses while `supervise.lock` is held
 - `system`: `rethlas rebuild` takes lock when running standalone
+- `integration`: user-CLI admission rejects the following per
+  ARCHITECTURE §3.1.6 (structural) / §5.2 / §3.5.2 / §5.4. Each
+  rejection **exits non-zero** (per §2.3 exit-code table) **and
+  appends a line to `runtime/state/rejected_writes.jsonl`** with the
+  right `reason` + `detail`, and **no file is created** under
+  `events/`:
+  - `rethlas add-node --kind external_theorem --source-note ""`
+    (non-empty `source_note` required for external_theorem)
+  - `rethlas add-node --label thm:main` (placeholder label)
+  - `rethlas add-node --label thm:foo --kind lemma`
+    (prefix/kind mismatch)
+  - `rethlas revise-node --label thm:foo --kind theorem` on an
+    existing `thm:foo` that was authored as `kind=lemma`
+    (kind immutability, §5.1)
+  - `rethlas attach-hint --target lem:already_verified` where
+    `lem:already_verified.pass_count >= 1` at admission time
+    (hint has no reachable consumer, §5.2 / §3.1.6)
+  - malformed label shapes (missing prefix, uppercase, empty slug)
 - `fault-injection`: `rethlas rebuild` killed after it writes the flag
   but before deleting it — the flag persists on disk; pairs with the
   M4 test below that catches the flag on next startup and re-runs
@@ -320,6 +379,9 @@ Recommended helper infrastructure:
 **Tests**
 
 - `integration`: wrapper heartbeat updates `runtime/jobs/{job_id}.json.updated_at` every 60 s
+- `integration`: Codex runner merges `stdout` and `stderr` into the same
+  `runtime/logs/{job_id}.codex.log`; writes to either stream refresh the
+  observed log mtime used by timeout logic
 - `integration`: log mtime timeout marks `timed_out`
 - `integration`: orphaned job file is detected and cleaned
 - `integration`: terminal statuses write then delete job files in the documented order
@@ -427,6 +489,12 @@ Recommended helper infrastructure:
 - `integration`: child startup grace period does not mark a just-spawned but
   still-initializing librarian/dashboard as down before the grace window expires
 - `integration`: startup cleanup removes zombie runtime state from prior crash
+  - deletes stale `runtime/jobs/*.json`
+  - deletes stale `runtime/state/coordinator.json` and
+    `runtime/state/librarian.json`
+  - preserves `runtime/state/rebuild_in_progress.flag`,
+    `runtime/state/rejected_writes.jsonl`,
+    `runtime/state/drift_alerts.jsonl`, and `runtime/logs/*.codex.log`
 - `integration`: consecutive `crashed`, `timed_out`, and same-reason `apply_failed` counters flow into Human Attention state
 - `system`: `rethlas supervise` can run a tiny workspace to steady state
 
