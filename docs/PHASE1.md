@@ -301,6 +301,12 @@ Recommended helper infrastructure:
     out, and reports "queued, librarian behind" + exit 0.
 - `system`: `rethlas rebuild` refuses while `supervise.lock` is held
 - `system`: `rethlas rebuild` takes lock when running standalone
+- `system`: **`rethlas rebuild` never touches `events/`** — snapshot
+  the set of files under `events/` + their byte contents before
+  rebuild; run rebuild on a workspace with some events; snapshot
+  again; both snapshots must be byte-identical. Only
+  `knowledge_base/` gets wiped. `events/` is truth and rebuild is
+  never allowed to mutate it.
 - `system`: **`--workspace <path>` flag universality** (ARCHITECTURE
   §2.3 D5) — from a cwd unrelated to the target workspace,
   `rethlas --workspace /tmp/alt init` creates the workspace at
@@ -309,6 +315,13 @@ Recommended helper infrastructure:
   file under `/tmp/alt/events/` (not cwd). Same spot-check for
   `rethlas --workspace /tmp/alt rebuild` to confirm the flag is
   plumbed through every Phase I subcommand.
+- `system`: **uninitialized-workspace error path** (ARCHITECTURE
+  §2.3 exit code 2) — in a freshly-created directory with no
+  `events/` and no `rethlas.toml`, running each of
+  `rethlas supervise`, `rethlas add-node ...`,
+  `rethlas linter`, `rethlas rebuild` exits with code **2** and
+  prints `"workspace not initialized; run \`rethlas init\` first"`
+  (or equivalent) to stderr.
 - `integration`: user-CLI admission rejects the following per
   ARCHITECTURE §3.1.6 (structural) / §5.2 / §3.5.2 / §5.4. Each
   rejection **exits non-zero** (per §2.3 exit-code table) **and
@@ -327,6 +340,16 @@ Recommended helper infrastructure:
     `lem:already_verified.pass_count >= 1` at admission time
     (hint has no reachable consumer, §5.2 / §3.1.6)
   - malformed label shapes (missing prefix, uppercase, empty slug)
+- `integration`: **`producers.toml` enforcement** (ARCHITECTURE §3.5) —
+  admission rejects events whose `actor` does not match any
+  registered `actor_pattern`, or whose `(producer_kind, event_type)`
+  pair is not in that producer's `allowed_event_types`. Fixtures:
+  - event with `actor="librarian:xyz"` (not a Phase I truth
+    producer) → rejected
+  - event with `actor="user:alice", type="user.unknown_action"`
+    (type not in allowed list for `user`) → rejected
+  Each exits non-zero, appends to `rejected_writes.jsonl`, nothing
+  enters `events/`.
 - `fault-injection`: `rethlas rebuild` killed after it writes the flag
   but before deleting it — the flag persists on disk; pairs with the
   M4 test below that catches the flag on next startup and re-runs
@@ -379,6 +402,12 @@ Recommended helper infrastructure:
   - `ready`
 - `integration`: `projection_backlog` is correct
 - `fault-injection`: interrupted rebuild leaves flag; next supervise-started librarian forces clean rebuild path
+- `fault-injection`: **`producers.toml` replay-time enforcement** —
+  a canonical event file exists under `events/` whose `actor` or
+  `(kind, type)` pair does not match `producers.toml` (simulating a
+  hand-drop past admission). On startup replay, librarian halts as
+  **workspace corruption** per §3.1.6 rather than silently applying
+  or skipping; dashboard surfaces the corruption.
 - `system`: Kuzu-dependent dashboard endpoints must become 503 while `rebuild_in_progress`
 
 **Exit**
@@ -556,6 +585,12 @@ Recommended helper infrastructure:
   process-group cleanup kills all children; next
   `rethlas supervise` starts cleanly thanks to M5/M8 runtime
   cleanup (no zombie state visible)
+- `integration`: **config no-hot-reload** (ARCHITECTURE §2.4) —
+  start `rethlas supervise` with `generator_workers = 2`; while
+  running, edit `rethlas.toml` on disk to `generator_workers = 4`;
+  assert the in-flight pool capacity stays at 2 across at least 5
+  coordinator ticks; stop and restart supervise; only then the new
+  value takes effect.
 - `system`: `rethlas supervise` can run a tiny workspace to steady state
 
 **Exit**
@@ -602,11 +637,20 @@ Recommended helper infrastructure:
   on representative fixture workspaces; outputs are reviewed and
   snapshotted to catch accidental semantics drift
 - `integration`: `/api/events` reverse-chronological query strategy works
-- `integration`: SSE emits envelopes for:
-  - event file change
-  - job change
-  - state change
-  - applied-event change
+- `integration`: **SSE envelope schema + type coverage** — every
+  SSE message is a JSON object `{type, ts, payload}` where `ts` is
+  UTC ISO 8601 with `Z` suffix. The test harness triggers one
+  event of each Phase I type within a single test run and asserts
+  envelope structure and delivery:
+  - `truth_event` (new file under `events/`)
+  - `applied_event` (new row in `AppliedEvent`)
+  - `job_change` (creation / update / deletion of a
+    `runtime/jobs/*.json`)
+  - `coordinator_tick` (`coordinator.json` updated)
+  - `librarian_tick` (`librarian.json` updated)
+  - `alert` (new line appended to `rejected_writes.jsonl` or
+    `drift_alerts.jsonl`)
+  Per §6.7.1.
 - `integration`: Kuzu-dependent endpoints return 503 + `Retry-After: 5` during rebuild
 - `integration`: **staleness thresholds** — fixture sets
   `coordinator.json.updated_at` to various ages; dashboard returns
@@ -640,10 +684,40 @@ Recommended helper infrastructure:
 
 **Tests**
 
-- `integration`: categories A-F each fail on targeted bad fixtures
-- `integration`: `--repair-nodes` fixes only category E issues
+- `integration`: **category A** (event stream integrity) — fixture
+  where an event file's filename `event_id` disagrees with the body
+  JSON `event_id`; linter reports the mismatch and exits non-zero.
+- `integration`: **category B** (KB structural) — fixture with a
+  cycle hand-inserted into Kuzu `DependsOn`; linter reports the
+  cycle path. Also: a node whose label prefix does not match its
+  `kind` (§3.5.2).
+- `integration`: **category C** (`pass_count` audit) — fixture
+  where librarian has been forced to store a `Node.pass_count` that
+  disagrees with the event-stream-replayed `audit_count`; linter
+  reports drift per §5.5.1.
+- `integration`: **category D** (`repair_count` audit) — fixture
+  where stored `Node.repair_count` disagrees with the event-stream
+  replay per §5.5.1; linter reports drift.
+- `integration`: **category E** (`nodes/` ↔ Kuzu rendering) —
+  fixture where one `nodes/*.md` has been hand-edited to differ
+  from Kuzu's rendered output; another label at `pass_count >= 1`
+  has no `.md` file; an orphan `.md` file exists for a label not
+  in Kuzu. Linter reports all three; `--repair-nodes` fixes all
+  three idempotently; second linter run after repair is clean.
+- `integration`: **category F** (`events/` ↔ `AppliedEvent`
+  inventory) — fixture where an applied event file's bytes are
+  mutated after apply (changes the file's SHA-256 but keeps the
+  filename / `event_id` intact); linter detects
+  `event_sha256` mismatch and reports the target event_id.
+  Second F-fixture: event file has been **deleted** outside
+  Rethlas while `AppliedEvent` row still exists — linter detects
+  the missing file.
+- `integration`: `--repair-nodes` is idempotent and only touches
+  category E artefacts (no category A/B/C/D/F side effects)
 - `integration`: linter refuses with live `supervise.lock` unless `--allow-concurrent`
-- `system`: JSON report is written and exit code is non-zero on violations
+- `system`: JSON report is written to
+  `runtime/state/linter_report.json` and exit code 5 on violations
+  (§2.3 exit-code table)
 
 **Exit**
 
@@ -742,6 +816,12 @@ Minimum CI stages:
 4. `pytest tests/system -k fault`
 5. `pytest tests/integration -k golden`
 6. `rethlas linter` against a golden clean fixture
+
+**Platform matrix.** CI runs the full gate on both **Linux**
+(`ubuntu-latest` or equivalent) and **macOS** (`macos-latest`).
+Windows is out of scope (ARCHITECTURE §1 — flock / POSIX O_APPEND /
+process groups / POSIX signals are assumed). A test that passes on
+only one of Linux/macOS is treated as a regression.
 
 ---
 
