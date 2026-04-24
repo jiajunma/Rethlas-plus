@@ -61,8 +61,10 @@ CLI is built.
 **M0.9** Create empty new top-level dirs: `coordinator/`, `librarian/`,
 `linter/`, `dashboard/`, `cli/`.
 
-**M0.10** `producers.toml` at repo root with initial registry (user,
-generator, verifier, coordinator, librarian, linter).
+**M0.10** `producers.toml` at repo root with Phase I truth-producer
+registry: `user`, `generator`, `verifier` (coordinator, librarian, linter
+are non-truth runtime components and need not register as truth
+producers).
 
 Milestone exit: repo builds (`pip install -e .`), `rethlas --help` shows
 stub subcommands.
@@ -230,9 +232,10 @@ multi-agent feature.
 - Document output format: final JSON with verdict ∈ {accepted, gap, critical}
 - Document `resolve-reference` skill: label `:` → `_` for cat-ing nodes/*.md
 
-**M5.4** Update `verifier/mcp/server.py`:
-- Existing tools preserved
-- Add `get_event(event_id)`, `closure(label, direction, depth)` if needed
+**M5.4** Verifier has no Phase I MCP tools (per ARCHITECTURE §8). If
+existing `verifier/.codex/config.toml` registers an MCP server, remove
+the registration. Keep `verifier/mcp/` directory for future Phase II use
+but don't launch an MCP server.
 
 **M5.5** `verifier/role.py` — single `codex exec` invocation
 - Read dispatch event (target label)
@@ -252,17 +255,20 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 ## M6 — Coordinator
 
 **M6.1** `coordinator/policy.py` — pure decision function
-- Given KB state, return list of dispatches to emit
+- Given KB state + runtime job state, return list of dispatches
 - Count-based filtering and priority per §10 of ARCHITECTURE
-- Respect `DESIRED_COUNT` and `MAX_REPAIRS` thresholds
+- Respects `DESIRED_COUNT`; no hard repair cap in Phase I (repair rounds
+  are advisory only — generator keeps being dispatched on count=-1 until
+  hash escapes)
+- Skip nodes with in-flight runtime jobs (no concurrent dispatch)
 
 **M6.2** `coordinator/loop.py` — main loop
-- Read KB
+- Read KB + runtime jobs
 - Compute dispatches via policy
-- For each dispatch: acquire budget slot, launch wrapper subprocess, emit
-  dispatch event
+- For each dispatch: acquire budget slot, launch wrapper subprocess,
+  record runtime job file under `runtime/jobs/`
 - Monitor in-flight dispatches (via codex log mtime)
-- On timeout: kill process group, emit `attempt_timed_out`
+- On timeout: kill process group; mark runtime job timed out
 - Check global stop condition: all proof-requiring nodes count >= DESIRED
 
 **M6.3** `coordinator/supervise.py` — launch and monitor long-running

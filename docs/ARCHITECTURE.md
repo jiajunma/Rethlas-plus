@@ -94,10 +94,13 @@ Rethlas/
 │   └── nodes/                      # verified notes only (Codex reads this)
 │       └── {kind_prefix}_{label}.md
 └── runtime/                        # ephemeral, gitignored
-    ├── jobs/
+    ├── jobs/                       # one file per in-flight job
+    │   └── {job_id}.json           # pid, target, mode, started_at
     ├── logs/
-    │   └── {job_id}.codex.log
+    │   └── {job_id}.codex.log      # Codex subprocess stdout
     └── state/
+        └── rejected_batches.jsonl  # recent decoder/librarian rejections
+                                    # (surface via dashboard)
 ```
 
 Workspace `.gitignore`:
@@ -114,7 +117,7 @@ pip install -e ~/mycodes/Rethlas           # install tool once
 
 cd ~/mycodes/my_project                    # in workspace
 rethlas init                               # initialize events/ skeleton + rethlas.toml
-rethlas supervise                          # run projector + coordinator + dashboard
+rethlas supervise                          # run librarian + coordinator + dashboard
 rethlas dashboard --port 8765              # dashboard only
 rethlas linter --mode fast                 # one-shot audit
 rethlas rebuild                            # rebuild dag.kz + nodes/ from events
@@ -211,7 +214,7 @@ belong to derived `knowledge_base/nodes/*.md`, not to `events/`.
 
 Truth-event producers are an intentionally small set in Phase I. New
 producers are possible in later phases, but Phase I truth events are limited
-to `user`, `generator`, and `verifier`. The projector rejects truth events
+to `user`, `generator`, and `verifier`. The librarian rejects truth events
 whose `actor` / `type` don't match registered patterns.
 
 Phase I truth producers:
@@ -1052,7 +1055,7 @@ After one attempt completes, the KB may have several new / revised
 nodes, each entering its own verify-or-regenerate cycle.
 
 **Decoder failure modes:**
-- `<node>` block malformed → reject attempt, emit `generator.attempt_failed`
+- `<node>` block malformed → reject attempt (runtime failure; no truth event emitted)
 - `kind: external_theorem` appears → reject (user-only)
 - label uniqueness conflict → reject
 - placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
@@ -1167,11 +1170,15 @@ Proof: <target proof>   (empty for definition / external_theorem)
 + instructions from AGENTS.md
 ```
 
-**No dependency context injection.** Codex finds dependencies by
-browsing `knowledge_base/nodes/` directly:
+**No dependency context injection.** Codex (verifier) has **free read
+access to `knowledge_base/nodes/`** — the entire verified-knowledge
+library — via bash (`ls`, `cat`, `grep`, `find`) and can consult any
+relevant file on its own:
 - Codex sees `\ref{lem:bar}` in the proof
 - Codex runs `cat nodes/lem_bar.md` (after label-to-filename conversion)
 - The skill `resolve-reference` teaches Codex this convention
+- Codex may also browse siblings, search for related lemmas, or
+  cross-check definitions — all via bash inside `nodes/`
 
 **How label ↔ filename conversion works:**
 
@@ -1443,10 +1450,11 @@ Pages:
 Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
 
 **Must prominently surface (so user doesn't miss):**
-- Nodes at `pass_count=-1` with no auto-recovery path (definitions /
-  external_theorems at -1)
-- Recent runtime validation failures
-- Nodes stuck at `pass_count=-1` with no auto-recovery path
+- Definitions / external_theorems at `pass_count=-1` (user must revise;
+  no auto-recovery)
+- Proof-requiring nodes with many repeated repair rounds (advisory; user
+  may want to intervene)
+- Recent runtime validation failures / rejected generator batches
 
 Phase II will add interactive DAG visualization (Cytoscape.js) and Blueprint
 LaTeX export.
@@ -1806,3 +1814,10 @@ See `PHASE1.md` for the concrete task list.
 ## 15. Changelog
 
 - **2026-04-23**: Initial consolidated design from session discussions.
+- **2026-04-24**: Truth-vs-runtime separation; Phase I truth producers
+  restricted to user/generator/verifier; `pass_count` renamed from
+  `verification_count`; 10-mechanism prevention-first design for
+  `pass_count` correctness; single-call verifier; no dep-context
+  injection; nodes/*.md filter to pass_count>=1 only; `generator.batch_committed`
+  atomic batch event; strict label naming; retraction removed; no hard
+  MAX_REPAIRS; repair-must-change-hash decoder check.
