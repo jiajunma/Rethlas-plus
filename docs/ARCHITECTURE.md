@@ -610,7 +610,11 @@ node events and generator batch commits.
 - Good for graph queries (closure, cycles, recursion)
 - Python binding is first-class
 - Sole writer: librarian
-- Readers: coordinator, linter, dashboard, librarian
+- Readers: coordinator, linter, dashboard, librarian, and the
+  generator / verifier Python `role.py` wrappers (for pre-dispatch
+  hash revalidation per §5.5.2 and for polling `AppliedEvent` after
+  publish per §9.1). The Codex subprocesses themselves never touch
+  Kuzu — only their Python wrappers do.
 
 ### 4.2 Per-node markdown files
 
@@ -2067,6 +2071,11 @@ Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
   a hint, or confirm the generator's counter-example direction)
 - Recent runtime admission failures / rejected generator batches
 - Any runtime drift alert raised by pre-dispatch hash revalidation
+- Coordinator `idle_reason_code = corruption_or_drift` (red banner —
+  projection halted, operator action required)
+- Librarian `status = degraded` with non-empty `last_error` (librarian
+  saw a canonical event that failed structural validation, i.e.
+  workspace corruption per §3.1.6)
 
 **Should remain useful even when services are partly down:**
 - If coordinator is down but Kuzu is readable, dashboard still renders the last
@@ -2104,7 +2113,7 @@ reads them.
 
 **Staleness thresholds (dashboard-only):**
 
-| `now - updated_at` | Dashboard label for that component |
+| `now - updated_at` | Dashboard liveness label |
 | --- | --- |
 | `<= 60 s` | `healthy` |
 | `60 s < age <= 5 min` | `degraded` (yellow) |
@@ -2112,6 +2121,16 @@ reads them.
 
 These thresholds are dashboard UI classifications only; the
 components themselves do not self-reap based on them.
+
+The `status` field inside `coordinator.json` / `librarian.json` is the
+component's **self-reported** runtime state (e.g. `running`,
+`stopping`, `rebuilding`). It is orthogonal to dashboard's
+**liveness** classification above: a component can self-report
+`running` while dashboard displays `degraded` because its heartbeat
+stopped arriving. Dashboard shows both — self-reported status as a
+label and liveness as a color — so the operator can tell "component
+thinks it's healthy, but its file is stale" (i.e. probably frozen)
+from "component reported it is stopping".
 
 #### In-flight job: `runtime/jobs/{job_id}.json`
 
@@ -2220,8 +2239,12 @@ Schema: `{ schema, ts, a: {violations}, b: {violations}, c: {violations}, d: {vi
 Dashboard is the **only** SSE emitter. Mechanism:
 
 1. Dashboard uses `watchdog` (or platform equivalent) to watch
-   `events/**/*.json`, `runtime/jobs/*.json`, and
-   `runtime/state/*.json` for file creation / modification events.
+   `events/**/*.json`, `runtime/jobs/*.json`,
+   `runtime/state/*.json`, and `runtime/state/*.jsonl` for file
+   creation / modification events. For the two `.jsonl` logs,
+   dashboard also maintains a byte offset per file so it can tail
+   just the newly appended lines on each modification notification
+   (watchdog signals that the file changed, not which bytes are new).
 2. On filesystem notification, dashboard emits an SSE message with a
    typed envelope:
 
