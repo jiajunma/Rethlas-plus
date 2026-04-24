@@ -38,6 +38,14 @@ independent **workspaces**; each workspace represents one math project.
 - Importer (external library reader)
 - Semantic embedding search
 - Linter's full projection-drift checks
+- Windows support (see platform note below)
+
+**Supported platforms (Phase I):** Linux and macOS. The design relies
+on `flock` advisory locks, POSIX `O_APPEND < PIPE_BUF` atomic writes,
+process groups (`os.setsid` / `os.killpg`), and POSIX signals
+(SIGTERM / SIGINT / SIGKILL). Windows equivalents exist but require
+different primitives; Phase I does not invest in abstracting that
+layer.
 
 ---
 
@@ -132,7 +140,10 @@ rethlas linter --mode fast                 # one-shot audit
 rethlas rebuild                            # rebuild dag.kz + nodes/ from events
 ```
 
-Default workspace is cwd. `--workspace <path>` overrides.
+Default workspace is cwd. **All Phase I CLIs** (`init`, `add-node`,
+`revise-node`, `attach-hint`, `supervise`, `dashboard`, `linter`,
+`rebuild`) accept `--workspace <path>` to override cwd; the flag
+always resolves to an absolute path before use.
 
 **Exit codes (all CLIs):**
 
@@ -933,9 +944,11 @@ CREATE NODE TABLE AppliedEvent (
   reason STRING,        -- "" for applied; failure code otherwise
   detail STRING,        -- human-readable context for apply_failed rows;
                         -- "" for applied rows
-  event_sha256 STRING,  -- SHA-256 of the event file's bytes at apply time;
-                        -- used by linter category F to detect manual tampering
-                        -- with events/ content (git revert, edit, etc.)
+  event_sha256 STRING,  -- SHA-256 of the event file's **raw bytes**
+                        -- (not canonicalized; any whitespace / formatting
+                        -- change counts as tampering) at apply time; used
+                        -- by linter category F to detect manual edits to
+                        -- events/ (git revert, hand edit, etc.)
   applied_at STRING     -- ISO timestamp when librarian decided
 );
 ```
@@ -1779,6 +1792,27 @@ rethlas supervise (CLI entry point, delegates to coordinator main)
 already held, coordinator prints the holder's pid and exits non-zero.
 Clean shutdown releases the lock; crash / kill-9 also releases
 automatically (OS behavior).
+
+**Startup runtime cleanup.** After acquiring the lock and before
+launching children, coordinator sweeps stale runtime state from the
+previous run (which may have been killed hard, leaving zombie
+heartbeat and job files):
+- Delete every file in `runtime/jobs/*.json` — any such file is
+  necessarily stale (workers from the previous supervise are dead;
+  the flock proves no live worker owns them).
+- Delete `runtime/state/coordinator.json` and
+  `runtime/state/librarian.json` (next heartbeat ticks will write
+  fresh "starting" snapshots).
+- **Preserve**: `runtime/state/rebuild_in_progress.flag` (if present,
+  librarian handles it per §6.5),
+  `runtime/state/rejected_writes.jsonl` and
+  `runtime/state/drift_alerts.jsonl` (append-only history, user may
+  want to see it), `runtime/logs/*.codex.log` (operator forensics).
+
+This sweep makes dashboard's very first read after supervise restart
+show a clean "starting" state, not zombie in-flight jobs from the
+previous crash that would confuse the operator until the orphan
+reaper cleared them 5 minutes later.
 
 **Child daemon management** (librarian, dashboard):
 - Each daemon is spawned with its own pid/pgid. IPC with coordinator
@@ -2693,6 +2727,29 @@ Configurable via `rethlas.toml [dashboard] bind = "<host>:<port>"`
 and CLI flag `--bind`. Binding to a non-loopback address is opt-in
 and logs a startup warning since Phase I has no auth.
 
+**Standalone vs supervise-spawned.** There are two ways dashboard
+starts:
+- As a **child of `rethlas supervise`**: coordinator spawns the
+  dashboard subprocess; bind comes from `rethlas.toml [dashboard]
+  bind`.
+- As a **standalone `rethlas dashboard [--bind ...]`**: user invokes
+  directly, typically against a quiet workspace (no active
+  supervise).
+
+Both paths bind the same port by default, so they would conflict
+(EADDRINUSE on the second). To make the UX clean, standalone
+`rethlas dashboard` first checks whether `runtime/locks/supervise.lock`
+is held:
+- **Lock held** (supervise is running) → standalone dashboard prints
+  `"supervise is running on this workspace; it has already started
+  a dashboard at <configured bind>. Open that URL instead."` and
+  exits 0 (informational, not an error).
+- **Lock free** → standalone dashboard proceeds to bind the port
+  and serve normally.
+
+This matches the "observer pattern" design: dashboard never competes
+for the observer role, it defers to whoever's already observing.
+
 #### Behavior while `rethlas rebuild` runs
 
 Librarian writes `librarian.json` with `rebuild_in_progress = true`
@@ -2867,10 +2924,33 @@ truth-event producer (admission layer, pre-publish):
   atomic rename to canonical filename
 
 producer (or CLI wrapper) then optionally polls the librarian for fate:
-  loop until timeout:
+  loop until timeout (30 s):
     status = kb.applied_event_status(event_id)
     if status != "not_found": return (status, reason)
+  # timeout reached
+  if supervise_lock_held():
+    return "queued, librarian slow; will apply when caught up" (exit 0)
+  else:
+    return "queued, but supervise not running; start `rethlas supervise`
+            to apply" (exit 0)
 ```
+
+User-CLI feedback contract (D2). The event is "truth as soon as it's
+in `events/`" — the file's presence on disk is the durable outcome.
+Application to KB is a separate, later, librarian-side decision. So
+the CLI reports success (exit 0) in three cases:
+
+| Poll outcome | CLI message | Exit |
+| --- | --- | --- |
+| `status = applied` | "applied" | 0 |
+| `status = apply_failed` | "apply_failed: `<reason>` — `<detail>`" | 0 (the event is still in `events/` as truth; the projection was rejected per §3.1.6) |
+| timeout, supervise running (lock held) | "queued; librarian is slow / behind — will apply when it catches up" | 0 |
+| timeout, supervise not running (lock free) | "queued; run `rethlas supervise` to apply" | 0 |
+
+None of these are errors. The event file is authoritative; the CLI
+is just telling the user what the librarian decided (if anything
+yet). Non-zero exits are reserved for structural admission failure
+(§3.1.6) — event never reached `events/`.
 
 Notes:
 - **No cross-producer lock, no "sort after workspace max" check.**
@@ -3250,6 +3330,16 @@ These are resolved at implementation time without blocking design:
    dashboard
 4. **API key management** — likely environment variables; respect existing
    Codex conventions
+5. **Windows support** — Phase II. Requires replacing `flock`,
+   process groups, and POSIX signals with Windows equivalents
+   (named mutexes, Job Objects, `signal.CTRL_C_EVENT`).
+6. **`runtime/logs/` retention** — Phase I has no rotation; logs
+   accumulate until `rethlas rebuild` wipes them. Phase II may add
+   size-based or age-based rotation, or a `rethlas logs prune` CLI.
+7. **`external_theorem.source_note` structured parsing** — Phase I
+   treats it as free-form text (operator convention, BibTeX key or
+   DOI or plain citation). Phase II can add structured parsing if
+   downstream tooling (importers, citation checks) needs it.
 
 See `PHASE1.md` for the concrete task list.
 
@@ -3499,3 +3589,38 @@ See `PHASE1.md` for the concrete task list.
     bringing in externally committed events from `git pull` should
     be followed by `rethlas rebuild` for cleanliness. Multi-writer
     native conflict resolution is Phase II.
+- **2026-04-24 (D1–D8 review)**:
+  - **D1**: §1 pins **Linux + macOS** as supported platforms for
+    Phase I (flock / POSIX O_APPEND / process groups / POSIX
+    signals are assumed). Windows support added to §14 Open Items
+    as Phase II.
+  - **D2**: §9.1 pins the **user CLI feedback contract**. CLI
+    polls `AppliedEvent` for 30 s. Four outcomes: `applied` / 
+    `apply_failed` (both exit 0 — event is truth), or timeout with
+    `supervise.lock` held ("librarian slow; queued") or free
+    ("supervise not running; queued"). Non-zero exits are reserved
+    for structural admission failures — the event didn't reach
+    `events/`.
+  - **D3**: `rethlas dashboard` standalone now checks
+    `supervise.lock` first. If held, prints "supervise is running
+    and has already started a dashboard at `<bind>`" and exits 0;
+    otherwise proceeds to bind normally. Eliminates EADDRINUSE
+    surprise when operator forgets supervise already has a dashboard.
+  - **D4**: **Supervise startup runtime cleanup** — coordinator,
+    after acquiring the lock and before spawning children, deletes
+    stale `runtime/jobs/*.json`, `runtime/state/coordinator.json`,
+    and `runtime/state/librarian.json`. Preserves
+    `rebuild_in_progress.flag`, both JSONL logs, and
+    `runtime/logs/*.codex.log`. Dashboard's first post-restart read
+    shows a clean "starting" state instead of zombie jobs from the
+    previous crash.
+  - **D5**: §2.3 spells out that **every Phase I CLI** accepts
+    `--workspace <path>`; default is cwd.
+  - **D6**: §14 Open Items adds **`runtime/logs/` retention** as
+    Phase II (no rotation in Phase I; `rethlas rebuild` wipes).
+  - **D7**: `AppliedEvent.event_sha256` pinned to SHA-256 of the
+    event file's **raw bytes** (no canonicalization) so any
+    whitespace / formatting change counts as tampering.
+  - **D8**: §14 Open Items adds **structured `source_note` for
+    external_theorem** as Phase II (Phase I treats it as free-form
+    operator-convention text — BibTeX key / DOI / plain citation).
