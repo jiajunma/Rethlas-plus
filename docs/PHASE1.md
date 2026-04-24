@@ -50,12 +50,15 @@ Test layers used throughout:
 - `system`: full workspace runs through CLI entry points
 - `fault-injection`: crash / timeout / restart / stale-state scenarios
 
-**Fault-injection tests live under `tests/integration/` or
-`tests/system/` physically, marked with `@pytest.mark.fault`** (marker
-registered in `pyproject.toml`). CI selects them via `-m "fault"`
-or excludes them via `-m "not fault"`; tests are **never filtered by
-name substring** (`-k fault`) since that misses tests whose names
-don't happen to contain the word.
+**Marker policy.** Non-default test slices are selected by explicit pytest
+markers registered in `pyproject.toml`:
+
+- `@pytest.mark.fault` for crash / timeout / recovery scenarios
+- `@pytest.mark.golden` for snapshot / golden-output tests
+
+CI selects these via `-m`, not `-k`; tests are **never filtered by name
+substring** (`-k fault`, `-k golden`) since that misses tests whose names do
+not happen to contain those words.
 
 Test layout:
 
@@ -1015,8 +1018,8 @@ Phase I is not done until all of the following are green:
 - fault-injection tests
 - linter on a clean fixture workspace
 
-Minimum CI stages (use the `fault` pytest marker, not name
-substring; register the marker in `pyproject.toml`):
+Minimum CI stages (register both `fault` and `golden` markers in
+`pyproject.toml`; select them with `-m`, not `-k`):
 
 1. `pytest tests/unit`
 2. `pytest tests/integration -m "not fault"`
