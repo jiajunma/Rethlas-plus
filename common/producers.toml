@@ -1,0 +1,23 @@
+# Rethlas producer registry (ARCHITECTURE §3.5).
+# Lives at the Rethlas installation root (next to pyproject.toml),
+# NOT inside a workspace — the registry travels with the tool version.
+# Admission + librarian validate (actor, event_type) against this file.
+
+[[producer]]
+kind                 = "user"
+actor_pattern        = "^user:[a-zA-Z0-9_-]+$"
+allowed_event_types  = [
+  "user.node_added",
+  "user.node_revised",
+  "user.hint_attached",
+]
+
+[[producer]]
+kind                 = "generator"
+actor_pattern        = "^generator:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = ["generator.batch_committed"]
+
+[[producer]]
+kind                 = "verifier"
+actor_pattern        = "^verifier:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = ["verifier.run_completed"]

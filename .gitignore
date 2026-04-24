@@ -1,0 +1,10 @@
+# Rethlas repo .gitignore (M0)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+myenv/
+.DS_Store

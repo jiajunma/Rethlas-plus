@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rethlas"
+version = "0.1.0"
+description = "Event-sourced knowledge base with LLM-backed generator and verifier."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Rethlas" }]
+license = { text = "Proprietary" }
+dependencies = [
+  # Runtime deps filled in later milestones (kuzu, fastapi, etc.)
+  # tomli only needed on <3.11; stdlib `tomllib` is used on 3.11+.
+]
+
+[project.scripts]
+rethlas = "cli.main:main"
+
+[project.optional-dependencies]
+test = [
+  "pytest>=7.4",
+  "pytest-timeout>=2.2",
+  "build>=1.2",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "cli*",
+  "common*",
+  "coordinator*",
+  "dashboard*",
+  "generator*",
+  "librarian*",
+  "linter*",
+  "verifier*",
+]
+exclude = ["tests*", "agents*", "docs*", "coordination*", "formalization*"]
+
+# producers.toml ships inside the `common` package so it is discoverable
+# via importlib.resources in both editable and wheel installs.
+# Admission resolves it from package resources — never from the workspace.
+[tool.setuptools.package-data]
+common = ["producers.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "fault: crash / timeout / recovery scenarios",
+  "golden: snapshot / golden-output tests",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+]
