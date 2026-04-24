@@ -74,21 +74,34 @@ stub subcommands.
 ## M1 — Common infrastructure
 
 **M1.1** `common/events/` — event read/write/parse
-- Filename composition and parsing
+- Filename composition and parsing (16-hex `uid` per ARCHITECTURE §3.2)
 - YAML frontmatter parsing (for `.md`)
 - JSON parsing (for `.json`)
 - `.tmp` + atomic rename write helper
-- Schema validation (required fields, types, filename ↔ body consistency)
+- `event_id` allocation: `iso_ms = wall_clock_now()`,
+  `seq = per-producer-per-ms counter`, `uid = secrets.token_hex(8)`
+  (no cross-producer "sort after workspace max" check per
+  ARCHITECTURE §3.7.1)
+- Schema validation (required fields, types, filename ↔ body
+  consistency)
 
 **M1.2** `common/kb/types.py` — dataclasses for `Node`, `Edge`, `Event`,
-`Verdict`
+`Verdict`, `AppliedEvent`, `ApplyOutcome`
 
 **M1.3** `common/kb/interface.py` — `KnowledgeBase` Protocol
+- Node / edge reads per ARCHITECTURE §4.3
+- `AppliedEvent` reads: `applied_event_status(event_id)`,
+  `applied_event_reason(event_id)`, `list_apply_failed(since, limit)`
+- Writes (librarian-only): `apply_event(event) -> ApplyOutcome`,
+  `rebuild_from_events(events_dir)`
 
 **M1.4** `common/kb/kuzu_backend.py` — Kuzu implementation
-- Schema init
+- Schema init: `Node`, `DependsOn`, `ProjectionState`, `AppliedEvent`
+  (per ARCHITECTURE §5.2)
 - All Protocol methods
 - Single-writer enforcement via Kuzu's built-in locking
+- `apply_event` wraps projection + `AppliedEvent` insert in one
+  Kuzu transaction (both commit or both roll back)
 
 **M1.5** `common/kb/factory.py` — `open_kb()` returning the one backend
 
@@ -139,28 +152,43 @@ runs (no-op with empty events).
 ## M3 — Librarian (read events → write KB + nodes)
 
 **M3.1** `librarian/projector.py` — event projection logic
-- For each event type, update Kuzu atomic fields per §5.4 table
+- For each event type, update Kuzu atomic fields per ARCHITECTURE §5.4
 - Hash recomputation + BFS propagation (Merkle; statement changes only)
-- `pass_count` update rules:
-  - Definitions / external_theorems created at 0
-  - Proof-requiring kinds (lemma/theorem/proposition) created at -1
-  - verifier accepted + hash match → +1
-  - verifier gap/critical + hash match → -1; store `verification_report` and `repair_hint`
-  - hash change: `count = 0` if proof non-empty, `-1` if empty
-- No -1 propagation rule (strict-monotone dispatch already handles it)
-- No separate counter-example event — handled as statement revision
-  inside a normal `generator.batch_committed` (batch contains the
-  revised node whose new statement is the negation, which flips the
-  `statement_hash` and triggers the usual Merkle cascade)
-- Set `repair_hint` when user emits `user.hint_attached`; clear on the
-  next `generator.batch_committed` that touches that target label
+- Use the `initial_count(kind, proof)` helper from §5.4 for every
+  node-rewriting event (`user.node_added`, `user.node_revised`,
+  `generator.batch_committed`):
+  - `kind ∈ {definition, external_theorem}` → `count = 0`
+  - `kind ∈ {lemma, theorem, proposition}`, proof non-empty → `count = 0`
+  - `kind ∈ {lemma, theorem, proposition}`, proof empty → `count = -1`
+- verifier accepted + hash match → `count += 1`; set `verification_report`
+- verifier gap/critical + hash match → `count = -1`; set
+  `verification_report` and `repair_hint`
+- verifier hash mismatch → record `AppliedEvent(apply_failed,
+  reason=hash_mismatch)`; no KB change
+- user.hint_attached: if target exists, append to `repair_hint`;
+  otherwise record `AppliedEvent(apply_failed,
+  reason=hint_target_missing)`
+- Generator.batch_committed clears the target's `repair_hint` and
+  `verification_report` when the node's `verification_hash` changes
+  (fresh attempt invalidates prior hint/report)
+- No -1 propagation rule (strict-monotone dispatch handles it)
+- Counter-example = statement revision inside a normal
+  `generator.batch_committed` (no dedicated event)
 
-**M3.2** `librarian/validator.py` — business rule validation
-- Referenced event_ids exist and precede current
-- Referenced labels exist
-- New labels are unique
-- No cycle introduced
-- Producer + type match `producers.toml`
+**M3.2** `librarian/validator.py` — split into two layers per §3.1.6
+- **Structural check** (admission-side helpers, also run defensively at
+  librarian as last line): schema completeness, actor/type registered,
+  label syntax, self-reference, batch-internal acyclicity. Failure on
+  canonical event = **workspace corruption**; halt projection.
+- **Semantic check** (librarian only, at apply time, against current
+  projection): label uniqueness, cycle introduction, `\ref{}` target
+  exists, hint target exists, verifier hash-match. Failure → record
+  `AppliedEvent(apply_failed, reason=<code>)`; no KB change; terminal.
+- Reason codes (must match §5.2): `label_conflict`, `cycle`,
+  `ref_missing`, `hint_target_missing`, `hash_mismatch`, `kind_mutation`,
+  `self_reference`.
+- Producer + type still matched against `producers.toml` as part of
+  structural check.
 
 **M3.3** `librarian/renderer.py` — node markdown file generation
 - Given a node label, query Kuzu and format markdown
@@ -414,6 +442,12 @@ M0 ──▶ M1 ──▶ M2 ──▶ M3 ──▶ M4 ──▶ M5 ──▶ M6
 - [ ] Dashboard at port 8765 shows current state
 - [ ] Linter reports consistency (event-stream integrity + KB invariants)
 - [ ] `rm -rf knowledge_base/; rethlas rebuild` reconstructs full state
+      (including the `AppliedEvent` table)
+- [ ] Librarian records an `AppliedEvent` row (applied or apply_failed)
+      for every event it decides on; `AppliedEvent` and `dag.kz/`
+      mutations commit together or roll back together
+- [ ] CLI (`rethlas add-node` etc.) reports `applied` vs
+      `apply_failed(reason)` by polling `AppliedEvent` after publish
 - [ ] Linter audits `pass_count` against event-stream replay (§5.5.1)
 
 ---

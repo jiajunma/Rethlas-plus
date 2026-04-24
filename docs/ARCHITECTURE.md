@@ -154,11 +154,38 @@ the truth event stream alone.
    means whole-batch atomic publish. No partial truth is visible.
 5. **Only knowledge actors write truth events.** In Phase I, only
    `user`, `generator`, and `verifier` write to `events/`.
-6. **Only admitted events enter canonical truth.** Producers validate
-   schema/business rules before atomic rename into `events/`. Librarian
-   re-validates during replay as a defensive invariant check; an invalid
-   canonical event is treated as workspace corruption, not as a routine
-   rejected batch.
+6. **Two-layer validation.** Admission and projection check different
+   things; neither replaces the other.
+   - **Admission** (pre-publish, inside each producer's role layer):
+     checks **structural** correctness that can be decided from the
+     event alone plus the producer's local KB view at admission time —
+     schema completeness, actor/type registration, label syntax,
+     self-reference, batch-internal acyclicity, repair-must-change-hash
+     (§6.2). Structural failures never enter `events/`; they are
+     recorded in `runtime/state/rejected_writes.jsonl`.
+   - **Projection** (librarian, at apply time): checks **semantic
+     cross-event** consistency that only the canonical event sequence
+     can decide — label uniqueness against already-applied nodes, cycle
+     introduction against the projected graph, `\ref{}` target exists,
+     `user.hint_attached` target exists, verifier-verdict hash match.
+     When these checks fail, librarian records the event in
+     `AppliedEvent` with `status = apply_failed` and a `reason`. The
+     event file stays in `events/` (append-only); it simply does not
+     alter KB state. This is a **routine outcome**, not corruption
+     (§6.5).
+   - **Workspace corruption**: an event in canonical `events/` that
+     violates an invariant admission should have caught (for example a
+     hand-dropped file with wrong schema). Librarian halts projection
+     and surfaces the event; operator must investigate.
+7. **`events/` records proposals; KB records realization.** Every
+   published event is preserved. `AppliedEvent` (a Kuzu table
+   maintained by librarian) records the deterministic outcome
+   (`applied` / `apply_failed`) for each event. `KB = f(events/)` is
+   still a pure function; `f` includes the apply_failed rule and is
+   deterministic under replay.
+8. **Apply_failed is terminal.** An event that fails projection is
+   never retried even if later events would make it applicable. The
+   producer must publish a fresh event with a new `event_id`.
 
 ### 3.2 File naming
 
@@ -170,14 +197,18 @@ the truth event stream alone.
 - **`event_type`**: dotted name (`user.node_added`, `verifier.run_completed`)
 - **`target_or_none`**: DAG node label with `:` escaped to `_`, or `none`
 - **`actor`**: producer identifier `{kind}:{instance}` with `:` escaped to `_`
-- **`seq`**: zero-padded monotone sequence within the producer's same-millisecond emission batch
-- **`uid`**: 8 hex characters for uniqueness and filename ↔ event_id consistency
+- **`seq`**: zero-padded monotone sequence within the producer's
+  same-millisecond emission batch (scope: per-producer, per-ms). In
+  Phase I each truth event is published standalone, so `seq` is almost
+  always `0001`; reserved for future multi-event bursts
+- **`uid`**: 16 hex characters (64-bit random) for uniqueness and
+  filename ↔ event_id consistency
 - **Extension**: `.json` only in Phase I
 
 Examples:
 ```
-20260423T143015.123--user.node_added--def_primary_object--user_alice--0001--a7b2c912.json
-20260423T144522.999--verifier.run_completed--lem_block_form_for_x0_plus_u--verifier_codex-gpt-5.4--0001--1f8e22c0.json
+20260423T143015.123--user.node_added--def_primary_object--user_alice--0001--a7b2c912d4f1e380.json
+20260423T144522.999--verifier.run_completed--lem_block_form_for_x0_plus_u--verifier_codex-gpt-5.4--0001--1f8e22c0b6a94d17.json
 ```
 
 Directories sharded by date: `events/{YYYY-MM-DD}/`.
@@ -193,7 +224,7 @@ belong to derived `knowledge_base/nodes/*.md`, not to `events/`.
 
 ```json
 {
-  "event_id": "20260423T143015.123-0001-a7b2c912",
+  "event_id": "20260423T143015.123-0001-a7b2c912d4f1e380",
   "ts": "2026-04-23T14:30:15.123+08:00",
   "type": "user.node_added",
   "actor": "user:alice",
@@ -327,7 +358,7 @@ Generator batch-commit events carry:
 
 ```json
 {
-  "attempt_id": "gen-20260424T101530.123-0001-a7b2c912",
+  "attempt_id": "gen-20260424T101530.123-0001-a7b2c912d4f1e380",
   "target": "thm:maximal_orbits_equal_open_orbits",
   "mode": "fresh | repair",
   "nodes": [
@@ -445,10 +476,11 @@ observability.
 
 ### 3.7 Writing truth events
 
-This section collects the rules for how truth events reach `events/` in a
-form that librarian can replay deterministically. Canonical `events/`
-contains admitted truth only: producers validate before publish, then
-librarian re-validates on replay as a defensive check.
+This section collects the rules for how truth events reach `events/` in
+a form that librarian can replay deterministically. Canonical `events/`
+contains **admitted proposals**: producers validate structural correctness
+before publish (§3.1.6); librarian decides semantic realization via
+`AppliedEvent` at apply time.
 
 #### 3.7.1 Stable event ordering
 
@@ -458,16 +490,41 @@ Librarian replay order must be stable and deterministic. Sorting is by:
 2. `seq`
 3. `uid`
 
-`uid` is retained for uniqueness, but it has no primary ordering meaning.
-Within a same-millisecond producer batch, `seq` is the canonical order. This
-is especially important for generator-emitted statement/proof pairs and
-topologically ordered multi-node output.
+`uid` is retained for uniqueness; it has no primary ordering meaning.
+Within a same-millisecond producer burst, `seq` is the canonical order.
+In Phase I each truth event is published standalone, so `seq` is almost
+always `0001`.
 
-Phase I also requires **monotone publication order**: before atomic rename,
-the producer must verify that the new event sorts strictly after the current
-workspace maximum event id. Backfilled / backdated canonical events are
-invalid in Phase I. This makes librarian's `last_applied_event_id`
-watermark safe for incremental replay.
+**Allocation rules for producers** (no cross-producer global
+monotonicity required):
+
+1. `iso_ms = wall_clock_now()` at the moment of event construction.
+2. `seq`: per-producer, per-ms counter. Starts at `0001`; increments
+   only if the same producer publishes multiple events in the same
+   millisecond (rare in Phase I). Scope resets on every new ms.
+3. `uid = random(64 bits, 16 hex)`. 64-bit entropy makes collision
+   negligible over Phase I workspace lifetime (birthday threshold is at
+   2^32 ≈ 4 billion events).
+4. **Per-machine wall-clock monotonicity required.** NTP slew is fine;
+   a step backwards is not. Phase I assumes a single machine; operator
+   must avoid manual clock changes during workspace activity.
+5. No "sort strictly after current workspace maximum" check.
+   Concurrent publishers from different producers do **not**
+   synchronize on event_id allocation. Their events are genuinely
+   independent; replay order is decided by the `(iso_ms, seq, uid)`
+   total sort, not by publication physical order.
+
+Concurrency conflicts that survive admission (label uniqueness, cycle
+introduction, `\ref{}` target missing, `hint` target missing, verdict
+hash mismatch) are resolved **deterministically at apply time** by
+librarian's projection rule: **first to apply in `(iso_ms, seq, uid)`
+order wins; later conflicting events are marked `apply_failed`**
+(§3.1.6, §6.5). Apply_failed is terminal — a failed event is never
+retried.
+
+Consequence: `events/` is append-only and self-contained; `AppliedEvent`
+makes projection outcome deterministic and queryable; `KB = f(events/)`
+is still a pure function of the event stream.
 
 #### 3.7.2 Generator batch atomicity
 
@@ -583,7 +640,7 @@ the backend.
 
 ```python
 class KnowledgeBase(Protocol):
-    # reads
+    # reads — derived node state
     def get_node(self, label: str) -> Node | None: ...
     def list_nodes(self, *, kind=None) -> list[Node]: ...
     def direct_dependencies(self, label: str) -> list[str]: ...
@@ -593,10 +650,26 @@ class KnowledgeBase(Protocol):
     def latest_verdict(self, label: str, hash: str) -> Event | None: ...
     def count_repair_attempts(self, label: str, hash: str) -> int: ...
 
+    # reads — projection decisions (§3.1.6 / §6.5)
+    def applied_event_status(
+        self, event_id: str
+    ) -> Literal["applied", "apply_failed", "not_found"]: ...
+    def applied_event_reason(self, event_id: str) -> str: ...
+    def list_apply_failed(
+        self, *, since: str | None = None, limit: int = 100
+    ) -> list[AppliedEvent]: ...
+
     # writes (librarian only)
-    def apply_event(self, event: Event) -> list[str]: ...
+    def apply_event(self, event: Event) -> ApplyOutcome: ...
     def rebuild_from_events(self, events_dir: Path) -> None: ...
 ```
+
+`ApplyOutcome` carries `status` (`"applied"` / `"apply_failed"`),
+`reason` (empty if applied), and the set of affected node labels
+(empty if apply_failed). Producers / CLI poll
+`applied_event_status(event_id)` after publish to learn the fate of
+their proposal; dashboard uses `list_apply_failed` to surface recent
+failures.
 
 Only Python components use this. Codex does not import KB code.
 
@@ -662,12 +735,35 @@ CREATE NODE TABLE Node (
 
 CREATE REL TABLE DependsOn (FROM Node TO Node);
 
--- projection progress (librarian's water mark)
+-- projection bookkeeping (librarian only)
 CREATE NODE TABLE ProjectionState (
   key STRING PRIMARY KEY,
   value STRING
 );
+
+-- one row per event librarian has decided on (§3.1.6 / §6.5).
+-- makes apply idempotent and makes apply_failed observable to
+-- producers, dashboard, linter, and CLI feedback loops.
+CREATE NODE TABLE AppliedEvent (
+  event_id STRING PRIMARY KEY,
+  status STRING,      -- "applied" | "apply_failed"
+  reason STRING,      -- "" for applied; failure code otherwise
+  applied_at STRING   -- ISO timestamp when librarian decided
+);
 ```
+
+Defined `reason` codes for `status = "apply_failed"` (Phase I):
+- `label_conflict` — node with this label already exists
+- `cycle` — applying this event would introduce a dependency cycle
+- `ref_missing` — an explicit `\ref{}` target does not exist at apply
+  time
+- `hint_target_missing` — `user.hint_attached` target label not found
+- `hash_mismatch` — `verifier.run_completed` carries a
+  `verification_hash` that no longer matches the target node's current
+  hash (stale verdict)
+- `kind_mutation` — a revision attempted to change a node's `kind`
+- `self_reference` — a node's own body `\ref{}`s itself (also caught at
+  admission; included here for defense-in-depth)
 
 **Node contents** (logical schema):
 
@@ -803,8 +899,8 @@ verifier.
 | `verifier.run_completed(accepted, hash matches)` | `count += 1`; set `verification_report` |
 | `verifier.run_completed(gap, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (local fix suggestions) |
 | `verifier.run_completed(critical, hash matches)` | `count = -1`; set `verification_report` + `repair_hint` (may need statement rewrite) |
-| `verifier.run_completed(hash mismatch)` | Ignored (stale verdict) |
-| `user.hint_attached(target=X)` | Append to `X.repair_hint` |
+| `verifier.run_completed(hash mismatch)` | Record `AppliedEvent(status=apply_failed, reason=hash_mismatch)`; no KB change (stale verdict) |
+| `user.hint_attached(target=X)` | If `X` exists: append to `X.repair_hint`. Otherwise record `apply_failed(reason=hint_target_missing)` and no KB change |
 
 ### 5.5 Auditability and safety checks
 
@@ -819,9 +915,10 @@ to occur in the first place:
    application in a Kuzu transaction. Crash mid-apply → rollback, event
    not marked applied, retried on next startup.
 
-3. **Idempotent event application.** Librarian stores
-   `last_applied_event_id` in `ProjectionState`. Re-processing events
-   before that id is a no-op. Safe to replay after restart.
+3. **Idempotent event application via `AppliedEvent`.** Every event
+   librarian decides on gets a row in the Kuzu `AppliedEvent` table
+   (`status = applied | apply_failed`). Re-processing an already-decided
+   event is a no-op. Safe to replay after restart regardless of order.
 
 4. **Strict event ordering.** Events processed by ascending tuple
    `(iso_ms, seq, uid)`. Never apply later event before earlier.
@@ -829,8 +926,8 @@ to occur in the first place:
 
 5. **Hash-match gate on verdicts.** A `verifier.run_completed` event
    changes `pass_count` **only if** its `verification_hash` equals the
-   current `Node.verification_hash`. Stale verdicts are silently
-   discarded — cannot over-increment or corrupt count.
+   current `Node.verification_hash`. Stale verdicts are recorded as
+   `apply_failed(reason=hash_mismatch)` and never affect count.
 
 6. **Pre-dispatch hash revalidation** (§5.5.2). Before verifier runs,
    role layer confirms the hash is current. Catches drift *before* a
@@ -1431,33 +1528,73 @@ generator batch could not enter truth.
 
 ### 6.5 Librarian
 
-Maintains dag.kz and nodes/. Single writer for both. Projects events into
-the derived state.
+Maintains `dag.kz` and `nodes/`. Single writer for both. Projects events
+into the derived state and records each decision in `AppliedEvent`.
 
 Main loop:
 ```
 watch events/ for new files
-for each new event (ordered by (iso_ms, seq, uid)):
-    validate schema + business rules
-    apply to Kuzu transactionally
-    recompute hashes for affected nodes (BFS through dependents)
-    update pass_count per rules
-    re-render nodes/*.md for each affected node
-    on validation failure: stop projection and surface workspace corruption
+for each new event file (sorted globally by (iso_ms, seq, uid)):
+    e = load_event(file)
+
+    if e.event_id in AppliedEvent:
+        continue                       # idempotent replay
+
+    begin Kuzu transaction:
+        structural_ok, err = structural_check(e)
+        if not structural_ok:
+            # admission should have caught this; its presence in canonical
+            # events/ means workspace corruption. Do not commit any change.
+            abort transaction
+            halt projection; surface corruption on dashboard / CLI
+            break
+
+        semantic_ok, reason = semantic_check(e, current_projection)
+        if not semantic_ok:
+            insert AppliedEvent(e.event_id, status="apply_failed",
+                                reason=reason, applied_at=now())
+            commit transaction
+            continue                   # no KB change; terminal for e
+
+        apply e to Kuzu:
+            update atomic fields
+            recompute affected hashes (BFS through dependents)
+            update pass_count per §5.4
+        insert AppliedEvent(e.event_id, status="applied",
+                            reason="", applied_at=now())
+        commit transaction
+
+        re-render nodes/*.md for each affected node (atomic writes)
 ```
 
-Routine admission failures are expected to be caught before canonical publish
-and recorded in `runtime/`; librarian-side validation failure means canonical
-truth itself is inconsistent with the architecture invariants.
+Key points:
 
-Startup: regenerate all `nodes/*.md` from Kuzu (ensures consistency even
-after crash).
+1. **Structural check**: schema completeness, actor/type registered,
+   label format, self-reference, batch-internal acyclicity. If this
+   fails on a canonical event, admission was bypassed → **workspace
+   corruption**, projection halts.
+2. **Semantic check**: label uniqueness against KB, cycle introduction
+   against projected graph, `\ref{}` targets exist, hint target exists,
+   verifier `verification_hash` matches current node hash. Failures
+   here are **routine** — recorded as `apply_failed` with a `reason`
+   code from §5.2.
+3. **Apply and AppliedEvent are one Kuzu transaction.** Crash
+   mid-apply → rollback → event not marked decided → retried on next
+   startup (same deterministic outcome).
+4. **Apply_failed is terminal.** Per §3.1.6, a failed event is never
+   re-examined. Producer must publish a fresh event with a new
+   `event_id` if it wants to try again.
 
-Full rebuild is triggered by `rethlas rebuild`. It deletes dag.kz and nodes/
-and replays the entire truth event stream.
+Startup: walk `events/*` in (iso_ms, seq, uid) order; for each file,
+run the main-loop body. `AppliedEvent` makes already-decided events
+no-ops, so startup is incremental by default.
 
-Librarian writes no truth events in Phase I. Validation failures and rebuild
-status are reported via runtime logs / CLI output.
+Full rebuild is triggered by `rethlas rebuild`. It deletes `dag.kz/`,
+`nodes/`, **and** the `AppliedEvent` table content, then replays every
+event from scratch. This is the authoritative reset.
+
+Librarian writes no truth events in Phase I. `AppliedEvent` is a Kuzu
+projection table, not a truth log.
 
 ### 6.6 Linter
 
@@ -1538,7 +1675,9 @@ Pages:
 - `GET /api/theorems` — JSON: all `kind=theorem` nodes with dashboard-derived status
 - `GET /api/active` — JSON: currently in-flight runtime jobs
 - `GET /api/attention` — JSON: nodes / runtime alerts that need human attention
-- `GET /api/rejected` — JSON: recent runtime admission failures and drift alerts
+- `GET /api/rejected` — JSON: recent runtime admission failures
+  (`runtime/state/rejected_writes.jsonl`), recent `apply_failed`
+  events from `AppliedEvent`, and drift alerts
 - `GET /api/events?limit=50` — JSON: recent events, filterable by actor/type
 - `GET /api/node/{label}` — JSON: full node info
 - `GET /events/stream` — SSE: push new events to connected browsers
@@ -1669,39 +1808,82 @@ arxiv search.
 ### 9.1 Writing an event
 
 ```
-truth-event producer:
+truth-event producer (admission layer, pre-publish):
   construct event payload
-  allocate event_id ({iso_ms}-{seq}-{uid})
-  validate schema + business rules against current KB snapshot
-  confirm event_id sorts after current max event_id
+  allocate event_id:
+    iso_ms = wall_clock_now()
+    seq    = next same-ms seq for this producer (almost always 0001)
+    uid    = random 16 hex
+  run structural_check (§3.1.6) against current KB snapshot
+    on failure: record to runtime/state/rejected_writes.jsonl; return
+                failure to caller. Nothing reaches events/.
   compose filename per §3.2
   write .tmp file in events/{date}/
   fsync
   atomic rename to canonical filename
+
+producer (or CLI wrapper) then optionally polls the librarian for fate:
+  loop until timeout:
+    status = kb.applied_event_status(event_id)
+    if status != "not_found": return (status, reason)
 ```
+
+Notes:
+- **No cross-producer lock, no "sort after workspace max" check.**
+  Concurrent publishers allocate event_ids from their own wall clock;
+  replay order is decided by the `(iso_ms, seq, uid)` sort, and
+  cross-publisher conflicts are resolved by librarian at apply time
+  (§3.1.6, §6.5).
+- **Per-machine wall-clock monotonicity is assumed.** NTP slew is
+  fine; step-backwards is not.
+- **Per-producer, per-ms seq counter.** In Phase I each truth event
+  is published standalone, so `seq` almost always stays at `0001`.
 
 **Who writes truth events:**
 - **User**: publishes through helper CLI commands (`rethlas add-node`,
   `rethlas revise-node`, `rethlas attach-hint`, etc.). Manual drafting may
   happen outside `events/`, but direct hand-drops into canonical `events/`
-  are unsupported in Phase I.
+  are unsupported in Phase I. CLI blocks briefly polling
+  `AppliedEvent` to report `applied` / `apply_failed(reason)` to the
+  user.
 - **Generator / verifier**: their wrapper code (Python, NOT Codex) writes truth events. Codex subprocess is read-only sandboxed; it outputs to stdout which the wrapper captures and converts to truth events.
+  Wrapper polls `AppliedEvent` after publish and records the outcome
+  in the runtime job file for coordinator / dashboard visibility.
 
 **Codex never writes files.** Only Python wrappers do.
 
 ### 9.2 Projecting an event
 
 ```
-librarian file-watcher notices new file
-load event
-validate schema + business rules
-apply to Kuzu (transaction):
+librarian file-watcher notices new file (or startup scan picks it up)
+load event e
+if e.event_id already in AppliedEvent: skip (idempotent)
+
+begin Kuzu transaction:
+  run structural_check(e):
+    on failure: halt projection; workspace corruption (§6.5)
+
+  run semantic_check(e, current_projection):
+    on failure (label_conflict / cycle / ref_missing /
+                hint_target_missing / hash_mismatch / ...):
+      insert AppliedEvent(event_id, status="apply_failed",
+                          reason=<code>, applied_at=now())
+      commit; done with e (terminal)
+
+  # semantic check passed — apply to KB
   update atomic fields
   recompute affected nodes' hashes (BFS through dependents)
-  update pass_count per rules
+  update pass_count per §5.4
+  insert AppliedEvent(event_id, status="applied",
+                      reason="", applied_at=now())
 commit
+
 re-render nodes/*.md for each affected node (atomic writes)
 ```
+
+Apply_failed and applied are both durable Kuzu rows; both are visible
+to producers via the KB Protocol, to dashboard via `/api/rejected` and
+`/api/events`, and to linter when auditing drift.
 
 ### 9.3 A typical verification cycle
 
@@ -1789,7 +1971,8 @@ Librarian reads all `events/` and rebuilds `dag.kz/` and `nodes/`.
 | Failure | Effect | Recovery |
 | --- | --- | --- |
 | Producer crashes mid-write | `.tmp` file lingers | Deleted on next startup |
-| Librarian crashes mid-apply | Kuzu transaction rolls back | Next startup replays from truth events |
+| Librarian crashes mid-apply | Kuzu transaction rolls back (both KB mutations and the `AppliedEvent` row roll back together) | Next startup re-processes the event deterministically |
+| `AppliedEvent` out-of-sync with KB | Only possible via manual Kuzu tampering | `rethlas rebuild` restores both from events |
 | Kuzu DB corrupt | Queries fail | `rethlas rebuild` |
 | Full workspace clone | No dag.kz | `rethlas rebuild` on first use |
 | Codex subprocess stuck | Log mtime stales | Coordinator timeout kills process group |
@@ -1825,6 +2008,19 @@ projection logic.
     (count, hashes) at query time.
 12. **`pass_count` is the only progress indicator.** Signed int
     (-1 / 0 / positive), updated by librarian per rules.
+13. **Two-layer validation (§3.1.6).** Admission checks structural
+    correctness before publish; librarian decides semantic realization
+    at apply time and records each decision in `AppliedEvent`.
+14. **`events/` records proposals; KB records realized projection.**
+    Every published event is preserved. `AppliedEvent(status)` tells
+    which events actually mutated KB. `KB = f(events/)` is still a
+    pure deterministic function.
+15. **Apply_failed is terminal.** A failed event is never retried;
+    producers must publish a fresh event with a new `event_id`.
+16. **No cross-producer event_id synchronization.** Concurrent
+    publishers allocate independently; replay order is decided by the
+    `(iso_ms, seq, uid)` total sort; conflicts resolve deterministically
+    at apply time.
 
 ---
 
@@ -1933,3 +2129,17 @@ See `PHASE1.md` for the concrete task list.
   injection; nodes/*.md filter to pass_count>=1 only; `generator.batch_committed`
   atomic batch event; strict label naming; retraction removed; no hard
   MAX_REPAIRS; repair-must-change-hash decoder check.
+- **2026-04-24 (evening review, H1–H2)**:
+  - H1: `pass_count` init rule no longer drops definitions /
+    external_theorems to -1 on revision — they always go to 0 awaiting
+    verifier. Introduced `initial_count(kind, proof)` helper used by
+    all three node-rewriting events (§5.4).
+  - H2: dropped cross-producer event_id global monotonicity. `uid`
+    bumped from 8 hex to 16 hex. Introduced two-layer validation
+    (admission structural + librarian semantic, §3.1.6) and the
+    `AppliedEvent` Kuzu table (§5.2) which deterministically records
+    `applied` / `apply_failed(reason)` per event. "Workspace
+    corruption" now narrowly means a structural failure on a canonical
+    event (admission escape). Apply_failed is terminal — failed events
+    are never retried. Producers poll `AppliedEvent` to learn their
+    proposal's fate. No publish-time lock.
