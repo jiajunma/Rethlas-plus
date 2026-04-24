@@ -202,6 +202,17 @@ Recommended helper infrastructure:
   - final `Node`, `DependsOn`, and `AppliedEvent` tables must be
     identical (M2 scope is Kuzu projection only; `nodes/*.md`
     byte-determinism is M4's renderer test, §M4)
+- `integration`: `kuzu_backend.rebuild_from_events(events_dir)`
+  contract — takes a fixture workspace, pre-populates all three
+  tables with stale contents, calls `rebuild_from_events`, and
+  asserts:
+  - `Node` / `DependsOn` / `AppliedEvent` table contents after
+    rebuild are byte-identical to a fresh-workspace replay of the
+    same `events/`
+  - No stale rows from the pre-populated state survive
+  - Replay order is `(iso_ms, seq, uid)` (scramble input files'
+    on-disk order to verify that `rebuild_from_events` does not
+    depend on filesystem iteration order)
 - `fault-injection`: same `event_id`, different on-disk bytes
   - apply an event once so `AppliedEvent(event_id, event_sha256=H1)`
     exists
@@ -290,6 +301,14 @@ Recommended helper infrastructure:
     out, and reports "queued, librarian behind" + exit 0.
 - `system`: `rethlas rebuild` refuses while `supervise.lock` is held
 - `system`: `rethlas rebuild` takes lock when running standalone
+- `system`: **`--workspace <path>` flag universality** (ARCHITECTURE
+  §2.3 D5) — from a cwd unrelated to the target workspace,
+  `rethlas --workspace /tmp/alt init` creates the workspace at
+  `/tmp/alt`; a follow-up
+  `rethlas --workspace /tmp/alt add-node ...` writes its event
+  file under `/tmp/alt/events/` (not cwd). Same spot-check for
+  `rethlas --workspace /tmp/alt rebuild` to confirm the flag is
+  plumbed through every Phase I subcommand.
 - `integration`: user-CLI admission rejects the following per
   ARCHITECTURE §3.1.6 (structural) / §5.2 / §3.5.2 / §5.4. Each
   rejection **exits non-zero** (per §2.3 exit-code table) **and
@@ -344,6 +363,14 @@ Recommended helper infrastructure:
   contract). Without this, startup reconciliation + linter E would
   flap every run.
 - `integration`: startup replay processes unseen events and skips already-decided ones
+- `integration`: **live watchdog** — while librarian daemon is
+  running (past `startup_phase = ready`), dropping a new event file
+  into `events/{date}/` via atomic `.tmp + rename` triggers the
+  watchdog; within **5 seconds** the corresponding `AppliedEvent`
+  row appears with `status=applied` (or `apply_failed` if the
+  fixture event is designed to fail) and, for rendered kinds, the
+  expected `nodes/*.md` content is on disk. Exercises the runtime
+  (non-startup) projection path.
 - `integration`: crash window after Kuzu commit but before render is healed by startup reconciliation
 - `integration`: orphan `nodes/*.md` files are deleted by reconciliation
 - `integration`: `librarian.json.startup_phase` transitions:
@@ -378,7 +405,7 @@ Recommended helper infrastructure:
 
 **Tests**
 
-- `integration`: wrapper heartbeat updates `runtime/jobs/{job_id}.json.updated_at` every 60 s
+- `integration`: wrapper heartbeat updates `runtime/jobs/{job_id}.json.updated_at` every 60 s; every written timestamp (`started_at`, `updated_at`) is **UTC ISO 8601 ending in `Z`** (ARCHITECTURE §2.4 trailer / G1). Same assertion applied spot-check to `coordinator.json` and `librarian.json` timestamps in M8 / M4 tests via a shared helper.
 - `integration`: Codex runner merges `stdout` and `stderr` into the same
   `runtime/logs/{job_id}.codex.log`; writes to either stream refresh the
   observed log mtime used by timeout logic
@@ -415,12 +442,27 @@ Recommended helper infrastructure:
 **Tests**
 
 - `integration`: fake Codex output with valid `<node>` blocks produces exactly one `generator.batch_committed`
-- `integration`: decoder rejects:
-  - malformed block
-  - wrong prefix/kind pairing
-  - existing non-target label
-  - unresolved `\ref{}`
-  - repair-no-op hash
+- `integration`: decoder rejects each of the 11 failure modes per
+  ARCHITECTURE §3.5.1 + §6.2. Each has a dedicated bad-fixture
+  test and produces exactly one line in
+  `runtime/state/rejected_writes.jsonl` with the right `reason`
+  + `detail`; no truth event is published:
+  - malformed `<node>` block
+  - `kind: external_theorem` in batch (user-only kind)
+  - wrong label prefix / kind pairing (e.g. `thm:foo, kind=lemma`)
+  - placeholder label (`thm:main`, `lem:helper`, etc.)
+  - duplicate label within the same batch
+  - batch `target` field not present in `nodes[]`, or `target`
+    mismatches the dispatch parameter
+  - existing non-target label in `nodes[]` (write-scope invariant,
+    H7)
+  - self-reference (node `\ref{}`s itself)
+  - unresolved `\ref{}` to a label that neither exists in KB nor
+    appears in the same batch
+  - batch introduces a dependency cycle (within the batch, or
+    combined with current KB edges)
+  - repair-must-change-hash — post-batch `verification_hash`
+    equals the rejected `H_rejected` from the triggering verdict
 - `integration`: batch-internal topological hashing works
 - `integration`: staged publish is atomic
 - `integration`: wrapper pre-dispatch validation returns `precheck_failed` without calling Codex when conditions drift
@@ -496,6 +538,24 @@ Recommended helper infrastructure:
     `runtime/state/rejected_writes.jsonl`,
     `runtime/state/drift_alerts.jsonl`, and `runtime/logs/*.codex.log`
 - `integration`: consecutive `crashed`, `timed_out`, and same-reason `apply_failed` counters flow into Human Attention state
+- `integration`: **graceful shutdown cascade on SIGTERM / SIGINT**
+  (ARCHITECTURE §6.4 G6):
+  - children are signalled in reverse dependency order
+    (dashboard → in-flight workers → librarian)
+  - each child is given up to 10 s to exit cleanly before SIGKILL
+  - in-flight wrappers write their terminal `status` and delete
+    their job files before dying (no leftover
+    `runtime/jobs/*.json`)
+  - `supervise.lock` is released on exit; a subsequent
+    `rethlas supervise` in the same workspace succeeds immediately
+- `fault-injection`: second SIGINT during the 10 s wait escalates
+  immediately to SIGKILL of remaining children; coordinator still
+  releases `supervise.lock` cleanly and writes a final
+  `coordinator.json` with `status = "stopping"`
+- `fault-injection`: external SIGKILL of coordinator itself — OS
+  process-group cleanup kills all children; next
+  `rethlas supervise` starts cleanly thanks to M5/M8 runtime
+  cleanup (no zombie state visible)
 - `system`: `rethlas supervise` can run a tiny workspace to steady state
 
 **Exit**
@@ -548,6 +608,20 @@ Recommended helper infrastructure:
   - state change
   - applied-event change
 - `integration`: Kuzu-dependent endpoints return 503 + `Retry-After: 5` during rebuild
+- `integration`: **staleness thresholds** — fixture sets
+  `coordinator.json.updated_at` to various ages; dashboard returns
+  liveness label `healthy` (≤ 60 s), `degraded` (> 60 s, ≤ 5 min),
+  `down` (> 5 min OR file missing). Same thresholds for
+  `librarian.json` (ARCHITECTURE §6.7.1).
+- `integration`: **`/api/events?limit=N` clamp** — `N > 500` is
+  silently capped at 500; `N < 1` returns HTTP 400; `N` in `[1, 500]`
+  returns exactly `N` results when the workspace has enough events.
+- `integration`: **malformed runtime JSON robustness (H2)** —
+  fixture writes garbage bytes into `coordinator.json`; dashboard
+  does not crash, logs the parse error + path to
+  `runtime/logs/dashboard.log`, treats the component as `down` for
+  display purposes, and continues serving other endpoints normally.
+  Same check with `librarian.json`.
 - `system`: standalone `rethlas dashboard` refuses when supervise lock is held
 
 **Exit**
