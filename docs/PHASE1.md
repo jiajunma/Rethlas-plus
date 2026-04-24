@@ -716,7 +716,7 @@ Recommended helper infrastructure:
 - `integration`: `idle_reason_code` transitions cover:
   - `all_done`
   - `user_blocked`
-  - `generation_dep_blocked`
+  - `generation_blocked_on_dependency`
   - `verification_dep_blocked`
   - `in_flight_only`
   - `corruption_or_drift`

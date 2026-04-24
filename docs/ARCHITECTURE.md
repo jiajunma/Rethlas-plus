@@ -246,15 +246,17 @@ the truth event stream alone.
 6. **Two-layer validation.** Admission and projection check different
    things; neither replaces the other.
    - **Admission** (pre-publish, inside each producer's role layer):
-     checks **structural** correctness that can be decided from the
-     event alone plus the producer's local KB view at admission time —
-     schema completeness, actor/type registration, label syntax,
-     self-reference, batch-internal acyclicity, repair-must-change-hash
-     (§6.2), and *semantically-unreachable* proposals (e.g.
-     `user.hint_attached(target=X)` where `X.pass_count >= 1` — the
-     hint could never be consumed, see §5.2). Structural failures
-     never enter `events/`; they are recorded in
-     `runtime/state/rejected_writes.jsonl`.
+      checks **structural** correctness that can be decided from the
+      event alone plus the producer's local KB view at admission time —
+      schema completeness, actor/type registration, label syntax,
+      self-reference, batch-internal acyclicity, repair-must-change-hash
+      (§6.2), kind immutability on `user.node_revised` (the revised
+      payload's `kind` must match the current KB node's `kind`), and
+      *semantically-unreachable* proposals (e.g.
+      `user.hint_attached(target=X)` where `X.pass_count >= 1` — the
+      hint could never be consumed, see §5.2). Structural failures
+      never enter `events/`; they are recorded in
+      `runtime/state/rejected_writes.jsonl`.
    - **Projection** (librarian, at apply time): checks **semantic
      cross-event** consistency that only the canonical event sequence
      can decide — label uniqueness against already-applied nodes, cycle
@@ -796,7 +798,9 @@ and verifier read only these verified notes.
 label: lem:block_form_for_x0_plus_u
 kind: lemma
 pass_count: 2
-depends_on: [def:primary_object, lem:normal_form_for_x0]
+depends_on:
+  - def:primary_object
+  - lem:normal_form_for_x0
 ---
 
 **Source Note.** Barbasch, Section 3, Theorem 3.4, pp. 45-47.
@@ -1256,7 +1260,7 @@ to occur in the first place:
    newline-normalized). Same state → same hash on every machine, every
    run. Deterministic.
 
-8. **Generator batch atomicity** (§3.6.2). Multi-node generator output
+8. **Generator batch atomicity** (§3.7.2). Multi-node generator output
    is one atomic `generator.batch_committed` event. Librarian never
    sees partial batches — count updates for all batch nodes happen
    together or not at all.
@@ -1276,21 +1280,24 @@ bugs if they happen.
 
 #### 5.5.1 Auditability of `pass_count`
 
-`pass_count` stored in Node is a cache of a value that can be
-**independently recomputed from the event stream**:
+`pass_count` stored in Node is a cache whose correctness can be
+**independently verified against the event stream**:
 
 ```
 audit_count(node) =
+  # node.kind and node.verification_hash come from current KB state;
+  # the event stream provides all facts needed to recompute the count.
+
   if node.proof is empty and node.kind in [lemma, theorem, proposition]:
     return -1  (proof-requiring node without proof ⇒ needs generator)
-  
+
   matching_verdicts = [
     e for e in events if
     e.type == "verifier.run_completed" and
     e.target == node.label and
     e.payload.verification_hash == node.verification_hash
   ]
-  
+
   if matching_verdicts is empty:
     return 0  (has proof but not yet verified against current hash)
 
@@ -1302,13 +1309,17 @@ audit_count(node) =
   return count(e in matching_verdicts if e.verdict == "accepted")
 ```
 
+**Inputs needed:** `node.kind`, `node.verification_hash`, and `node.proof`
+must be read from current Kuzu state; all other inputs (the event facts)
+come from `events/`. The audit is therefore a join of the event stream
+with the current node snapshot.
+
 Linter's audit check: for every node, recompute `audit_count` from the
 event stream and assert it equals the stored `Node.pass_count`.
 Drift = librarian bug or corruption.
 
-This makes the stored count a **verifiable** value. Anyone can reconstruct
-it by reading `events/` alone. The count field is there for query speed,
-not for correctness.
+This makes the stored count a **verifiable** value. The count field is
+there for query speed, not for correctness.
 
 **Design observation — why "last verdict" and "any gap poisons" are
 equivalent in practice:**
@@ -1343,10 +1354,17 @@ audit_repair_count(node) =
       e.type == "verifier.run_completed" and
       e.target == node.label and
       e.iso_ms > T and
-      e.applied_event.status == "applied" and
+      AppliedEvent[e.event_id].status == "applied" and
       e.verdict in ("gap", "critical")
   )
 ```
+
+**Implementation note:** `AppliedEvent` is a Kuzu table, not part of the
+event body. The audit computation must join the event stream (read from
+`events/`) with the `AppliedEvent` table (read from Kuzu via
+`common/kb`). Concretely: iterate events from `events/`, and for each
+candidate check `kb.applied_event_status(e.event_id) == "applied"`.
+The join is efficient because `AppliedEvent.event_id` is the primary key.
 
 Linter asserts `audit_repair_count(node) == Node.repair_count` for
 every node. Drift = librarian bug.
@@ -2192,8 +2210,8 @@ every loop iteration and whenever in-flight job state changes. Minimum fields:
 {
   "schema": "rethlas-coordinator-v1",
   "pid": 12300,
-  "started_at": "2026-04-24T10:03:10.000+08:00",
-  "updated_at": "2026-04-24T14:05:12.000+08:00",
+  "started_at": "2026-04-24T02:03:10.000Z",
+  "updated_at": "2026-04-24T06:05:12.000Z",
   "status": "running | idle | degraded | stopping",
   "loop_seq": 1829,
   "desired_pass_count": 3,
@@ -2205,12 +2223,12 @@ every loop iteration and whenever in-flight job state changes. Minimum fields:
   "idle_reason_code": "",
   "idle_reason_detail": "",
   "user_blocked_count": 1,
-  "generation_dep_blocked_count": 4,
+  "generation_blocked_on_dependency_count": 4,
   "verification_dep_blocked_count": 7,
   "repair_spinning_count": 2,
   "recent_hash_mismatch_count": 3,
   "children": {
-    "librarian": {"pid": 12346, "status": "running", "updated_at": "2026-04-24T14:05:11.000+08:00"},
+    "librarian": {"pid": 12346, "status": "running", "updated_at": "2026-04-24T06:05:11.000Z"},
     "dashboard": {"pid": 12348, "status": "running", "updated_at": "2026-04-24T14:05:12.000+08:00"}
   }
 }
@@ -2229,7 +2247,7 @@ dashboard's loop-level explanation. Phase I codes:
 - `all_done` — no unfinished nodes remain
 - `user_blocked` — unfinished work exists, but only definition /
   external_theorem revisions by the user can unblock it
-- `generation_dep_blocked` — proof-requiring nodes need generator, but some of
+- `generation_blocked_on_dependency` — proof-requiring nodes need generator, but some of
   their explicit deps are still absent from `nodes/`
 - `verification_dep_blocked` — verifier candidates exist, but strict-monotone
   dependency conditions are not yet satisfied
