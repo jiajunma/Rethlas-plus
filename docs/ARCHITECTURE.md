@@ -96,10 +96,12 @@ Rethlas/
 └── runtime/                        # ephemeral, gitignored
     ├── jobs/                       # one file per in-flight job
     │   └── {job_id}.json           # pid, kind, target, mode, dispatch_hash,
-    │                               # started_at, status
+    │                               # started_at, updated_at, status
     ├── logs/
     │   └── {job_id}.codex.log      # Codex subprocess stdout
     └── state/
+        ├── coordinator.json        # coordinator heartbeat / queue summary
+        ├── librarian.json          # librarian heartbeat / projection summary
         ├── rejected_writes.jsonl   # recent decoder/admission rejections
         └── drift_alerts.jsonl      # rare hash/runtime drift alerts
                                     # (both surfaced via dashboard)
@@ -1737,6 +1739,66 @@ Dashboard must make this obvious.
 Coordinator writes no truth events in Phase I. Dispatch, start, timeout, and
 crash records are runtime state only.
 
+#### 6.4.2 Runtime status publication
+
+Coordinator does **not** expose an HTTP server in Phase I. Instead it publishes
+its runtime status to local files that dashboard can read. This keeps
+coordination logic decoupled from UI serving while still making liveness and
+queue state observable.
+
+`runtime/state/coordinator.json` is rewritten atomically (`.tmp` + rename) on
+every loop iteration and whenever in-flight job state changes. Minimum fields:
+
+```json
+{
+  "updated_at": "2026-04-24T14:05:12Z",
+  "status": "running | idle | degraded | stopping",
+  "loop_seq": 1829,
+  "desired_pass_count": 3,
+  "active_generator_jobs": 1,
+  "active_verifier_jobs": 3,
+  "dispatchable_generator_count": 2,
+  "dispatchable_verifier_count": 5,
+  "unfinished_node_count": 19,
+  "idle_reason_code": "",
+  "idle_reason_detail": "",
+  "user_blocked_count": 1,
+  "generation_dep_blocked_count": 4,
+  "verification_dep_blocked_count": 7,
+  "repair_spinning_count": 2,
+  "recent_hash_mismatch_count": 3
+}
+```
+
+Interpretation:
+- `running`: loop healthy and making scheduling decisions
+- `idle`: healthy, but currently no dispatchable work
+- `degraded`: loop alive but runtime anomaly detected (for example stale job or
+  drift alert recorded)
+- `stopping`: graceful shutdown in progress
+
+`idle_reason_code` is machine-readable and is the **source of truth** for
+dashboard's loop-level explanation. Phase I codes:
+- `""` — not idle
+- `all_done` — no unfinished nodes remain
+- `user_blocked` — unfinished work exists, but only definition /
+  external_theorem revisions by the user can unblock it
+- `generation_dep_blocked` — proof-requiring nodes need generator, but some of
+  their explicit deps are still absent from `nodes/`
+- `verification_dep_blocked` — verifier candidates exist, but strict-monotone
+  dependency conditions are not yet satisfied
+- `in_flight_only` — no new dispatch is possible because current in-flight jobs
+  are the only remaining source of progress
+- `corruption_or_drift` — loop is intentionally not dispatching because runtime
+  drift / projection inconsistency needs operator attention
+
+Dashboard may use `idle_reason_detail` as human-facing prose, but it should not
+infer scheduler meaning from free text.
+
+Dashboard uses `updated_at` age to classify coordinator health. If the file is
+missing or stale, dashboard marks coordinator health degraded/down but still
+renders the last truth-derived KB state.
+
 If a generator batch fails pre-publication admission (for example due to a
 dependency cycle, unresolved reference, kind immutability violation, or
 malformed batch), the entire batch is discarded and **no truth event is
@@ -1816,6 +1878,40 @@ event from scratch. This is the authoritative reset.
 Librarian writes no truth events in Phase I. `AppliedEvent` is a Kuzu
 projection table, not a truth log.
 
+`runtime/state/librarian.json` is rewritten atomically on startup,
+after each event projection attempt, periodically while idle (every
+30 s), and on entry / exit of a full rebuild. Minimum fields:
+
+```json
+{
+  "schema": "rethlas-librarian-v1",
+  "pid": 12346,
+  "started_at": "2026-04-24T10:03:11.003+08:00",
+  "updated_at": "2026-04-24T14:05:11.000+08:00",
+  "status": "running | idle | degraded | rebuilding",
+  "last_seen_event_id": "20260424T140500.000-0001-a1b2c3d4e5f6a7b8",
+  "last_applied_event_id": "20260424T140500.000-0001-a1b2c3d4e5f6a7b8",
+  "events_applied_total": 1284,
+  "events_apply_failed_total": 7,
+  "projection_backlog": 0,
+  "rebuild_in_progress": false,
+  "last_rebuild_at": null,
+  "last_error": ""
+}
+```
+
+- `projection_backlog` = number of files in `events/` without a
+  matching `AppliedEvent` row. Dashboard displays as "librarian
+  catching up" when > 0.
+- `rebuild_in_progress` flips to `true` before librarian unlinks
+  `dag.kz/` during `rethlas rebuild`, and back to `false` after the
+  replay finishes. Dashboard serves 503 for Kuzu-dependent endpoints
+  while it is `true` (see §6.7.1).
+
+Dashboard uses this file for librarian liveness and projection
+progress. The canonical projection watermark remains in Kuzu /
+`AppliedEvent`; this JSON is a read-only observability cache.
+
 ### 6.6 Linter
 
 Read-only audit. Phase I scope:
@@ -1851,10 +1947,47 @@ The old `integration/rethlas/status_dashboard.py` got one high-level thing
 right: the dashboard is an **observer**, not part of the proving loop. Phase I
 keeps that separation:
 
+- Dashboard is the **only** Phase I component that exposes HTTP to the browser
+- Browser talks only to dashboard
+- Coordinator and librarian expose **no** HTTP API
 - Dashboard restart must not restart coordinator, librarian, generator, or verifier
 - Coordinator / supervisor health logic must not depend on dashboard availability
 - Dashboard reads KB + runtime state only
 - No control actions from the dashboard in Phase I
+
+More precisely, dashboard is the **read-only observability layer for
+coordinator**. It exists to show the scheduler's published internal state, not
+to recompute or second-guess the scheduler from scratch.
+
+**Integration contract:** dashboard does **not** sync with coordinator through
+RPC. It builds its view by reading local state that other components publish
+atomically:
+
+- `knowledge_base/dag.kz` for current node / dependency / `AppliedEvent` state
+- `runtime/state/coordinator.json` for coordinator liveness and queue summary
+- `runtime/state/librarian.json` for librarian liveness and projection summary
+- `runtime/jobs/*.json` for active generator / verifier jobs
+- `runtime/logs/*.codex.log` for real-time log age / stale-job heuristics
+- `runtime/state/rejected_writes.jsonl` and `runtime/state/drift_alerts.jsonl`
+  for operator-visible alerts
+- `events/` only for recent truth browsing / drilldown, not for primary live
+  status
+
+Dashboard then exposes its **own** read-only API (`/api/*`) and SSE stream to
+the browser. SSE events are emitted by dashboard after local polling / file
+watching; coordinator never pushes directly to browsers.
+
+**Source-of-truth split:**
+- **Coordinator runtime truth**: `runtime/state/coordinator.json` and
+  `runtime/jobs/*.json`
+- **Projection / mathematical truth**: `knowledge_base/dag.kz`
+- **Dashboard's job**: present coordinator's published runtime state, then use
+  Kuzu to explain which nodes / theorems that runtime state refers to
+
+Dashboard should therefore avoid re-implementing scheduler decisions whenever a
+machine-readable coordinator field already exists. For example, loop-level
+"why are we idle?" comes from `idle_reason_code`, not from dashboard rerunning
+the coordinator policy over Kuzu.
 
 The old dashboard also surfaced rich proof-session statuses such as
 `provisional`, `invalidated`, and per-pass section summaries. Those were useful
@@ -1863,16 +1996,16 @@ new event-sourced model as stored state. In Phase I, dashboard status labels are
 derived only from current node fields, dependency relations, and runtime jobs.
 
 **Primary page layout (`GET /`):**
-- **Health**: librarian/coordinator/dashboard process health, active job counts,
-  recent event timestamp, recent drift alerts, recent admission failures
-- **Progress**: theorem counts by `pass_count` band, active jobs, desired pass
-  threshold, recent truth activity
+- **Coordinator Health**: coordinator status, age of `coordinator.json`,
+  librarian status, active job counts, recent event timestamp
+- **Current Scheduling State**: dispatchable counts, unfinished count,
+  `idle_reason_code`, blocked-count summary, recent hash-mismatch rate
+- **Active Jobs**: all in-flight runtime jobs with target, kind, mode,
+  dispatch hash, started time, elapsed time, latest log age, and stale flag
 - **Human Attention**: user-blocked nodes, repeated-no-progress repair episodes,
-  rejected writes, drift alerts
-- **Theorem Table**: all `kind=theorem` nodes with current derived status,
+  drift alerts, admission failures
+- **Affected Theorems**: all `kind=theorem` nodes with current derived status,
   `pass_count`, dependency counts, and latest verdict summary
-- **Active Work**: all in-flight runtime jobs with target, kind, mode,
-  dispatch hash, started time, elapsed time, and latest log age
 
 **Per-node detail (`GET /api/node/{label}` and linked drilldown view):**
 - current authored state: label, kind, statement, proof presence, remark,
@@ -1888,17 +2021,32 @@ derived only from current node fields, dependency relations, and runtime jobs.
 - `verified`: `1 <= pass_count < DESIRED_COUNT`
 - `needs_verification`: `pass_count = 0` and verifier-dispatchable now
 - `blocked_on_dependency`: `pass_count = 0` but some dependency is not strictly ahead
-- `needs_generation`: proof-requiring node with `pass_count = -1`
+- `needs_generation`: proof-requiring node with `pass_count = -1` and all
+  explicit deps already visible in `nodes/`
+- `generation_blocked_on_dependency`: proof-requiring node with
+  `pass_count = -1`, but generator cannot yet run because some explicit dep is
+  still below `pass_count = 1`
 - `user_blocked`: `definition` / `external_theorem` with `pass_count = -1`
 - `in_flight`: runtime job currently active on the node (rendered as an overlay,
   not a replacement for the underlying mathematical state)
 
 This keeps the UI expressive without re-introducing a stored status enum.
 
+**Runtime job contract for dashboard visibility:** each in-flight
+`runtime/jobs/{job_id}.json` record must include at least
+`job_id`, `kind`, `target`, `mode`, `dispatch_hash`, `pid`, `started_at`,
+`updated_at`, `status`, and `log_path`. Coordinator creates the file at
+dispatch time; the wrapper updates `updated_at` / `status` during execution; the
+file is removed when the job is no longer in-flight.
+
 Pages:
 - `GET /` — workspace overview (health + progress + human attention + theorem table + active work)
-- `GET /api/overview` — JSON payload backing the main page
-- `GET /api/theorems` — JSON: all `kind=theorem` nodes with dashboard-derived status
+- `GET /api/coordinator` — raw coordinator snapshot from
+  `runtime/state/coordinator.json`
+- `GET /api/overview` — JSON payload backing the main page; combines raw
+  coordinator runtime state with KB enrichment
+- `GET /api/theorems` — enriched view: all `kind=theorem` nodes with
+  dashboard-derived status and links back to the relevant coordinator state
 - `GET /api/active` — JSON: currently in-flight runtime jobs
 - `GET /api/attention` — JSON: nodes / runtime alerts that need human attention
 - `GET /api/rejected` — JSON: recent runtime admission failures
@@ -1934,6 +2082,213 @@ and without coupling scheduler correctness to UI-only concepts.
 
 Phase II will add interactive DAG visualization (Cytoscape.js) and Blueprint
 LaTeX export.
+
+### 6.7.1 Runtime interface contract
+
+This subsection pins down the schemas, writers, and lifecycles for
+every `runtime/` artifact dashboard consumes. These are **not** truth
+(§3.1) — they are observability state. Nothing here is recoverable
+from events; it is recomputed as services run.
+
+#### Coordinator and librarian state files
+
+Schemas, writers, and cadences are defined where the writing component
+is specified:
+
+- `runtime/state/coordinator.json` — §6.4.2
+- `runtime/state/librarian.json` — §6.5 (end of section)
+
+Both files are rewritten atomically (`.tmp` + rename). Dashboard reads
+them for liveness and scheduling-state display; no other component
+reads them.
+
+**Staleness thresholds (dashboard-only):**
+
+| `now - updated_at` | Dashboard label for that component |
+| --- | --- |
+| `<= 60 s` | `healthy` |
+| `60 s < age <= 5 min` | `degraded` (yellow) |
+| `> 5 min` or file missing | `down` (red) |
+
+These thresholds are dashboard UI classifications only; the
+components themselves do not self-reap based on them.
+
+#### In-flight job: `runtime/jobs/{job_id}.json`
+
+**Writer:** coordinator creates at dispatch. Wrapper updates
+`updated_at`, `status` during execution. Terminal state writer = whoever
+detects termination (wrapper on clean exit, coordinator's
+stuck-detection on timeout / orphan cleanup).
+
+```json
+{
+  "schema": "rethlas-job-v1",
+  "job_id": "ver-20260424T100420.111-a7b2c912d4f1e380",
+  "kind": "verifier",
+  "target": "lem:block_form_for_x0_plus_u",
+  "mode": "single",
+  "dispatch_hash": "sha256:...verification_hash_at_dispatch...",
+  "pid": 23491,
+  "pgid": 23491,
+  "started_at": "2026-04-24T10:04:20.111+08:00",
+  "updated_at": "2026-04-24T10:04:25.300+08:00",
+  "status": "running",
+  "log_path": "runtime/logs/ver-20260424T100420.111-a7b2c912d4f1e380.codex.log"
+}
+```
+
+`kind ∈ {"generator", "verifier"}`. `mode`: for generator it is the
+dispatch mode (`fresh` / `repair`); for verifier it is `single` in
+Phase I.
+
+`status` enumeration (Phase I):
+- `starting` — coordinator wrote the file, wrapper has not yet started
+  the Codex subprocess
+- `running` — Codex subprocess is live; wrapper is monitoring
+- `publishing` — Codex finished; wrapper is staging / publishing truth
+  event (brief)
+- `applied` — librarian has projected the resulting truth event with
+  `status = applied`
+- `apply_failed` — librarian projected with `status = apply_failed`
+  (reason carried in AppliedEvent row; wrapper mirrors the code here
+  for dashboard convenience)
+- `timed_out` — coordinator killed the process group due to
+  `log_mtime > 30 min`
+- `crashed` — subprocess exited non-zero before publishing
+- `orphaned` — coordinator's stuck-detection detected a job file whose
+  pid no longer exists and no terminal state was written
+
+`log_path` is redundant with `job_id` (always
+`runtime/logs/{job_id}.codex.log`) but stored explicitly so dashboard
+does not need to know the derivation rule.
+
+**Job file lifecycle:**
+
+1. Coordinator creates the file with `status = "starting"` (atomic
+   `.tmp` + rename) just before spawning the wrapper process.
+2. Wrapper updates `status` through the enumeration above as it
+   progresses. Every update is an atomic `.tmp` + rename.
+3. On clean terminal state (`applied` / `apply_failed`), the **wrapper**
+   writes the final status and then deletes the job file.
+4. On `timed_out`, **coordinator**'s liveness monitor writes the final
+   status and deletes the file after sending SIGINT/SIGKILL.
+5. **Orphan reaper:** coordinator, on each loop tick, scans
+   `runtime/jobs/*.json` for files whose `pid` is not alive and whose
+   `updated_at` is older than 5 minutes, writes `status = "orphaned"`,
+   and deletes. This is the backstop for wrapper crashes.
+
+Dashboard reads job files directly; they are transient, so dashboard
+never treats a job file as authoritative beyond what
+`AppliedEvent` says about the corresponding event once it has been
+published.
+
+#### Append-only runtime logs
+
+**`runtime/state/rejected_writes.jsonl`**: one line per admission
+rejection (§3.1.6). Written by the rejecting producer's admission
+layer. Schema per line:
+
+```json
+{
+  "schema": "rethlas-rejection-v1",
+  "ts": "2026-04-24T10:04:20.111+08:00",
+  "actor": "generator:codex-gpt-5.4-xhigh",
+  "event_type_attempted": "generator.batch_committed",
+  "target": "thm:foo",
+  "reason": "prefix_kind_mismatch",
+  "detail": "label thm:bar declared kind=lemma"
+}
+```
+
+**`runtime/state/drift_alerts.jsonl`**: one line per pre-dispatch
+drift detection (§5.5.2) or librarian-internal sanity failure. Same
+line format (reuses `schema`, `ts`, `actor`, `target`, `reason`,
+`detail`).
+
+**Retention (Phase I):** both JSONL files are append-only and
+**never rotated automatically**. `rethlas rebuild` truncates them.
+Operator may truncate manually when they grow large. Phase II can add
+size-based rotation.
+
+#### Linter report: `runtime/state/linter_report.json`
+
+**Writer:** `rethlas linter` on each invocation (overwrites previous).
+Schema: `{ schema, ts, a: {violations}, b: {violations}, c: {violations}, d: {violations}, summary }`. Consumed by CI, dashboard (if present).
+
+#### SSE stream `/events/stream`
+
+Dashboard is the **only** SSE emitter. Mechanism:
+
+1. Dashboard uses `watchdog` (or platform equivalent) to watch
+   `events/**/*.json`, `runtime/jobs/*.json`, and
+   `runtime/state/*.json` for file creation / modification events.
+2. On filesystem notification, dashboard emits an SSE message with a
+   typed envelope:
+
+```json
+{
+  "type": "truth_event | applied_event | job_change | coordinator_tick | librarian_tick | alert",
+  "ts": "2026-04-24T10:04:25.300+08:00",
+  "payload": { ... }
+}
+```
+
+   - `truth_event`: new file appeared under `events/`; payload =
+     parsed event body + event_id.
+   - `applied_event`: a new row appeared in Kuzu `AppliedEvent`
+     (detected via librarian's heartbeat tick and a bounded tail
+     query); payload = `{event_id, status, reason}`.
+   - `job_change`: a file under `runtime/jobs/` was created, updated,
+     or deleted; payload = job snapshot (or `{job_id, status:
+     "terminated"}` on delete).
+   - `coordinator_tick` / `librarian_tick`: the corresponding state
+     file changed; payload = the fresh snapshot.
+   - `alert`: a new line in `rejected_writes.jsonl` or
+     `drift_alerts.jsonl`; payload = the line.
+3. SSE clients reconnect natively on drop (standard SSE); dashboard
+   resumes from "now" and does not replay history — browser can call
+   REST endpoints for backlog.
+
+Dashboard does **not** push state changes from inside coordinator /
+librarian / wrappers. All emission happens via file system → dashboard
+→ SSE, so component isolation (§6.7) is preserved.
+
+#### `/api/events` query strategy
+
+Dashboard walks `events/` in reverse chronological order: it reads
+directory entries date-shard by date-shard (newest first), sorts each
+shard's filenames, and streams filenames until `limit` have been
+collected. `AppliedEvent` provides the `status` enrichment via a
+single Kuzu `WHERE event_id IN (...)` query after the filenames are
+chosen. No separate "recent events" projection table is maintained.
+
+Phase II may add an index if Phase I profiling shows this scan is
+slow at realistic workspace size.
+
+#### Dashboard binding
+
+Default bind: `127.0.0.1:8765`. No authentication in Phase I.
+Configurable via `rethlas.toml [dashboard] bind = "<host>:<port>"`
+and CLI flag `--bind`. Binding to a non-loopback address is opt-in
+and logs a startup warning since Phase I has no auth.
+
+#### Behavior while `rethlas rebuild` runs
+
+Librarian writes `librarian.json` with `rebuild_in_progress = true`
+before unlinking `dag.kz/`. Dashboard observes this and returns HTTP
+`503 Service Unavailable` with
+`Retry-After: 5` and a JSON body `{"status": "rebuild_in_progress"}`
+for any endpoint that depends on Kuzu (`/api/overview`,
+`/api/theorems`, `/api/node/...`, `/api/rejected`). Non-Kuzu endpoints
+(`/api/coordinator`, `/api/active`, raw `/events/stream`) stay up.
+
+#### Kuzu concurrent-read note
+
+Librarian is the single writer; dashboard, coordinator, and linter
+are readers. Kuzu embedded supports concurrent readers with a single
+writer, but individual queries may observe brief latency spikes
+during librarian's transaction commit. Phase I accepts this; Phase II
+may adopt MVCC-style read snapshots if UI responsiveness warrants.
 
 ### 6.8 Common library
 
@@ -1990,8 +2345,9 @@ codex exec \
 process group (`os.killpg`), waits 10s, then SIGKILL and marks the runtime
 job timed out.
 
-No separate heartbeat file. No status JSON. Log file mtime is the only
-signal.
+For **Codex subprocess liveness only**, Phase I adds no separate per-job
+heartbeat file beyond the runtime job record; log file mtime is the decisive
+liveness signal.
 
 ### 7.5 Permissions enforced vs convention
 
@@ -2427,3 +2783,40 @@ See `PHASE1.md` for the concrete task list.
     Protocol's `count_repair_attempts(label, hash)` renamed to
     `repair_count(label)`. Linter category D audits this field
     against event-stream replay.
+- **2026-04-24 (evening review, dashboard D1–D8)**:
+  - New §6.7.1 "Runtime interface contract" consolidates all
+    runtime-file schemas, writers, and lifecycles that dashboard
+    depends on.
+  - Extended §6.5 librarian.json schema: adds `pid`, `started_at`,
+    `events_applied_total`, `events_apply_failed_total`,
+    `projection_backlog`, `rebuild_in_progress`, `last_rebuild_at`.
+  - Pinned down `runtime/jobs/{job_id}.json` schema (schema, job_id,
+    kind, target, mode, dispatch_hash, pid, pgid, started_at,
+    updated_at, status, log_path) and `status` enum (starting /
+    running / publishing / applied / apply_failed / timed_out /
+    crashed / orphaned).
+  - Job file lifecycle pinned: coordinator creates, wrapper updates,
+    wrapper/coordinator writes terminal status then deletes;
+    coordinator runs a per-tick orphan reaper for wrappers that
+    crashed before writing a terminal state.
+  - SSE envelope schema (`type` + `ts` + `payload`) and event types
+    (truth_event / applied_event / job_change / coordinator_tick /
+    librarian_tick / alert). Dashboard is the sole SSE emitter; all
+    emissions come from its own file-watching, preserving component
+    isolation.
+  - `/api/events` query strategy: reverse-chronological shard walk
+    in `events/`, no separate index maintained in Phase I.
+  - Dashboard bind: default `127.0.0.1:8765`; configurable via
+    `rethlas.toml [dashboard] bind` and `--bind`; non-loopback binds
+    log a startup warning (Phase I has no auth).
+  - `rethlas rebuild` behavior: librarian sets
+    `rebuild_in_progress = true` before unlinking `dag.kz/`;
+    dashboard returns 503 `Retry-After: 5` for Kuzu-dependent
+    endpoints while it is `true`; non-Kuzu endpoints stay up.
+  - Kuzu concurrent-read note: librarian single writer, other
+    components read; brief latency spikes during commit accepted in
+    Phase I.
+  - Staleness thresholds (dashboard UI only): `<= 60 s` healthy,
+    `60 s < age <= 5 min` degraded, `> 5 min` / missing down. Same
+    thresholds for coordinator.json and librarian.json.
+  - Phase I M6.3 (new) and M7.1-7.5 updated to cover the contract.

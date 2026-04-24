@@ -338,17 +338,28 @@ Librarian increments `pass_count` on accepted; sets to -1 on gap/critical.
 - Read KB + runtime jobs
 - Compute dispatches via policy
 - For each dispatch: acquire budget slot, launch wrapper subprocess,
-  record runtime job file under `runtime/jobs/`
+  record runtime job file under `runtime/jobs/{job_id}.json` per
+  ARCHITECTURE §6.7.1 schema (schema, job_id, kind, target, mode,
+  dispatch_hash, pid, pgid, started_at, updated_at, status, log_path)
 - Monitor in-flight dispatches (via codex log mtime)
-- On timeout: kill process group; mark runtime job timed out
+- On timeout: kill process group; write `status = "timed_out"` to the
+  job file, then delete it
+- Orphan reaper: each loop tick scan `runtime/jobs/*.json` for files
+  whose pid is not alive and `updated_at` older than 5 minutes;
+  write `status = "orphaned"` and delete
 - Check global stop condition: all nodes (including definitions and
   external_theorems) have `pass_count >= DESIRED_COUNT` — matches
   ARCHITECTURE §10.1 / §6.4
 
-**M6.3** `coordinator/supervise.py` — launch and monitor long-running
+**M6.3** `coordinator/status_writer.py` — publish
+`runtime/state/coordinator.json` per ARCHITECTURE §6.4.2 schema. Called
+at the end of every loop tick (atomic `.tmp` + rename). Fields include
+`idle_reason_code` from the §6.4.2 enumeration.
+
+**M6.4** `coordinator/supervise.py` — launch and monitor long-running
 children (librarian, coordinator loop, dashboard)
 
-**M6.4** `cli/supervise.py` — `rethlas supervise`
+**M6.5** `cli/supervise.py` — `rethlas supervise`
 
 Milestone exit: `rethlas supervise` in a workspace with some user events
 drives the generator-verifier loop autonomously.
@@ -357,22 +368,53 @@ drives the generator-verifier loop autonomously.
 
 ## M7 — Dashboard (Phase I linear)
 
-**M7.1** `dashboard/server.py` — FastAPI app
-- `GET /` — HTML overview (goals + health + recent activity)
-- `GET /api/goals` — JSON
-- `GET /api/active` — JSON
-- `GET /api/events?limit=N&actor=&type=` — JSON
-- `GET /api/node/{label}` — JSON
-- `GET /events/stream` — SSE
+Implements the read-only observability layer per ARCHITECTURE §6.7
+and the runtime interface contract §6.7.1.
 
-**M7.2** `dashboard/templates/` — minimal HTML (vanilla, no React)
+**M7.1** `dashboard/server.py` — FastAPI app, all endpoints per
+ARCHITECTURE §6.7 "Pages":
+- `GET /` — HTML overview (coordinator health + scheduling state +
+  active jobs + human attention + affected theorems)
+- `GET /api/coordinator` — raw `runtime/state/coordinator.json`
+- `GET /api/overview` — JSON backing main page (Kuzu + runtime joined)
+- `GET /api/theorems` — enriched theorem list with derived status
+  vocabulary (§6.7)
+- `GET /api/active` — enumerates `runtime/jobs/*.json`
+- `GET /api/attention` — nodes needing human intervention (user-blocked
+  definitions, high `repair_count` proof-requiring nodes, drift alerts)
+- `GET /api/rejected` — merges `runtime/state/rejected_writes.jsonl`,
+  recent `AppliedEvent(status=apply_failed)` rows, and
+  `runtime/state/drift_alerts.jsonl`
+- `GET /api/events?limit=N&actor=&type=` — reverse-chronological walk
+  of `events/` per §6.7.1 "/api/events query strategy"
+- `GET /api/node/{label}` — full node info (Kuzu node + related events)
+- `GET /events/stream` — SSE per §6.7.1 envelope schema
+
+**M7.2** `dashboard/state_watcher.py` — file-watching layer
+- `watchdog` on `events/**/*.json`, `runtime/jobs/*.json`,
+  `runtime/state/*.json`
+- Fans out file notifications as typed SSE envelopes per §6.7.1
+- Applies dashboard staleness thresholds (60 s `degraded`, 5 min
+  `down`) to coordinator / librarian liveness classification
+
+**M7.3** `dashboard/kuzu_reader.py` — read-only Kuzu access via
+`common/kb`. Handles `rebuild_in_progress` by returning a 503-able
+sentinel so M7.1 endpoints can short-circuit.
+
+**M7.4** `dashboard/templates/` — minimal HTML (vanilla, no React)
 - Uses fetch + SSE from JS
-- Renders linear lists (goals table, active work table, event timeline,
-  node detail side panel)
+- Renders linear sections from §6.7: Coordinator Health, Current
+  Scheduling State, Active Jobs, Human Attention, Affected Theorems
 
-**M7.3** `cli/dashboard.py` — `rethlas dashboard --port 8765`
+**M7.5** `cli/dashboard.py` — `rethlas dashboard [--bind HOST:PORT]`
+- Default bind `127.0.0.1:8765`
+- Non-loopback binds log a startup warning (no auth in Phase I)
+- Config fallback: `rethlas.toml [dashboard] bind`
 
-Milestone exit: browser at `localhost:8765` shows workspace state.
+Milestone exit: browser at `localhost:8765` shows workspace state;
+during `rethlas rebuild` Kuzu-dependent endpoints return 503 with
+`Retry-After: 5`; coordinator / librarian JSON age is reflected as
+healthy / degraded / down badges.
 
 ---
 
@@ -442,13 +484,13 @@ M2 — CLI skeleton (3 tasks)
 M3 — Librarian (5 tasks)
 M4 — Generator (6 tasks)
 M5 — Verifier (6 tasks)
-M6 — Coordinator (4 tasks)
-M7 — Dashboard (3 tasks)
+M6 — Coordinator (5 tasks)
+M7 — Dashboard (5 tasks)
 M8 — Linter (3 tasks)
 M9 — End-to-end (3 tasks)
 ```
 
-Total: ~52 concrete tasks.
+Total: ~55 concrete tasks.
 
 ---
 
