@@ -49,6 +49,10 @@ from common.runtime.spawn import spawn_wrapper
 from common.runtime.startup import cleanup_runtime
 from coordinator.applied_poller import reconcile_publishing_jobs
 from coordinator.children import LibrarianChild, spawn_librarian
+from coordinator.dashboard_child import (
+    DashboardSupervisor,
+    STATUS_DEGRADED as DASHBOARD_STATUS_DEGRADED,
+)
 from coordinator.dispatcher import (
     GeneratorCandidate,
     VerifierCandidate,
@@ -117,6 +121,7 @@ class CoordinatorState:
     stopping: bool = False
     pending_corruption: bool = False
     last_corruption_detail: str = ""
+    dashboard: DashboardSupervisor | None = None
 
     def __post_init__(self) -> None:
         if self.in_flight_workers is None:
@@ -131,7 +136,14 @@ class CoordinatorState:
 def _collect_children(
     state: "CoordinatorState", lib_pid: int, lib_status: str
 ) -> dict[str, dict[str, Any]]:
-    """Assemble the §6.4.2 ``children`` dict from on-disk heartbeats."""
+    """Assemble the §6.4.2 ``children`` dict.
+
+    Librarian status comes from the live child handle. Dashboard status
+    comes from :class:`DashboardSupervisor` when the coordinator is
+    managing the dashboard child (PHASE1 M9); otherwise we fall back
+    to reading ``dashboard.json`` so a standalone-mode dashboard is
+    still surfaced.
+    """
     children: dict[str, dict[str, Any]] = {
         "librarian": {
             "pid": lib_pid,
@@ -139,6 +151,16 @@ def _collect_children(
             "updated_at": utc_now_iso(),
         }
     }
+    if state.dashboard is not None:
+        # Coordinator-managed dashboard: supervisor is authoritative for
+        # the ``status`` (e.g. ``starting`` / ``backoff`` / ``degraded``)
+        # so the operator sees restart-then-degrade transitions.
+        children["dashboard"] = {
+            "pid": state.dashboard.child_pid(),
+            "status": state.dashboard.status,
+            "updated_at": utc_now_iso(),
+        }
+        return children
     dash_path = state.ws.runtime_state / "dashboard.json"
     try:
         raw = dash_path.read_text(encoding="utf-8")
@@ -531,6 +553,13 @@ def run_supervise(workspace: str | None) -> int:
             librarian.shutdown()
             return 3
 
+        # PHASE1 M9 — coordinator-managed dashboard child.
+        # Disabled for tiny supervise tests via env var so they don't
+        # need to bind a real port.
+        if not os.environ.get("RETHLAS_COORDINATOR_DASHBOARD_DISABLED"):
+            state.dashboard = _make_dashboard_supervisor(state)
+            state.dashboard.start()
+
         _write_heartbeat(state, status=STATUS_RUNNING)
 
         _install_signal_handlers(state)
@@ -556,6 +585,33 @@ def run_supervise(workspace: str | None) -> int:
             pass
 
 
+def _make_dashboard_supervisor(state: "CoordinatorState") -> DashboardSupervisor:
+    """Construct the supervisor with overrides honoured for tests."""
+    kwargs: dict[str, Any] = {}
+    for env_key, kw in (
+        ("RETHLAS_DASHBOARD_STARTUP_GRACE_S", "startup_grace_s"),
+        ("RETHLAS_DASHBOARD_HEARTBEAT_STALE_S", "heartbeat_stale_s"),
+        ("RETHLAS_DASHBOARD_RESTART_BACKOFF_S", "restart_backoff_s"),
+    ):
+        raw = os.environ.get(env_key)
+        if raw:
+            try:
+                kwargs[kw] = float(raw)
+            except ValueError:
+                pass
+    raw_max = os.environ.get("RETHLAS_DASHBOARD_MAX_RESTARTS")
+    if raw_max:
+        try:
+            kwargs["max_restarts"] = int(raw_max)
+        except ValueError:
+            pass
+    return DashboardSupervisor(
+        ws_root=state.ws.root,
+        bind=state.config.dashboard.bind,
+        **kwargs,
+    )
+
+
 def _tick(state: CoordinatorState) -> None:
     """One coordinator tick."""
     _forward_new_events(state)
@@ -566,6 +622,8 @@ def _tick(state: CoordinatorState) -> None:
             target=o.target, kind=o.kind, status=o.status, reason=o.reason
         )
     reap_orphans(state.ws.runtime_jobs)
+    if state.dashboard is not None:
+        state.dashboard.tick()
 
     if state.pending_corruption:
         _write_heartbeat(
@@ -711,6 +769,11 @@ def _install_signal_handlers(state: CoordinatorState) -> None:
 
 def _shutdown(state: CoordinatorState) -> None:
     _write_heartbeat(state, status=STATUS_STOPPING)
+    # PHASE1 M9: graceful shutdown order — dashboard first (read-only,
+    # fast to terminate), then drain workers, then librarian last so
+    # any final apply on workers' truth events still has a writer.
+    if state.dashboard is not None:
+        state.dashboard.shutdown()
     # Stop new dispatches, drain workers (best-effort: just wait briefly).
     deadline = time.monotonic() + 10.0
     while state.in_flight_workers and time.monotonic() < deadline:

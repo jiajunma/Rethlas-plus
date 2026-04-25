@@ -105,7 +105,12 @@ def run_dashboard(workspace: str | None, args: argparse.Namespace) -> int:
     cfg = load_config(ws.rethlas_toml)
     bind_str: str = args.bind or cfg.dashboard.bind
 
-    if _supervise_lock_held(ws.supervise_lock):
+    # When coordinator is the parent process (PHASE1 M9 child management),
+    # it holds supervise.lock itself — skipping the "lock held -> already
+    # running" early-exit so the supervisor doesn't enter a restart loop
+    # spawning dashboards that immediately exit.
+    if not os.environ.get("RETHLAS_COORDINATOR_DASHBOARD_CHILD") and \
+            _supervise_lock_held(ws.supervise_lock):
         sys.stdout.write(_BIND_HELD_MSG_TEMPLATE.format(bind=cfg.dashboard.bind))
         return 0
 

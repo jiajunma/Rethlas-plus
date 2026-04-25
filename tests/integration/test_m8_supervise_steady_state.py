@@ -51,6 +51,7 @@ def test_singleton_lock(tmp_path: Path) -> None:
     env["RETHLAS_COORDINATOR_MAX_TICKS"] = "0"  # run forever, until killed
     env["RETHLAS_LIBRARIAN_HEARTBEAT_S"] = "0.2"
     env["RETHLAS_COORDINATOR_TICK_S"] = "0.1"
+    env["RETHLAS_COORDINATOR_DASHBOARD_DISABLED"] = "1"
     proc = subprocess.Popen(
         [PYTHON, "-m", "cli.main", "--workspace", str(tmp_path), "supervise"],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -79,6 +80,7 @@ def test_supervise_writes_coordinator_json_and_idle(tmp_path: Path) -> None:
     env["RETHLAS_COORDINATOR_MAX_TICKS"] = "5"
     env["RETHLAS_LIBRARIAN_HEARTBEAT_S"] = "0.2"
     env["RETHLAS_COORDINATOR_TICK_S"] = "0.1"
+    env["RETHLAS_COORDINATOR_DASHBOARD_DISABLED"] = "1"
     env["RETHLAS_TEST_TIME_SCALE"] = "0.5"
     r = _run("--workspace", str(tmp_path), "supervise", env=env)
     assert r.returncode == 0, r.stderr
