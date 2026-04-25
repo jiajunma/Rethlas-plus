@@ -1,0 +1,509 @@
+"""Dashboard HTTP server (ARCHITECTURE §6.7 / §6.7.1).
+
+Pure Python ``http.server`` based — no third-party deps. The handler
+class is a thin shell around :class:`DashboardCore`, which holds the
+read-only logic so unit tests can exercise endpoints without a socket.
+
+Endpoint inventory (read-only):
+
+- ``GET /api/coordinator``   raw ``runtime/state/coordinator.json``
+- ``GET /api/librarian``     raw ``runtime/state/librarian.json``
+- ``GET /api/active``        in-flight ``runtime/jobs/*.json`` records
+- ``GET /api/overview``      runtime + Kuzu summary
+- ``GET /api/theorems``      ``kind=theorem`` nodes with status
+- ``GET /api/node/{label}``  full node info
+- ``GET /api/rejected``      rejected_writes + apply_failed + drift_alerts
+- ``GET /api/events?limit=N`` reverse-chronological event filenames
+- ``GET /events/stream``     SSE stream (typed envelope)
+
+While ``librarian.json.rebuild_in_progress = true`` the Kuzu-dependent
+endpoints (``/api/overview``, ``/api/theorems``, ``/api/node/{label}``,
+``/api/rejected``) return HTTP 503 + ``Retry-After: 5``. Non-Kuzu
+endpoints keep serving (§6.7.1).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import queue
+import threading
+import time
+import urllib.parse
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Iterable
+
+from common.runtime.jobs import list_jobs
+from coordinator.heartbeat import read_heartbeat as read_coordinator_hb
+from dashboard.kuzu_reader import (
+    NodeRow,
+    RebuildInProgress,
+    list_applied_failed,
+    list_nodes,
+)
+from dashboard.state import (
+    HEALTHY_S,
+    classify_theorem,
+    liveness_label,
+)
+from librarian.heartbeat import read_heartbeat as read_librarian_hb
+
+
+log = logging.getLogger("rethlas.dashboard")
+
+
+_RETRY_AFTER_S: int = 5
+# §6.7.1 `/api/events?limit=N` clamp.
+_EVENTS_LIMIT_MAX: int = 500
+_EVENTS_LIMIT_DEFAULT: int = 50
+
+
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(tz=timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _safe_read_json(path: Path) -> dict[str, Any] | None:
+    """Read a JSON file. ``None`` on any failure (missing / parse error).
+
+    Per §6.7.1, dashboard logs the parse error + path to
+    ``runtime/logs/dashboard.log`` and treats the component as ``down``
+    rather than crashing.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        log.warning("dashboard: read failed for %s: %s", path, exc)
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        log.warning("dashboard: json parse failed for %s: %s", path, exc)
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+# ---------------------------------------------------------------------------
+# Pure-logic core.
+# ---------------------------------------------------------------------------
+class DashboardCore:
+    """All endpoint logic, no HTTP. Tests instantiate this directly."""
+
+    def __init__(self, ws_root: Path, *, desired_pass_count: int = 3) -> None:
+        self.ws_root = Path(ws_root)
+        self.desired_pass_count = desired_pass_count
+
+    # --- Helpers ------------------------------------------------------
+    @property
+    def state_dir(self) -> Path:
+        return self.ws_root / "runtime" / "state"
+
+    @property
+    def jobs_dir(self) -> Path:
+        return self.ws_root / "runtime" / "jobs"
+
+    @property
+    def events_dir(self) -> Path:
+        return self.ws_root / "events"
+
+    @property
+    def coordinator_path(self) -> Path:
+        return self.state_dir / "coordinator.json"
+
+    @property
+    def librarian_path(self) -> Path:
+        return self.state_dir / "librarian.json"
+
+    def _is_rebuilding(self) -> bool:
+        hb = read_librarian_hb(self.librarian_path)
+        return bool(hb and hb.get("rebuild_in_progress"))
+
+    # --- Endpoints ----------------------------------------------------
+    def coordinator(self) -> dict[str, Any]:
+        hb = _safe_read_json(self.coordinator_path)
+        live = liveness_label(hb.get("updated_at") if hb else None)
+        return {
+            "coordinator": hb or {},
+            "liveness": live,
+        }
+
+    def librarian(self) -> dict[str, Any]:
+        hb = _safe_read_json(self.librarian_path)
+        live = liveness_label(hb.get("updated_at") if hb else None)
+        return {
+            "librarian": hb or {},
+            "liveness": live,
+        }
+
+    def active(self) -> dict[str, Any]:
+        jobs = [j.to_dict() for j in list_jobs(self.jobs_dir)]
+        return {"jobs": jobs, "count": len(jobs)}
+
+    def overview(self) -> dict[str, Any]:
+        # Kuzu-dependent.
+        nodes = list_nodes(self.ws_root)
+        in_flight_targets = {
+            j.target for j in list_jobs(self.jobs_dir)
+        }
+        passes_by_label = {n.label: n.pass_count for n in nodes}
+
+        theorem_count = 0
+        done_count = 0
+        unfinished_count = 0
+        for n in nodes:
+            if n.kind == "theorem":
+                theorem_count += 1
+            if n.pass_count >= self.desired_pass_count:
+                done_count += 1
+            else:
+                unfinished_count += 1
+
+        coord = _safe_read_json(self.coordinator_path) or {}
+        lib = _safe_read_json(self.librarian_path) or {}
+
+        return {
+            "ts": _utc_now_iso(),
+            "coordinator": {
+                "data": coord,
+                "liveness": liveness_label(coord.get("updated_at")),
+            },
+            "librarian": {
+                "data": lib,
+                "liveness": liveness_label(lib.get("updated_at")),
+            },
+            "kb": {
+                "node_count": len(nodes),
+                "theorem_count": theorem_count,
+                "done_count": done_count,
+                "unfinished_count": unfinished_count,
+            },
+            "in_flight_target_count": len(in_flight_targets),
+        }
+
+    def theorems(self) -> dict[str, Any]:
+        nodes = list_nodes(self.ws_root)
+        in_flight_targets = {j.target for j in list_jobs(self.jobs_dir)}
+        passes_by_label = {n.label: n.pass_count for n in nodes}
+
+        out: list[dict[str, Any]] = []
+        for n in nodes:
+            if n.kind != "theorem":
+                continue
+            status = classify_theorem(
+                label=n.label,
+                kind=n.kind,
+                pass_count=n.pass_count,
+                desired=self.desired_pass_count,
+                deps=list(n.deps),
+                deps_pass_counts={d: passes_by_label.get(d, -1) for d in n.deps},
+                in_flight=n.label in in_flight_targets,
+                repair_hint=n.repair_hint,
+            )
+            out.append(
+                {
+                    "label": n.label,
+                    "kind": n.kind,
+                    "pass_count": n.pass_count,
+                    "repair_count": n.repair_count,
+                    "deps": list(n.deps),
+                    "status": status,
+                }
+            )
+        out.sort(key=lambda d: d["label"])
+        return {"theorems": out, "count": len(out)}
+
+    def node_detail(self, label: str) -> dict[str, Any] | None:
+        nodes = list_nodes(self.ws_root)
+        passes_by_label = {n.label: n.pass_count for n in nodes}
+        in_flight_targets = {j.target for j in list_jobs(self.jobs_dir)}
+        for n in nodes:
+            if n.label != label:
+                continue
+            status = classify_theorem(
+                label=n.label,
+                kind=n.kind,
+                pass_count=n.pass_count,
+                desired=self.desired_pass_count,
+                deps=list(n.deps),
+                deps_pass_counts={d: passes_by_label.get(d, -1) for d in n.deps},
+                in_flight=n.label in in_flight_targets,
+                repair_hint=n.repair_hint,
+            )
+            return {
+                "label": n.label,
+                "kind": n.kind,
+                "statement": n.statement,
+                "proof": n.proof,
+                "pass_count": n.pass_count,
+                "repair_count": n.repair_count,
+                "statement_hash": n.statement_hash,
+                "verification_hash": n.verification_hash,
+                "repair_hint": n.repair_hint,
+                "verification_report": n.verification_report,
+                "deps": list(n.deps),
+                "status": status,
+            }
+        return None
+
+    def rejected(self) -> dict[str, Any]:
+        rejected_writes = _read_jsonl_tail(
+            self.state_dir / "rejected_writes.jsonl", limit=200
+        )
+        drift = _read_jsonl_tail(
+            self.state_dir / "drift_alerts.jsonl", limit=200
+        )
+        apply_failed = list_applied_failed(self.ws_root)
+        return {
+            "rejected_writes": rejected_writes,
+            "apply_failed": apply_failed,
+            "drift_alerts": drift,
+        }
+
+    def events(self, limit: int) -> dict[str, Any]:
+        # §6.7.1: walk events/{YYYY-MM-DD}/*.json reverse-chronologically.
+        out: list[dict[str, Any]] = []
+        if not self.events_dir.is_dir():
+            return {"events": out, "count": 0, "limit": limit}
+        # Each shard is a directory whose name sorts chronologically.
+        shards = sorted(
+            (p for p in self.events_dir.iterdir() if p.is_dir()),
+            reverse=True,
+        )
+        for shard in shards:
+            if len(out) >= limit:
+                break
+            files = sorted(shard.glob("*.json"), reverse=True)
+            for f in files:
+                if len(out) >= limit:
+                    break
+                out.append({"event_id": f.stem.split("--")[-1], "filename": f.name, "shard": shard.name})
+        return {"events": out, "count": len(out), "limit": limit}
+
+
+def _read_jsonl_tail(path: Path, *, limit: int) -> list[dict[str, Any]]:
+    """Read the last ``limit`` JSON lines from ``path``. Empty list on missing."""
+    if not path.is_file():
+        return []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out: list[dict[str, Any]] = []
+    for line in lines[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# SSE broadcaster.
+# ---------------------------------------------------------------------------
+class SseBroker:
+    """Thread-safe fan-out for SSE envelopes.
+
+    The watcher thread calls :meth:`publish`; each connected handler
+    pulls from its own :class:`queue.Queue` (bounded, drops oldest on
+    overflow).
+    """
+
+    def __init__(self, max_queue: int = 256) -> None:
+        self._max_queue = max_queue
+        self._lock = threading.Lock()
+        self._subs: list[queue.Queue[dict[str, Any]]] = []
+
+    def subscribe(self) -> queue.Queue[dict[str, Any]]:
+        q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=self._max_queue)
+        with self._lock:
+            self._subs.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue[dict[str, Any]]) -> None:
+        with self._lock:
+            try:
+                self._subs.remove(q)
+            except ValueError:
+                pass
+
+    def publish(self, envelope: dict[str, Any]) -> None:
+        with self._lock:
+            subs = list(self._subs)
+        for q in subs:
+            try:
+                q.put_nowait(envelope)
+            except queue.Full:
+                # Drop oldest to make room.
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    q.put_nowait(envelope)
+                except queue.Full:
+                    pass
+
+
+# ---------------------------------------------------------------------------
+# HTTP handler.
+# ---------------------------------------------------------------------------
+def _json_bytes(payload: Any) -> bytes:
+    return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def make_handler(core: DashboardCore, broker: SseBroker | None = None):
+    """Factory returning a configured :class:`BaseHTTPRequestHandler` class."""
+
+    class _Handler(BaseHTTPRequestHandler):
+        # Suppress noisy default access log to stdout; route through `log`.
+        def log_message(self, fmt: str, *args: Any) -> None:  # noqa: D401
+            log.debug("dashboard http: " + fmt, *args)
+
+        def _send_json(
+            self, code: int, payload: Any, *, extra_headers: dict[str, str] | None = None
+        ) -> None:
+            body = _json_bytes(payload)
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (extra_headers or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_503_rebuild(self) -> None:
+            self._send_json(
+                503,
+                {"status": "rebuild_in_progress"},
+                extra_headers={"Retry-After": str(_RETRY_AFTER_S)},
+            )
+
+        def _send_400(self, message: str) -> None:
+            self._send_json(400, {"status": "error", "error": message})
+
+        def _send_404(self, message: str = "not_found") -> None:
+            self._send_json(404, {"status": "error", "error": message})
+
+        # --- Routing ---
+        def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+            parsed = urllib.parse.urlsplit(self.path)
+            path = parsed.path
+            qs = urllib.parse.parse_qs(parsed.query)
+
+            # Non-Kuzu endpoints stay up during rebuild.
+            if path == "/api/coordinator":
+                return self._send_json(200, core.coordinator())
+            if path == "/api/librarian":
+                return self._send_json(200, core.librarian())
+            if path == "/api/active":
+                return self._send_json(200, core.active())
+            if path == "/api/events":
+                return self._handle_events(qs)
+            if path == "/events/stream":
+                return self._handle_sse()
+
+            # Kuzu-dependent endpoints — gate on rebuild flag.
+            if path in ("/api/overview", "/api/theorems", "/api/rejected") or path.startswith("/api/node/"):
+                try:
+                    if path == "/api/overview":
+                        return self._send_json(200, core.overview())
+                    if path == "/api/theorems":
+                        return self._send_json(200, core.theorems())
+                    if path == "/api/rejected":
+                        return self._send_json(200, core.rejected())
+                    if path.startswith("/api/node/"):
+                        label = urllib.parse.unquote(path[len("/api/node/"):])
+                        if not label:
+                            return self._send_400("missing label")
+                        detail = core.node_detail(label)
+                        if detail is None:
+                            return self._send_404()
+                        return self._send_json(200, detail)
+                except RebuildInProgress:
+                    return self._send_503_rebuild()
+
+            return self._send_404()
+
+        def _handle_events(self, qs: dict[str, list[str]]) -> None:
+            raw = qs.get("limit", [str(_EVENTS_LIMIT_DEFAULT)])[0]
+            try:
+                limit = int(raw)
+            except ValueError:
+                return self._send_400(f"invalid limit: {raw!r}")
+            if limit < 1:
+                return self._send_400("limit must be >= 1")
+            if limit > _EVENTS_LIMIT_MAX:
+                limit = _EVENTS_LIMIT_MAX
+            return self._send_json(200, core.events(limit))
+
+        def _handle_sse(self) -> None:
+            if broker is None:
+                return self._send_404("sse_disabled")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            q = broker.subscribe()
+            try:
+                # Initial comment to flush headers immediately.
+                self.wfile.write(b": connected\n\n")
+                self.wfile.flush()
+                while True:
+                    try:
+                        env = q.get(timeout=15.0)
+                    except queue.Empty:
+                        # Keep-alive ping.
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    data = json.dumps(env, ensure_ascii=False)
+                    payload = f"event: {env.get('type', 'message')}\ndata: {data}\n\n"
+                    try:
+                        self.wfile.write(payload.encode("utf-8"))
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        break
+            finally:
+                broker.unsubscribe(q)
+
+    return _Handler
+
+
+def serve_forever(
+    core: DashboardCore,
+    *,
+    host: str,
+    port: int,
+    broker: SseBroker | None = None,
+) -> None:  # pragma: no cover — exercised indirectly by CLI.
+    handler_cls = make_handler(core, broker)
+    server = ThreadingHTTPServer((host, port), handler_cls)
+    log.info("dashboard listening on http://%s:%d", host, port)
+    try:
+        server.serve_forever(poll_interval=0.5)
+    finally:
+        server.server_close()
+
+
+__all__ = [
+    "DashboardCore",
+    "SseBroker",
+    "make_handler",
+    "serve_forever",
+]

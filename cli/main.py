@@ -108,8 +108,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "supervise", help=SUBCOMMANDS["supervise"], description=SUBCOMMANDS["supervise"]
     )
 
+    # dashboard (M9 — standalone HTTP server)
+    sp = sub.add_parser(
+        "dashboard", help=SUBCOMMANDS["dashboard"], description=SUBCOMMANDS["dashboard"]
+    )
+    sp.add_argument(
+        "--bind",
+        default="",
+        help="HOST:PORT (default: rethlas.toml [dashboard] bind = 127.0.0.1:8765)",
+    )
+
     # still-placeholder subcommands
-    for name in ("dashboard", "linter"):
+    for name in ("linter",):
         sp = sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
 
     return parser
@@ -191,7 +201,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from coordinator.main import run_supervise
         return run_supervise(ws)
 
-    # placeholders still — dashboard / linter
+    if args.command == "dashboard":
+        from dashboard.cli import run_dashboard
+        return run_dashboard(ws, args)
+
+    # placeholders still — linter
     return _run_stub(args.command)
 
 
