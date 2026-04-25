@@ -191,6 +191,24 @@ def test_index_root_serves_html(tmp_path: Path) -> None:
             assert endpoint in text
 
 
+def test_dashboard_heartbeat_round_trip(tmp_path: Path) -> None:
+    """dashboard.json written by HeartbeatPublisher is exposed via /api/dashboard."""
+    _init_ws(tmp_path)
+    from dashboard.heartbeat import HeartbeatPublisher
+
+    pub = HeartbeatPublisher(tmp_path, bind="127.0.0.1:8765", interval_s=60.0)
+    pub.start()
+    try:
+        with _ServerCtx(tmp_path) as ctx:
+            code, _hdrs, body = ctx.get("/api/dashboard")
+            assert code == 200
+            parsed = json.loads(body)
+            assert parsed["dashboard"]["bind"] == "127.0.0.1:8765"
+            assert parsed["liveness"] == "healthy"
+    finally:
+        pub.stop()
+
+
 def test_attention_includes_three_x_stuck_targets(tmp_path: Path) -> None:
     """ARCHITECTURE §6.7 — labelled "3x consecutive" attention entries
     written by the coordinator are surfaced through /api/attention.

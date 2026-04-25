@@ -128,6 +128,32 @@ class CoordinatorState:
 # ---------------------------------------------------------------------------
 # Heartbeat helpers
 # ---------------------------------------------------------------------------
+def _collect_children(
+    state: "CoordinatorState", lib_pid: int, lib_status: str
+) -> dict[str, dict[str, Any]]:
+    """Assemble the §6.4.2 ``children`` dict from on-disk heartbeats."""
+    children: dict[str, dict[str, Any]] = {
+        "librarian": {
+            "pid": lib_pid,
+            "status": lib_status,
+            "updated_at": utc_now_iso(),
+        }
+    }
+    dash_path = state.ws.runtime_state / "dashboard.json"
+    try:
+        raw = dash_path.read_text(encoding="utf-8")
+        body = json.loads(raw)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        body = None
+    if isinstance(body, dict):
+        children["dashboard"] = {
+            "pid": int(body.get("pid", 0) or 0),
+            "status": body.get("status", "unknown") or "unknown",
+            "updated_at": body.get("updated_at", "") or "",
+        }
+    return children
+
+
 def _write_heartbeat(
     state: CoordinatorState,
     *,
@@ -232,13 +258,7 @@ def _write_heartbeat(
         repair_spinning_count=repair_spinning,
         recent_hash_mismatch_count=recent_hash_mismatch,
         attention_targets=attention_targets,
-        children={
-            "librarian": {
-                "pid": lib_pid,
-                "status": lib_status,
-                "updated_at": utc_now_iso(),
-            }
-        },
+        children=_collect_children(state, lib_pid, lib_status),
     )
     write_heartbeat(state.ws.runtime_state / "coordinator.json", hb)
 
