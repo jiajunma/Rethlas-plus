@@ -37,7 +37,12 @@ from typing import Callable, Optional
 
 
 DEFAULT_STARTUP_GRACE_S = 30.0
-DEFAULT_HEARTBEAT_STALE_S = 60.0
+# Per ARCHITECTURE §6.7.1, dashboard heartbeats older than 5 minutes
+# are labelled "down" — that is the boundary at which the supervisor
+# treats the child as broken and triggers a restart. The 60s "degraded"
+# threshold is a UI label only; restarting at 60s would thrash because
+# the heartbeat publisher writes only every 30s.
+DEFAULT_HEARTBEAT_STALE_S = 300.0
 DEFAULT_RESTART_BACKOFF_S = 30.0
 DEFAULT_MAX_RESTARTS = 3
 
