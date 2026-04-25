@@ -556,6 +556,11 @@ def run_supervise(workspace: str | None) -> int:
             librarian.shutdown()
             return 3
 
+        # ARCHITECTURE §6.5: librarian's startup replay already applied
+        # every existing event. Mark them seen so the events watchdog
+        # only emits APPLY for truly new files this session.
+        state.watcher.prime()
+
         # PHASE1 M9 — coordinator-managed dashboard child.
         # Disabled for tiny supervise tests via env var so they don't
         # need to bind a real port.
@@ -827,7 +832,9 @@ def _shutdown(state: CoordinatorState) -> None:
     # fast to terminate), then drain workers, then librarian last so
     # any final apply on workers' truth events still has a writer.
     if state.dashboard is not None:
-        state.dashboard.shutdown()
+        # ARCHITECTURE §6.4: graceful shutdown cascade allows up to 10s
+        # per child stage before SIGKILL.
+        state.dashboard.shutdown(timeout=10.0)
     # Stop new dispatches, drain workers (best-effort: just wait briefly).
     deadline = time.monotonic() + 10.0
     while state.in_flight_workers and time.monotonic() < deadline:
