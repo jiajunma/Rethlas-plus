@@ -524,6 +524,35 @@ def _decide_idle_reason(
 # ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
+def _setup_supervise_logging(ws: WorkspacePaths) -> None:
+    """Attach a file handler so ``rethlas.*`` logs land in supervise.log.
+
+    Without this the dashboard supervisor's log.info/warning/error calls
+    (and any other library-level rethlas logger output) fall on the
+    floor. We mirror dashboard.cli._setup_logging for consistency.
+    """
+    import logging
+
+    ws.runtime_logs.mkdir(parents=True, exist_ok=True)
+    log_file = ws.runtime_logs / "supervise.log"
+    handler = logging.FileHandler(str(log_file), encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s.%(msecs)03dZ %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
+    import time as _time
+    handler.formatter.converter = _time.gmtime  # type: ignore[attr-defined]
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    if not any(
+        getattr(h, "baseFilename", None) == handler.baseFilename
+        for h in root.handlers
+    ):
+        root.addHandler(handler)
+
+
 def run_supervise(workspace: str | None) -> int:
     ws = workspace_paths(workspace)
     if not (ws.events.is_dir() and ws.rethlas_toml.is_file()):
@@ -531,6 +560,7 @@ def run_supervise(workspace: str | None) -> int:
         return 2
 
     config = load_config(ws.rethlas_toml)
+    _setup_supervise_logging(ws)
     cleanup_runtime(ws)
 
     try:
