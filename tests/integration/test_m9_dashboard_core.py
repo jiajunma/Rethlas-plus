@@ -147,6 +147,22 @@ def test_node_detail_returns_full_record(tmp_path: Path) -> None:
     assert detail["status"] in {STATUS_NEEDS_VERIFICATION}
 
 
+def test_node_detail_includes_dependents(tmp_path: Path) -> None:
+    """ARCHITECTURE §6.7 per-node detail must list dependents."""
+    _init_ws(tmp_path)
+    _seed_kb(tmp_path)
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+    core = DashboardCore(tmp_path)
+    detail = core.node_detail("def:x")
+    assert detail is not None
+    # thm:t depends on def:x, so def:x must list thm:t as a dependent.
+    assert "thm:t" in detail["dependents"]
+    # And recent_events must surface the user.node_added events.
+    types = {ev["type"] for ev in detail["recent_events"]}
+    assert "user.node_added" in types
+
+
 def test_node_detail_unknown_returns_none(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     _seed_kb(tmp_path)

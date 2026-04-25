@@ -42,6 +42,7 @@ from coordinator.heartbeat import read_heartbeat as read_coordinator_hb
 from dashboard.kuzu_reader import (
     NodeRow,
     RebuildInProgress,
+    dependents_of,
     list_applied_failed,
     list_nodes,
 )
@@ -241,7 +242,8 @@ class DashboardCore:
     def node_detail(self, label: str) -> dict[str, Any] | None:
         nodes = list_nodes(self.ws_root)
         passes_by_label = {n.label: n.pass_count for n in nodes}
-        in_flight_targets = {j.target for j in list_jobs(self.jobs_dir)}
+        all_jobs = list(list_jobs(self.jobs_dir))
+        in_flight_targets = {j.target for j in all_jobs}
         for n in nodes:
             if n.label != label:
                 continue
@@ -255,6 +257,45 @@ class DashboardCore:
                 in_flight=n.label in in_flight_targets,
                 repair_hint=n.repair_hint,
             )
+            # ARCHITECTURE §6.7 per-node detail surface.
+            active_job: dict[str, Any] | None = None
+            for j in all_jobs:
+                if j.target != label:
+                    continue
+                jd = j.to_dict()
+                jd["codex_log_age_seconds"] = _log_age_seconds(j.log_path)
+                active_job = jd
+                break
+            recent_events: list[dict[str, Any]] = []
+            for shard in sorted(
+                (p for p in self.events_dir.iterdir() if p.is_dir()),
+                reverse=True,
+            ) if self.events_dir.is_dir() else []:
+                for f in sorted(shard.glob("*.json"), reverse=True):
+                    try:
+                        body = json.loads(f.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if body.get("target") != label:
+                        # Generator batches reference nested labels too.
+                        nested = body.get("payload", {}).get("nodes", []) or []
+                        if not any(
+                            isinstance(node, dict) and node.get("label") == label
+                            for node in nested
+                        ):
+                            continue
+                    recent_events.append(
+                        {
+                            "event_id": body.get("event_id", ""),
+                            "type": body.get("type", ""),
+                            "actor": body.get("actor", ""),
+                            "ts": body.get("ts", ""),
+                        }
+                    )
+                    if len(recent_events) >= 20:
+                        break
+                if len(recent_events) >= 20:
+                    break
             return {
                 "label": n.label,
                 "kind": n.kind,
@@ -267,7 +308,10 @@ class DashboardCore:
                 "repair_hint": n.repair_hint,
                 "verification_report": n.verification_report,
                 "deps": list(n.deps),
+                "dependents": dependents_of(self.ws_root, label),
                 "status": status,
+                "active_job": active_job,
+                "recent_events": recent_events,
             }
         return None
 

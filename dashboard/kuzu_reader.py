@@ -121,6 +121,30 @@ def list_applied_failed(ws_root: Path) -> list[dict[str, Any]]:
         del db
 
 
+def dependents_of(ws_root: Path, label: str) -> list[str]:
+    """Return the labels of nodes that DependsOn this label."""
+    _check_rebuild(ws_root / "runtime" / "state")
+    db_path = ws_root / "knowledge_base" / "dag.kz"
+    if not db_path.is_dir() and not db_path.exists():
+        return []
+    import kuzu
+    db = kuzu.Database(str(db_path), read_only=True)
+    conn = kuzu.Connection(db)
+    try:
+        res = conn.execute(
+            "MATCH (d:Node)-[:DependsOn]->(n:Node {label: $lbl}) RETURN d.label",
+            {"lbl": label},
+        )
+        out: list[str] = []
+        while res.has_next():
+            out.append(res.get_next()[0])
+        out.sort()
+        return out
+    finally:
+        del conn
+        del db
+
+
 def list_applied_since(ws_root: Path, watermark: str) -> list[dict[str, Any]]:
     """Return ``AppliedEvent`` rows with ``applied_at > watermark``.
 
@@ -171,6 +195,7 @@ def list_applied_since(ws_root: Path, watermark: str) -> list[dict[str, Any]]:
 __all__ = [
     "NodeRow",
     "RebuildInProgress",
+    "dependents_of",
     "list_applied_failed",
     "list_applied_since",
     "list_nodes",

@@ -203,11 +203,12 @@ def test_dashboard_node_detail_golden(tmp_path: Path) -> None:
     core = DashboardCore(tmp_path)
     detail = core.node_detail("def:x")
     assert detail is not None
-    # Every documented field is present.
+    # Every documented field is present (ARCHITECTURE §6.7 per-node detail).
     expected = {
         "label", "kind", "statement", "proof", "pass_count", "repair_count",
         "statement_hash", "verification_hash", "repair_hint",
-        "verification_report", "deps", "status",
+        "verification_report", "deps", "dependents", "status",
+        "active_job", "recent_events",
     }
     assert expected <= set(detail)
     assert detail["label"] == "def:x"
