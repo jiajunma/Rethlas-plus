@@ -163,6 +163,44 @@ def test_node_detail_includes_dependents(tmp_path: Path) -> None:
     assert "user.node_added" in types
 
 
+def test_node_detail_active_job_includes_log_age_color(tmp_path: Path) -> None:
+    """§6.7 per-node detail must surface log color grading, not just seconds.
+
+    The list view (``/api/active``) already returns ``codex_log_age_color``;
+    the per-node detail view used to omit it, so the operator UI couldn't
+    flag stuck wrappers without flipping back to the global active list.
+    """
+    _init_ws(tmp_path)
+    _seed_kb(tmp_path)
+    log = tmp_path / "runtime" / "logs" / "ver-test.codex.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("hello", encoding="utf-8")
+    rec = JobRecord(
+        job_id="ver-20260424T100420.111-aaaaaaaaaaaaaaaa",
+        kind="verifier", target="thm:t", mode="single",
+        dispatch_hash="ab" * 32,
+        pid=12345, pgid=12345,
+        started_at="2026-04-24T10:04:20.111Z",
+        updated_at="2026-04-24T10:04:25.300Z",
+        status="running",
+        log_path="runtime/logs/ver-test.codex.log",
+    )
+    write_job_file(
+        tmp_path / "runtime" / "jobs" / f"{rec.job_id}.json", rec
+    )
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+    core = DashboardCore(tmp_path)
+    detail = core.node_detail("thm:t")
+    assert detail is not None
+    aj = detail["active_job"]
+    assert aj is not None
+    assert "codex_log_age_color" in aj
+    # Log was just written → green band.
+    assert aj["codex_log_age_color"] == "green"
+    assert aj["codex_log_age_seconds"] is not None
+
+
 def test_node_detail_unknown_returns_none(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     _seed_kb(tmp_path)
