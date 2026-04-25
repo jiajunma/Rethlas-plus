@@ -29,7 +29,7 @@ SUBCOMMANDS: dict[str, str] = {
     "linter": "run the workspace linter (M10)",
     "rebuild": "rebuild the projected KB from events/ (M3 / M4)",
     "librarian": "internal librarian daemon entry (M4)",
-    "generator": "internal generator worker entry (M6)",
+    "generator": "run a generator attempt against the workspace (M6)",
     "verifier": "internal verifier worker entry (M7)",
 }
 
@@ -84,8 +84,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "librarian", help=SUBCOMMANDS["librarian"], description=SUBCOMMANDS["librarian"]
     )
 
+    # generator (M6 — standalone CLI form)
+    sp = sub.add_parser(
+        "generator", help=SUBCOMMANDS["generator"], description=SUBCOMMANDS["generator"]
+    )
+    sp.add_argument("--target", required=True)
+    sp.add_argument("--mode", required=True, choices=("fresh", "repair"))
+    sp.add_argument("--codex-argv", default="")
+    sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
+    sp.add_argument("--actor", default="generator:cli")
+
     # still-placeholder subcommands
-    for name in ("supervise", "dashboard", "linter", "generator", "verifier"):
+    for name in ("supervise", "dashboard", "linter", "verifier"):
         sp = sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
 
     return parser
@@ -155,7 +165,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from librarian.cli import run_librarian
         return run_librarian(ws)
 
-    # placeholders still — supervise / dashboard / linter / generator / verifier
+    if args.command == "generator":
+        from generator.cli import run_generator
+        return run_generator(ws, args)
+
+    # placeholders still — supervise / dashboard / linter / verifier
     return _run_stub(args.command)
 
 

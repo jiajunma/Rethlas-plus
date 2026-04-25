@@ -18,9 +18,19 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+# Workers may import :mod:`common.kb.types` (pure dataclasses) and
+# :mod:`common.kb.hashing` (pure SHA-256) per §4.1 ``types.py`` docstring.
+# The Kuzu-touching modules are off-limits.
 _FORBIDDEN_PATTERNS = (
-    re.compile(r"^\s*from\s+common\.kb"),
-    re.compile(r"^\s*import\s+common\.kb"),
+    re.compile(r"^\s*from\s+common\.kb\.kuzu_backend\b"),
+    re.compile(r"^\s*from\s+common\.kb\.interface\b"),
+    re.compile(r"^\s*import\s+common\.kb\.kuzu_backend\b"),
+    re.compile(r"^\s*import\s+common\.kb\.interface\b"),
+    re.compile(r"^\s*from\s+common\.kb\b\s+import\s+kuzu_backend"),
+    re.compile(r"^\s*from\s+kuzu\b"),
+    re.compile(r"^\s*import\s+kuzu\b"),
+    re.compile(r"^\s*from\s+librarian\b"),
+    re.compile(r"^\s*import\s+librarian\b"),
 )
 
 

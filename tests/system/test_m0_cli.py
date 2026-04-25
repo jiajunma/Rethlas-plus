@@ -60,7 +60,8 @@ def test_each_stub_subcommand_runs_placeholder() -> None:
     """
     wired_in_m3 = {"init", "add-node", "revise-node", "attach-hint", "rebuild"}
     wired_in_m4 = {"librarian"}  # daemon entry — needs a workspace to run
-    wired = wired_in_m3 | wired_in_m4
+    wired_in_m6 = {"generator"}  # CLI form needs --target/--mode args
+    wired = wired_in_m3 | wired_in_m4 | wired_in_m6
     remaining = [n for n in SUBCOMMANDS if n not in wired]
     for name in remaining:
         result = _run(name)

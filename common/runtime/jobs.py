@@ -92,6 +92,7 @@ class JobRecord:
     reason: str = ""
     # Worker-supplied context the wrapper reads. Optional in early
     # milestones — coordinator fills these from Kuzu in M8.
+    target_kind: str = ""  # NodeKind value (definition/lemma/theorem/...)
     statement: str = ""
     proof: str = ""
     dep_statement_hashes: dict[str, str] = field(default_factory=dict)
