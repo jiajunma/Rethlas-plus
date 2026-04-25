@@ -352,6 +352,22 @@ class DashboardCore:
                     "detail": coord.get("idle_reason_detail", ""),
                 }
             )
+        # ARCHITECTURE §6.4 dashboard child supervisor: when the
+        # coordinator's dashboard supervisor exhausts its restart budget
+        # (§6.4 max_restarts) it transitions to ``degraded`` and stops
+        # respawning. Surface that as an attention item so the operator
+        # knows to investigate; "backoff" / "starting" are auto-recovering
+        # so they stay off the attention surface.
+        children = coord.get("children", {}) or {}
+        dash_child = children.get("dashboard", {}) if isinstance(children, dict) else {}
+        if isinstance(dash_child, dict) and dash_child.get("status") == "degraded":
+            items.append(
+                {
+                    "kind": "dashboard_degraded",
+                    "message": "dashboard child supervisor is degraded — restart budget exhausted",
+                    "detail": dash_child,
+                }
+            )
         # ARCHITECTURE §6.7 "3x consecutive" labelled attention items.
         for entry in coord.get("attention_targets", []) or []:
             if not isinstance(entry, dict):

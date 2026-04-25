@@ -246,6 +246,51 @@ def test_attention_includes_three_x_stuck_targets(tmp_path: Path) -> None:
         assert any("frozen on thm:u" in m for m in msgs)
 
 
+def test_attention_flags_dashboard_child_degraded(tmp_path: Path) -> None:
+    """§6.4: when the coordinator-managed dashboard child exhausts its
+    restart budget and goes ``degraded``, /api/attention must surface an
+    ``dashboard_degraded`` item so the operator knows to investigate.
+    """
+    _init_ws(tmp_path)
+    hb = CoordinatorHeartbeat(
+        pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+        status=STATUS_RUNNING,
+        children={
+            "dashboard": {"pid": 0, "status": "degraded", "updated_at": utc_now_iso()},
+        },
+    )
+    write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+
+    with _ServerCtx(tmp_path) as ctx:
+        code, _hdrs, body = ctx.get("/api/attention")
+        assert code == 200
+        parsed = json.loads(body)
+        kinds = {i["kind"] for i in parsed["items"]}
+        assert "dashboard_degraded" in kinds
+
+
+def test_attention_does_not_flag_dashboard_running_or_backoff(tmp_path: Path) -> None:
+    """Auto-recovering states (starting, running, backoff) stay off the
+    attention list — only the terminal ``degraded`` state demands the
+    operator's eyes.
+    """
+    _init_ws(tmp_path)
+    for status in ("starting", "running", "backoff"):
+        hb = CoordinatorHeartbeat(
+            pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+            status=STATUS_RUNNING,
+            children={
+                "dashboard": {"pid": 0, "status": status, "updated_at": utc_now_iso()},
+            },
+        )
+        write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+        with _ServerCtx(tmp_path) as ctx:
+            code, _hdrs, body = ctx.get("/api/attention")
+            assert code == 200
+            kinds = {i["kind"] for i in json.loads(body)["items"]}
+            assert "dashboard_degraded" not in kinds, f"unexpected at status={status}"
+
+
 def test_attention_endpoint_lists_user_blocked(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     # Seed a definition that will be at pass_count=0 (not -1) — so to make
