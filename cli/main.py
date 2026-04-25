@@ -30,7 +30,7 @@ SUBCOMMANDS: dict[str, str] = {
     "rebuild": "rebuild the projected KB from events/ (M3 / M4)",
     "librarian": "internal librarian daemon entry (M4)",
     "generator": "run a generator attempt against the workspace (M6)",
-    "verifier": "internal verifier worker entry (M7)",
+    "verifier": "run a verifier attempt against the workspace (M7)",
 }
 
 
@@ -94,8 +94,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
     sp.add_argument("--actor", default="generator:cli")
 
+    # verifier (M7 — standalone CLI form)
+    sp = sub.add_parser(
+        "verifier", help=SUBCOMMANDS["verifier"], description=SUBCOMMANDS["verifier"]
+    )
+    sp.add_argument("--target", required=True)
+    sp.add_argument("--codex-argv", default="")
+    sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
+    sp.add_argument("--actor", default="verifier:cli")
+
     # still-placeholder subcommands
-    for name in ("supervise", "dashboard", "linter", "verifier"):
+    for name in ("supervise", "dashboard", "linter"):
         sp = sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
 
     return parser
@@ -169,7 +178,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from generator.cli import run_generator
         return run_generator(ws, args)
 
-    # placeholders still — supervise / dashboard / linter / verifier
+    if args.command == "verifier":
+        from verifier.cli import run_verifier
+        return run_verifier(ws, args)
+
+    # placeholders still — supervise / dashboard / linter
     return _run_stub(args.command)
 
 
