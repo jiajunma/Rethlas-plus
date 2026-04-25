@@ -67,7 +67,14 @@ def classify_theorem(
         return STATUS_DONE
     deps_ready = all(deps_pass_counts.get(d, -1) >= 1 for d in deps)
     if pass_count >= 1:
-        return STATUS_VERIFIED if not deps_ready else STATUS_VERIFIED
+        # A node verified at least once but whose deps got reset (e.g.
+        # an upstream Merkle cascade) cannot progress further until the
+        # deps catch up. Per PHASE1 M9 status vocabulary it shows as
+        # blocked_on_dependency rather than verified — the latter
+        # implies it's actively advancing.
+        if not deps_ready:
+            return STATUS_BLOCKED_ON_DEPENDENCY
+        return STATUS_VERIFIED
     if pass_count == 0:
         if not deps_ready:
             return STATUS_BLOCKED_ON_DEPENDENCY

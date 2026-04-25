@@ -95,6 +95,20 @@ def test_classify_verified_partial() -> None:
     assert _node(pass_count=2) == STATUS_VERIFIED
 
 
+def test_classify_verified_with_unready_deps_is_blocked() -> None:
+    # PHASE1 M9: a node verified once but with deps reset by cascade
+    # cannot progress further; surface as blocked_on_dependency so the
+    # operator sees the stuck state rather than misleading "verified".
+    assert (
+        _node(
+            pass_count=1,
+            deps=["def:x"],
+            deps_pass_counts={"def:x": 0},
+        )
+        == STATUS_BLOCKED_ON_DEPENDENCY
+    )
+
+
 def test_classify_needs_verification() -> None:
     assert _node(pass_count=0, deps=[], deps_pass_counts={}) == STATUS_NEEDS_VERIFICATION
 
