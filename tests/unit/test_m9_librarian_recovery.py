@@ -24,6 +24,9 @@ class _FakeLibrarian:
     def is_alive(self) -> bool:
         return self.alive
 
+    def close_handles(self) -> None:
+        return
+
 
 @dataclass
 class _FakeWS:

@@ -58,3 +58,31 @@ def test_event_id_mismatch_raises_corruption(tmp_path: Path) -> None:
     watcher = EventsWatcher(tmp_path)
     with pytest.raises(WatcherCorruption, match="event_id mismatch"):
         watcher.poll()
+
+
+def test_event_is_not_marked_seen_until_ack(tmp_path: Path) -> None:
+    path = _event_path(
+        tmp_path, iso_ms="20260425T010000.000", seq=1, uid="c" * 16
+    )
+    body = {
+        "event_id": "20260425T010000.000-0001-cccccccccccccccc",
+        "type": "user.node_added",
+        "actor": "user:alice",
+        "ts": "2026-04-25T01:00:00.000+08:00",
+        "target": "def:x",
+        "payload": {
+            "kind": "definition",
+            "statement": "Define X.",
+            "remark": "",
+            "source_note": "",
+        },
+    }
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+    watcher = EventsWatcher(tmp_path)
+    first = watcher.poll()
+    assert [ev.path for ev in first] == [path]
+    second = watcher.poll()
+    assert [ev.path for ev in second] == [path]
+    watcher.ack(path)
+    assert watcher.poll() == []

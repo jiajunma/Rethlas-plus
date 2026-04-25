@@ -387,6 +387,7 @@ def _forward_new_events(state: CoordinatorState) -> None:
             return
         if reply is None:
             return
+        state.watcher.ack(ev.path)
         if reply.get("reply") == "CORRUPTION":
             state.pending_corruption = True
             state.last_corruption_detail = reply.get("detail", "")
@@ -757,6 +758,7 @@ def _recover_librarian_if_needed(state: "CoordinatorState") -> None:
             f"{_LIBRARIAN_RECOVERY_WINDOW_S:.0f}s"
         )
     _log_supervise(state, "librarian crashed; restarting (§6.4)")
+    state.librarian.close_handles()
     state.librarian = spawn_librarian(state.ws.root)
     state.last_librarian_restart_monotonic = now
     if not _wait_for_librarian_ready(state, _librarian_ready_timeout_s()):

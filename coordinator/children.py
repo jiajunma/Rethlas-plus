@@ -22,7 +22,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 
 @dataclass
@@ -32,6 +32,7 @@ class LibrarianChild:
     proc: subprocess.Popen
     workspace: Path
     started_at: float
+    stderr_handle: BinaryIO | None = None
     _stdout_buf: bytes = b""
 
     @property
@@ -82,6 +83,16 @@ class LibrarianChild:
         self.send(payload)
         return self.recv(timeout=timeout)
 
+    def close_handles(self) -> None:
+        for fh in (self.proc.stdin, self.proc.stdout, self.stderr_handle):
+            if fh is None:
+                continue
+            try:
+                fh.close()
+            except Exception:
+                pass
+        self.stderr_handle = None
+
     def shutdown(self, *, timeout: float = 10.0) -> int:
         """Send SHUTDOWN, then wait. Falls back to SIGTERM/KILL if needed."""
         try:
@@ -93,14 +104,16 @@ class LibrarianChild:
         except Exception:
             pass
         try:
-            return self.proc.wait(timeout=timeout)
+            rc = self.proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             self.proc.terminate()
             try:
-                return self.proc.wait(timeout=timeout)
+                rc = self.proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
-                return self.proc.wait()
+                rc = self.proc.wait()
+        self.close_handles()
+        return int(rc if rc is not None else 0)
 
 
 def spawn_librarian(workspace: Path, *, env_extra: dict[str, str] | None = None) -> LibrarianChild:
@@ -108,15 +121,23 @@ def spawn_librarian(workspace: Path, *, env_extra: dict[str, str] | None = None)
     env = os.environ.copy()
     if env_extra:
         env.update(env_extra)
+    logs_dir = workspace / "runtime" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stderr_handle = (logs_dir / "librarian.log").open("ab", buffering=0)
     proc = subprocess.Popen(
         [sys.executable, "-m", "cli.main", "--workspace", str(workspace), "librarian"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=stderr_handle,
         env=env,
         bufsize=0,
     )
-    return LibrarianChild(proc=proc, workspace=workspace, started_at=time.monotonic())
+    return LibrarianChild(
+        proc=proc,
+        workspace=workspace,
+        started_at=time.monotonic(),
+        stderr_handle=stderr_handle,
+    )
 
 
 __all__ = ["LibrarianChild", "spawn_librarian"]

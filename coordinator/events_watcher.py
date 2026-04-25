@@ -50,6 +50,16 @@ class EventsWatcher:
         self.root = events_root
         self._seen: set[Path] = set()
 
+    def ack(self, path: Path) -> None:
+        """Mark ``path`` as successfully handed off to librarian.
+
+        The watcher intentionally does NOT mark files seen during
+        :meth:`poll`; doing so would lose events if coordinator sees a
+        file but crashes or times out before librarian replies. Callers
+        acknowledge only after the APPLY request completed with a reply.
+        """
+        self._seen.add(path)
+
     def poll(self) -> list[EventFile]:
         """Return new event files in ``(iso_ms, seq, uid)`` order."""
         if not self.root.is_dir():
@@ -95,7 +105,6 @@ class EventsWatcher:
                     event_id=event_id,
                 )
             )
-            self._seen.add(p)
         new.sort(key=lambda e: e.sort_key)
         return new
 
