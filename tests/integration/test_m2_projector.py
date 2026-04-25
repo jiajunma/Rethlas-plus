@@ -249,6 +249,75 @@ def test_node_revised_updates_and_resets_counts(
     assert node.pass_count == 0
 
 
+def test_node_revised_cascades_to_dependents(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """ARCHITECTURE §5.4 + PHASE1 M11 #4: when an upstream node's
+    statement_hash changes, every transitive dependent has its
+    pass_count and repair_count reset (because dependent's own
+    verification_hash changes via Merkle cascade).
+    """
+    body_def, raw_def = _node_added(
+        eid="20260425T120000.000-0001-aaaaaaaaaaaaaaa0",
+        target="def:x",
+        kind="definition",
+        statement="A",
+        proof="",
+    )
+    projector.apply(body_def, raw_def)
+
+    body_lem, raw_lem = _node_added(
+        eid="20260425T120001.000-0001-aaaaaaaaaaaaaaa1",
+        target="lem:y",
+        kind="lemma",
+        statement="L about \\ref{def:x}",
+        proof="p",
+    )
+    projector.apply(body_lem, raw_lem)
+
+    body_thm, raw_thm = _node_added(
+        eid="20260425T120002.000-0001-aaaaaaaaaaaaaaa2",
+        target="thm:z",
+        kind="theorem",
+        statement="T about \\ref{lem:y}",
+        proof="p",
+    )
+    projector.apply(body_thm, raw_thm)
+
+    # Pretend verifier verdicts have advanced both nodes.
+    kb.set_node_fields("lem:y", pass_count=2, repair_count=1)
+    kb.set_node_fields("thm:z", pass_count=3, repair_count=2)
+    lem_before = kb.node_by_label("lem:y")
+    thm_before = kb.node_by_label("thm:z")
+    assert lem_before is not None and thm_before is not None
+    lem_vh_before = lem_before.verification_hash
+    thm_vh_before = thm_before.verification_hash
+
+    # Revise the upstream definition's statement.
+    body_rev, raw_rev = _revise(
+        eid="20260425T120003.000-0001-aaaaaaaaaaaaaaa3",
+        target="def:x",
+        kind="definition",
+        statement="A revised",
+        proof="",
+    )
+    r = projector.apply(body_rev, raw_rev)
+    assert r.status is ApplyOutcome.APPLIED
+
+    # Cascade should have recomputed both downstream verification hashes
+    # AND reset pass_count + repair_count to initial values per §5.4.
+    lem_after = kb.node_by_label("lem:y")
+    thm_after = kb.node_by_label("thm:z")
+    assert lem_after is not None and thm_after is not None
+    assert lem_after.verification_hash != lem_vh_before, "cascade did not recompute lem:y"
+    assert thm_after.verification_hash != thm_vh_before, "cascade did not recompute thm:z"
+    # initial_count(lemma, "p") = 0; statement_hash changed so repair_count = 0
+    assert lem_after.pass_count == 0
+    assert lem_after.repair_count == 0
+    assert thm_after.pass_count == 0
+    assert thm_after.repair_count == 0
+
+
 def test_node_revised_kind_mutation_rejected(
     projector: Projector, kb: KuzuBackend
 ) -> None:
