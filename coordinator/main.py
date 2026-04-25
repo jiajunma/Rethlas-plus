@@ -122,6 +122,9 @@ class CoordinatorState:
     pending_corruption: bool = False
     last_corruption_detail: str = ""
     dashboard: DashboardSupervisor | None = None
+    # ARCHITECTURE §6.4 librarian restart policy: restart once; if it
+    # dies again within 3 minutes, coordinator exits with code 3.
+    last_librarian_restart_monotonic: float = 0.0
 
     def __post_init__(self) -> None:
         if self.in_flight_workers is None:
@@ -570,7 +573,22 @@ def run_supervise(workspace: str | None) -> int:
 
         while not state.stopping:
             state.loop_seq += 1
-            _tick(state)
+            try:
+                _tick(state)
+            except _LibrarianFatal as exc:
+                # §6.4: librarian crashed twice within 3 min. Coordinator
+                # exits 3; operator inspects log and either reruns or
+                # rebuilds.
+                _log_supervise(state, f"librarian fatal: {exc}")
+                _write_heartbeat(
+                    state,
+                    status=STATUS_DEGRADED,
+                    idle_reason_code=IDLE_LIBRARIAN_STARTING,
+                    idle_reason_detail=str(exc),
+                )
+                if state.dashboard is not None:
+                    state.dashboard.shutdown()
+                return 3
             if max_ticks and state.loop_seq >= max_ticks:
                 state.stopping = True
             else:
@@ -612,8 +630,44 @@ def _make_dashboard_supervisor(state: "CoordinatorState") -> DashboardSupervisor
     )
 
 
+_LIBRARIAN_RECOVERY_WINDOW_S = 180.0  # ARCHITECTURE §6.4 — within 3 min ⇒ fatal
+
+
+class _LibrarianFatal(Exception):
+    """Raised by ``_recover_librarian_if_needed`` when the librarian
+    crashed twice within :data:`_LIBRARIAN_RECOVERY_WINDOW_S`.
+    Caught at the supervise loop boundary, where coordinator exits 3.
+    """
+
+
+def _recover_librarian_if_needed(state: "CoordinatorState") -> None:
+    """ARCHITECTURE §6.4 librarian restart-once policy.
+
+    If the librarian subprocess has died, attempt to restart it once.
+    A second crash within :data:`_LIBRARIAN_RECOVERY_WINDOW_S` raises
+    :class:`_LibrarianFatal` so the supervise loop can exit code 3
+    (workspace unusable without librarian).
+    """
+    if state.librarian.is_alive():
+        return
+    now = time.monotonic()
+    if state.last_librarian_restart_monotonic and (
+        now - state.last_librarian_restart_monotonic < _LIBRARIAN_RECOVERY_WINDOW_S
+    ):
+        raise _LibrarianFatal(
+            "librarian crashed twice within "
+            f"{_LIBRARIAN_RECOVERY_WINDOW_S:.0f}s"
+        )
+    _log_supervise(state, "librarian crashed; restarting (§6.4)")
+    state.librarian = spawn_librarian(state.ws.root)
+    state.last_librarian_restart_monotonic = now
+    if not _wait_for_librarian_ready(state, _librarian_ready_timeout_s()):
+        raise _LibrarianFatal("librarian failed to reach ready phase after restart")
+
+
 def _tick(state: CoordinatorState) -> None:
     """One coordinator tick."""
+    _recover_librarian_if_needed(state)
     _forward_new_events(state)
     _reap_finished_workers(state)
     outcomes = reconcile_publishing_jobs(state.ws.runtime_jobs, state.ws.dag_kz)
