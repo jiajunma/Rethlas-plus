@@ -66,6 +66,15 @@ class CoordinatorHeartbeat:
     repair_spinning_count: int = 0
     recent_hash_mismatch_count: int = 0
     children: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Per-target "3x consecutive failure" entries (ARCHITECTURE §6.7
+    # "Must prominently surface"). Each item has the keys:
+    #   - kind:    "generator" | "verifier"
+    #   - target:  node label
+    #   - trigger: "crashed" | "timed_out" | "apply_failed"
+    #   - reason:  apply_failed reason ("" for crashed/timed_out)
+    #   - message: human-readable label per §6.7
+    #   - count:   consecutive count (>= 3)
+    attention_targets: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)

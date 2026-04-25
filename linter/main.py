@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 from cli.workspace import WorkspacePaths, ensure_initialised, workspace_paths
-from common.kb.kuzu_backend import KuzuBackend
 from linter.checks import (
     LinterReport,
     check_a_event_integrity,
@@ -113,6 +112,7 @@ def run_linter_on_workspace(
     a = check_a_event_integrity(ws.events)
 
     if db_path.exists():
+        from common.kb.kuzu_backend import KuzuBackend
         backend = KuzuBackend(str(db_path))
         try:
             b = check_b_kb_structural(backend)

@@ -23,11 +23,10 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 from common.events.filenames import FilenameError, parse_filename
 from common.events.io import event_sha256, read_event
-from common.kb.kuzu_backend import KuzuBackend, RawNodeRow
 from common.kb.types import (
     AXIOM_KINDS,
     KIND_PREFIX,
@@ -36,6 +35,9 @@ from common.kb.types import (
     PROOF_REQUIRING_KINDS,
 )
 from librarian.renderer import node_filename, render_node
+
+if TYPE_CHECKING:
+    from common.kb.kuzu_backend import KuzuBackend, RawNodeRow
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +69,7 @@ def _iter_event_files(events_dir: Path) -> Iterator[Path]:
             yield f
 
 
-def _load_node_from_row(row: RawNodeRow, deps: list[str]) -> Node:
+def _load_node_from_row(row: "RawNodeRow", deps: list[str]) -> Node:
     """Convert a Kuzu raw row + dep labels into a :class:`Node`."""
     return Node(
         label=row.label,
@@ -80,6 +82,8 @@ def _load_node_from_row(row: RawNodeRow, deps: list[str]) -> Node:
         repair_count=row.repair_count,
         statement_hash=row.statement_hash,
         verification_hash=row.verification_hash,
+        verification_report=row.verification_report,
+        repair_hint=row.repair_hint,
         depends_on=tuple(deps),
     )
 
@@ -188,7 +192,7 @@ def _walk(obj: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
 # ---------------------------------------------------------------------------
 # Category B — KB structural.
 # ---------------------------------------------------------------------------
-def check_b_kb_structural(backend: KuzuBackend) -> list[Violation]:
+def check_b_kb_structural(backend: "KuzuBackend") -> list[Violation]:
     """B. Cycles, label uniqueness, label-prefix ↔ kind, kind-appropriate fields."""
     out: list[Violation] = []
     labels = backend.node_labels()
@@ -205,7 +209,7 @@ def check_b_kb_structural(backend: KuzuBackend) -> list[Violation]:
         seen.add(lbl)
 
     # Per-node prefix + kind-appropriate fields.
-    nodes_by_label: dict[str, RawNodeRow] = {}
+    nodes_by_label: dict[str, "RawNodeRow"] = {}
     for lbl in seen:
         row = backend.node_by_label(lbl)
         if row is None:
@@ -349,7 +353,7 @@ def _statement_changing_iso_ms(events_dir: Path, label: str) -> str | None:
     return most_recent
 
 
-def check_c_pass_count(events_dir: Path, backend: KuzuBackend) -> list[Violation]:
+def check_c_pass_count(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
     """C. Audit ``pass_count`` against §5.5.1 replay."""
     out: list[Violation] = []
     facts = _replay_verifier_facts(events_dir)
@@ -374,7 +378,7 @@ def check_c_pass_count(events_dir: Path, backend: KuzuBackend) -> list[Violation
 
 
 def _audit_pass_count(
-    row: RawNodeRow, kind: NodeKind, facts: list[dict[str, Any]]
+    row: "RawNodeRow", kind: NodeKind, facts: list[dict[str, Any]]
 ) -> int:
     if kind in PROOF_REQUIRING_KINDS and not (row.proof or "").strip():
         return -1
@@ -395,7 +399,7 @@ def _audit_pass_count(
     )
 
 
-def check_d_repair_count(events_dir: Path, backend: KuzuBackend) -> list[Violation]:
+def check_d_repair_count(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
     """D. Audit ``repair_count`` against §5.5.1 replay."""
     out: list[Violation] = []
     facts = _replay_verifier_facts(events_dir)
@@ -437,7 +441,7 @@ def check_d_repair_count(events_dir: Path, backend: KuzuBackend) -> list[Violati
 # Category E — nodes/ ↔ Kuzu rendering.
 # ---------------------------------------------------------------------------
 def check_e_nodes_render(
-    backend: KuzuBackend,
+    backend: "KuzuBackend",
     nodes_dir: Path,
     *,
     repair: bool = False,
@@ -523,7 +527,7 @@ def check_e_nodes_render(
 # ---------------------------------------------------------------------------
 # Category F — events/ ↔ AppliedEvent inventory.
 # ---------------------------------------------------------------------------
-def check_f_inventory(events_dir: Path, backend: KuzuBackend) -> list[Violation]:
+def check_f_inventory(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
     """F. ``events/`` SHA-256 vs ``AppliedEvent.event_sha256`` and missing files."""
     out: list[Violation] = []
 

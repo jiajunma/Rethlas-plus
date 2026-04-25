@@ -6,16 +6,14 @@ The loop:
 2. Run startup cleanup (M5 :func:`cleanup_runtime`).
 3. Spawn librarian child; wait for ``startup_phase = ready`` and
    ``rebuild_in_progress = false``.
-4. Prime the events watcher so we don't re-emit APPLY for files
-   librarian already replayed at startup.
-5. Tick loop:
+4. Tick loop:
    - Forward any new events under ``events/`` to librarian via
      ``APPLY`` commands.
    - Reconcile any wrappers in ``status = publishing`` against
      ``AppliedEvent``.
    - Dispatch new generator / verifier work up to the pool capacity.
    - Update ``coordinator.json`` heartbeat.
-6. SIGTERM / SIGINT → set status = stopping, drain in-flight, send
+5. SIGTERM / SIGINT → set status = stopping, drain in-flight, send
    librarian SHUTDOWN, release lock, exit.
 """
 
@@ -39,6 +37,7 @@ from common.runtime.jobs import (
     JobRecord,
     STATUS_PUBLISHING,
     STATUS_STARTING,
+    TERMINAL_STATUSES,
     job_file_path,
     list_jobs,
     make_job_id,
@@ -145,35 +144,72 @@ def _write_heartbeat(
     lib_pid = state.librarian.pid if state.librarian.is_alive() else 0
     lib_status = "running" if state.librarian.is_alive() else "down"
     in_flight = list_jobs(state.ws.runtime_jobs)
-    active_gen = sum(1 for r in in_flight if r.kind == "generator" and r.status not in {"applied", "apply_failed"})
-    active_ver = sum(1 for r in in_flight if r.kind == "verifier" and r.status not in {"applied", "apply_failed"})
+    active_gen = sum(1 for r in in_flight if r.kind == "generator" and r.status not in TERMINAL_STATUSES)
+    active_ver = sum(1 for r in in_flight if r.kind == "verifier" and r.status not in TERMINAL_STATUSES)
 
-    # ARCHITECTURE §6.4.2 / §7.4 / §7.5: surface the count of (target, kind)
-    # pairs whose recent outcomes hit the 3x consecutive trigger.
-    repair_spinning = 0
+    # ARCHITECTURE §6.4.2 / §7.4 / §7.5 / §6.7: surface (target, kind)
+    # pairs whose recent outcomes hit the 3x consecutive trigger, and
+    # publish a labelled attention list dashboard consumes.
+    attention_targets: list[dict[str, Any]] = []
     seen_keys: set[tuple[str, str]] = set()
     for (target, kind), dq in state.outcome_window._buf.items():
         if (target, kind) in seen_keys:
             continue
         seen_keys.add((target, kind))
+        added = False
         # Same-status 3x trigger (crashed / timed_out).
-        for status_marker in ("crashed", "timed_out"):
-            if state.outcome_window.consecutive_status(
+        for status_marker, label_template in (
+            ("crashed", "{kind} unstable on {target}"),
+            ("timed_out", "{kind} frozen on {target}"),
+        ):
+            count = state.outcome_window.consecutive_status(
                 target=target, kind=kind, status=status_marker
-            ) >= 3:
-                repair_spinning += 1
+            )
+            if count >= 3:
+                attention_targets.append(
+                    {
+                        "kind": kind,
+                        "target": target,
+                        "trigger": status_marker,
+                        "reason": "",
+                        "count": count,
+                        "message": label_template.format(kind=kind, target=target),
+                    }
+                )
+                added = True
                 break
-        else:
-            # Same-reason apply_failed 3x trigger (label_conflict / cycle / ...).
-            last_reasons = {
-                r for s, r in dq if s == "apply_failed" and r
-            }
-            for reason in last_reasons:
-                if state.outcome_window.consecutive_apply_failed_reason(
-                    target=target, kind=kind, reason=reason
-                ) >= 3:
-                    repair_spinning += 1
-                    break
+        if added:
+            continue
+        # Same-reason apply_failed 3x trigger (label_conflict / cycle / ...).
+        last_reasons = {r for s, r in dq if s == "apply_failed" and r}
+        for reason in last_reasons:
+            count = state.outcome_window.consecutive_apply_failed_reason(
+                target=target, kind=kind, reason=reason
+            )
+            if count >= 3:
+                attention_targets.append(
+                    {
+                        "kind": kind,
+                        "target": target,
+                        "trigger": "apply_failed",
+                        "reason": reason,
+                        "count": count,
+                        "message": f"{kind} stuck on {target}: {count}× {reason}",
+                    }
+                )
+                break
+    repair_spinning = len(attention_targets)
+
+    # Recent hash_mismatch count (§6.4.2). Counts apply_failed entries in
+    # the sliding OutcomeWindow whose reason is hash_mismatch — a proxy
+    # for "verifier verdicts that landed too late after a statement
+    # change". Useful for the dashboard's "Current Scheduling State"
+    # panel.
+    recent_hash_mismatch = 0
+    for dq in state.outcome_window._buf.values():
+        for status, reason in dq:
+            if status == "apply_failed" and reason == "hash_mismatch":
+                recent_hash_mismatch += 1
 
     hb = CoordinatorHeartbeat(
         pid=os.getpid(),
@@ -193,6 +229,8 @@ def _write_heartbeat(
         generation_blocked_on_dependency_count=gen_blocked,
         verification_dep_blocked_count=ver_blocked,
         repair_spinning_count=repair_spinning,
+        recent_hash_mismatch_count=recent_hash_mismatch,
+        attention_targets=attention_targets,
         children={
             "librarian": {
                 "pid": lib_pid,
@@ -234,7 +272,7 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
             RETURN n.label, n.kind, n.statement, n.proof, n.statement_hash,
                    n.verification_hash, n.pass_count, n.repair_count,
                    n.repair_hint, n.verification_report,
-                   collect(d.label), collect(d.statement_hash)
+                   collect(d.label), collect(d.statement_hash), collect(d.pass_count)
             """
         )
         out: list[CandidateInput] = []
@@ -242,9 +280,15 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
             row = res.get_next()
             dep_labels = row[10] or []
             dep_hashes = row[11] or []
+            dep_counts = row[12] or []
             deps = {
                 lbl: sh
                 for lbl, sh in zip(dep_labels, dep_hashes)
+                if lbl is not None
+            }
+            dep_pass_counts = {
+                lbl: int(pc) if pc is not None else -1
+                for lbl, pc in zip(dep_labels, dep_counts)
                 if lbl is not None
             }
             out.append(
@@ -260,6 +304,7 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
                     repair_hint=row[8] or "",
                     verification_report=row[9] or "",
                     dep_statement_hashes=deps,
+                    dep_pass_counts=dep_pass_counts,
                     last_rejected_verification_hash=row[5] or "",
                 )
             )
@@ -397,6 +442,7 @@ def _wait_for_librarian_ready(state: CoordinatorState, timeout_s: float) -> bool
 def _decide_idle_reason(
     snapshot: _KBSnapshot | None,
     *,
+    desired_pass_count: int,
     in_flight: int,
     dispatched_gen: int,
     dispatched_ver: int,
@@ -406,10 +452,7 @@ def _decide_idle_reason(
     nodes = snapshot.candidates
     if not nodes:
         return IDLE_ALL_DONE, "no nodes in workspace"
-    unfinished = [
-        c for c in nodes
-        if c.pass_count < 0 or c.pass_count == 0 or c.pass_count < 1
-    ]
+    unfinished = [c for c in nodes if c.pass_count < desired_pass_count]
     if dispatched_gen + dispatched_ver > 0:
         return IDLE_NONE, ""
     if in_flight > 0:
@@ -417,16 +460,18 @@ def _decide_idle_reason(
     if not unfinished:
         return IDLE_ALL_DONE, ""
     # Why couldn't we dispatch? Prefer generator-blocked > verifier-blocked > user.
-    gen_candidates = [c for c in nodes if c.pass_count == -1]
+    gen_candidates = [c for c in nodes if c.pass_count == -1 and c.target_kind in {"lemma", "theorem", "proposition"}]
     if gen_candidates:
         not_ready = [c for c in gen_candidates if not c.deps_ready]
         if not_ready:
             return IDLE_GEN_DEP_BLOCKED, f"{len(not_ready)} generator candidates blocked on deps"
-    ver_candidates = [c for c in nodes if 0 <= c.pass_count]
+    ver_candidates = [c for c in nodes if 0 <= c.pass_count < desired_pass_count]
     if ver_candidates:
-        ver_unfinished = [c for c in ver_candidates if c.pass_count < 1]
+        ver_unfinished = [c for c in ver_candidates if not c.verifier_deps_strictly_ahead]
         if any(not c.deps_ready for c in ver_unfinished):
             return IDLE_VER_DEP_BLOCKED, "verifier candidates blocked on deps"
+        if ver_unfinished:
+            return IDLE_VER_DEP_BLOCKED, "verifier candidates blocked on strict monotone deps"
     return IDLE_USER_BLOCKED, "remaining work needs user action"
 
 
@@ -465,7 +510,6 @@ def run_supervise(workspace: str | None) -> int:
             librarian.shutdown()
             return 3
 
-        watcher.prime()
         _write_heartbeat(state, status=STATUS_RUNNING)
 
         _install_signal_handlers(state)
@@ -530,13 +574,16 @@ def _tick(state: CoordinatorState) -> None:
     gen_pool = [
         GeneratorCandidate(label=c.target)
         for c in snapshot.candidates
-        if c.pass_count == -1 and c.deps_ready
+        if c.pass_count == -1
+        and c.target_kind in {"lemma", "theorem", "proposition"}
+        and c.deps_ready
     ]
     ver_pool = [
         VerifierCandidate(label=c.target, pass_count=c.pass_count)
         for c in snapshot.candidates
         if 0 <= c.pass_count < state.config.scheduling.desired_pass_count
         and c.deps_ready
+        and c.verifier_deps_strictly_ahead
     ]
 
     gen_capacity = max(
@@ -559,6 +606,24 @@ def _tick(state: CoordinatorState) -> None:
     by_label = {c.target: c for c in snapshot.candidates}
     dispatched_gen = 0
     dispatched_ver = 0
+    user_blocked = sum(
+        1
+        for c in snapshot.candidates
+        if c.pass_count == -1 and c.target_kind in {"definition", "external_theorem"}
+    )
+    gen_blocked = sum(
+        1
+        for c in snapshot.candidates
+        if c.pass_count == -1
+        and c.target_kind in {"lemma", "theorem", "proposition"}
+        and not c.deps_ready
+    )
+    ver_blocked = sum(
+        1
+        for c in snapshot.candidates
+        if 0 <= c.pass_count < state.config.scheduling.desired_pass_count
+        and (not c.deps_ready or not c.verifier_deps_strictly_ahead)
+    )
 
     for lbl in gen_targets:
         cand = by_label[lbl]
@@ -588,6 +653,7 @@ def _tick(state: CoordinatorState) -> None:
     in_flight = len(state.in_flight_workers)
     code, detail = _decide_idle_reason(
         snapshot,
+        desired_pass_count=state.config.scheduling.desired_pass_count,
         in_flight=in_flight,
         dispatched_gen=dispatched_gen,
         dispatched_ver=dispatched_ver,
@@ -601,6 +667,9 @@ def _tick(state: CoordinatorState) -> None:
         dispatchable_gen=len(gen_pool),
         dispatchable_ver=len(ver_pool),
         unfinished=sum(1 for c in snapshot.candidates if c.pass_count < state.config.scheduling.desired_pass_count),
+        user_blocked=user_blocked,
+        gen_blocked=gen_blocked,
+        ver_blocked=ver_blocked,
     )
 
 

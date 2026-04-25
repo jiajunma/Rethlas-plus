@@ -191,6 +191,40 @@ def test_index_root_serves_html(tmp_path: Path) -> None:
             assert endpoint in text
 
 
+def test_attention_includes_three_x_stuck_targets(tmp_path: Path) -> None:
+    """ARCHITECTURE §6.7 — labelled "3x consecutive" attention entries
+    written by the coordinator are surfaced through /api/attention.
+    """
+    _init_ws(tmp_path)
+    # Hand-write a coordinator.json with attention_targets populated.
+    hb = CoordinatorHeartbeat(
+        pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+        status=STATUS_RUNNING,
+        attention_targets=[
+            {
+                "kind": "generator", "target": "thm:t",
+                "trigger": "apply_failed", "reason": "label_conflict",
+                "count": 3,
+                "message": "generator stuck on thm:t: 3× label_conflict",
+            },
+            {
+                "kind": "verifier", "target": "thm:u",
+                "trigger": "timed_out", "reason": "", "count": 4,
+                "message": "verifier frozen on thm:u",
+            },
+        ],
+    )
+    write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+
+    with _ServerCtx(tmp_path) as ctx:
+        code, _hdrs, body = ctx.get("/api/attention")
+        assert code == 200
+        parsed = json.loads(body)
+        msgs = [i.get("message", "") for i in parsed["items"] if i.get("kind") == "stuck_target"]
+        assert any("stuck on thm:t" in m for m in msgs)
+        assert any("frozen on thm:u" in m for m in msgs)
+
+
 def test_attention_endpoint_lists_user_blocked(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     # Seed a definition that will be at pass_count=0 (not -1) — so to make

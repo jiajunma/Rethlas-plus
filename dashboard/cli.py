@@ -27,8 +27,6 @@ from typing import Any
 
 from cli.workspace import ensure_initialised, workspace_paths
 from common.config.loader import load_config
-from dashboard.server import DashboardCore, SseBroker, serve_forever
-from dashboard.state_watcher import StateWatcher
 
 
 _BIND_HELD_MSG_TEMPLATE = (
@@ -116,6 +114,9 @@ def run_dashboard(workspace: str | None, args: argparse.Namespace) -> int:
         logging.getLogger("rethlas.dashboard").warning(
             "dashboard binding to non-loopback %s — Phase I has no auth", host
         )
+
+    from dashboard.server import DashboardCore, SseBroker, serve_forever
+    from dashboard.state_watcher import StateWatcher
 
     core = DashboardCore(
         ws.root, desired_pass_count=cfg.scheduling.desired_pass_count

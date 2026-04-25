@@ -147,7 +147,15 @@ class DashboardCore:
         }
 
     def active(self) -> dict[str, Any]:
-        jobs = [j.to_dict() for j in list_jobs(self.jobs_dir)]
+        coord = _safe_read_json(self.coordinator_path) or {}
+        timeout_s = float(coord.get("codex_silent_timeout_seconds", 1800.0) or 1800.0)
+        jobs: list[dict[str, Any]] = []
+        for j in list_jobs(self.jobs_dir):
+            d = j.to_dict()
+            log_age = _log_age_seconds(j.log_path)
+            d["codex_log_age_seconds"] = log_age
+            d["codex_log_age_color"] = _log_age_color(log_age, timeout_s)
+            jobs.append(d)
         return {"jobs": jobs, "count": len(jobs)}
 
     def overview(self) -> dict[str, Any]:
@@ -279,6 +287,21 @@ class DashboardCore:
                     "detail": coord.get("idle_reason_detail", ""),
                 }
             )
+        # ARCHITECTURE §6.7 "3x consecutive" labelled attention items.
+        for entry in coord.get("attention_targets", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            items.append(
+                {
+                    "kind": "stuck_target",
+                    "trigger": entry.get("trigger", ""),
+                    "target": entry.get("target", ""),
+                    "node_kind": entry.get("kind", ""),
+                    "reason": entry.get("reason", ""),
+                    "count": entry.get("count", 0),
+                    "message": entry.get("message", ""),
+                }
+            )
 
         # Librarian-level alerts.
         lib = _safe_read_json(self.librarian_path) or {}
@@ -407,6 +430,37 @@ class DashboardCore:
                     }
                 )
         return {"events": out, "count": len(out), "limit": limit}
+
+
+def _log_age_seconds(log_path: str) -> float | None:
+    """Return age (now - mtime) in seconds, or None if the file is missing."""
+    if not log_path:
+        return None
+    try:
+        st = os.stat(log_path)
+    except (FileNotFoundError, OSError):
+        return None
+    return max(0.0, time.time() - st.st_mtime)
+
+
+def _log_age_color(age: float | None, timeout_s: float) -> str:
+    """ARCHITECTURE §6.7 color grading.
+
+    - green:  age <= 5 min
+    - yellow: 5 min < age <= min(T/2, 15 min)
+    - orange: min(T/2, 15 min) < age < T
+    - red:    age >= T (coordinator will SIGINT on next tick)
+    """
+    if age is None:
+        return "unknown"
+    if age <= 300.0:
+        return "green"
+    yellow_cap = min(timeout_s / 2.0, 900.0)
+    if age <= yellow_cap:
+        return "yellow"
+    if age < timeout_s:
+        return "orange"
+    return "red"
 
 
 def _read_jsonl_tail(path: Path, *, limit: int) -> list[dict[str, Any]]:
