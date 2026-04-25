@@ -86,6 +86,9 @@ def run_rebuild(workspace: str | None) -> int:
         _write_flag(ws)
         # Wipe ONLY the knowledge_base projection; events/ stays intact.
         kb_dir = ws.knowledge_base
+        # Be resilient to a workspace whose ``knowledge_base/`` was
+        # accidentally deleted by the user — recreate before wiping.
+        kb_dir.mkdir(parents=True, exist_ok=True)
         for entry in kb_dir.iterdir():
             if entry.is_dir():
                 shutil.rmtree(entry)
