@@ -26,6 +26,7 @@ the state machine deterministically without binding real ports.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -34,6 +35,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
+
+
+log = logging.getLogger("rethlas.coordinator.dashboard_child")
 
 
 DEFAULT_STARTUP_GRACE_S = 30.0
@@ -123,8 +127,9 @@ class DashboardSupervisor:
             return
         try:
             self.proc = self.spawn(self.ws_root, self.bind)
-        except Exception:
+        except Exception as exc:
             # Spawn itself failed; treat as immediate failure.
+            log.warning("dashboard spawn failed: %s", exc)
             self.proc = None
             self.failed_at = self.clock()
             self.restart_count += 1
@@ -133,9 +138,17 @@ class DashboardSupervisor:
                 if self.restart_count > self.max_restarts
                 else STATUS_BACKOFF
             )
+            if self.status == STATUS_DEGRADED:
+                log.error("dashboard supervisor degraded after %d failed spawn attempts",
+                          self.restart_count)
             return
         self.spawned_at = self.clock()
         self.status = STATUS_STARTING
+        if self.restart_count == 0:
+            log.info("dashboard child spawned (pid=%s)", getattr(self.proc, "pid", "?"))
+        else:
+            log.info("dashboard child restart #%d spawned (pid=%s)",
+                     self.restart_count, getattr(self.proc, "pid", "?"))
 
     def tick(self) -> None:
         """One supervisor tick. Drives state transitions."""
@@ -186,7 +199,15 @@ class DashboardSupervisor:
         self.restart_count += 1
         if self.restart_count > self.max_restarts:
             self.status = STATUS_DEGRADED
+            log.error(
+                "dashboard supervisor degraded after %d consecutive failures (§6.4)",
+                self.restart_count,
+            )
         else:
+            log.warning(
+                "dashboard child failed (attempt %d/%d); will retry after %.0fs backoff",
+                self.restart_count, self.max_restarts + 1, self.restart_backoff_s,
+            )
             self.status = STATUS_BACKOFF
 
     def shutdown(self, *, timeout: float = 5.0) -> None:
