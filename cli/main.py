@@ -24,7 +24,7 @@ SUBCOMMANDS: dict[str, str] = {
     "add-node": "publish a user.node_added event (M3)",
     "revise-node": "publish a user.node_revised event (M3)",
     "attach-hint": "publish a user.hint_attached event (M3)",
-    "supervise": "run the coordinator + librarian + dashboard (M8)",
+    "supervise": "run the coordinator + librarian (M8)",
     "dashboard": "run the read-only dashboard standalone (M9)",
     "linter": "run the workspace linter (M10)",
     "rebuild": "rebuild the projected KB from events/ (M3 / M4)",
@@ -103,8 +103,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
     sp.add_argument("--actor", default="verifier:cli")
 
+    # supervise (M8)
+    sp = sub.add_parser(
+        "supervise", help=SUBCOMMANDS["supervise"], description=SUBCOMMANDS["supervise"]
+    )
+
     # still-placeholder subcommands
-    for name in ("supervise", "dashboard", "linter"):
+    for name in ("dashboard", "linter"):
         sp = sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
 
     return parser
@@ -182,7 +187,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from verifier.cli import run_verifier
         return run_verifier(ws, args)
 
-    # placeholders still — supervise / dashboard / linter
+    if args.command == "supervise":
+        from coordinator.main import run_supervise
+        return run_supervise(ws)
+
+    # placeholders still — dashboard / linter
     return _run_stub(args.command)
 
 
