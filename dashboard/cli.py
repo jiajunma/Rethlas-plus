@@ -115,6 +115,7 @@ def run_dashboard(workspace: str | None, args: argparse.Namespace) -> int:
             "dashboard binding to non-loopback %s — Phase I has no auth", host
         )
 
+    from dashboard.heartbeat import HeartbeatPublisher
     from dashboard.server import DashboardCore, SseBroker, serve_forever
     from dashboard.state_watcher import StateWatcher
 
@@ -123,9 +124,12 @@ def run_dashboard(workspace: str | None, args: argparse.Namespace) -> int:
     )
     broker = SseBroker()
     watcher = StateWatcher(ws.root, broker)
+    heartbeat = HeartbeatPublisher(ws.root, bind=bind_str)
     watcher.start()
+    heartbeat.start()
 
     def _on_sigterm(signum: int, frame: Any) -> None:
+        heartbeat.stop()
         watcher.stop()
         sys.exit(0)
 
@@ -135,6 +139,7 @@ def run_dashboard(workspace: str | None, args: argparse.Namespace) -> int:
     try:
         serve_forever(core, host=host, port=port, broker=broker)
     finally:
+        heartbeat.stop()
         watcher.stop()
     return 0
 

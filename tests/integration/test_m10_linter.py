@@ -84,6 +84,23 @@ def test_clean_workspace_passes(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Category A.
 # ---------------------------------------------------------------------------
+def test_category_a_envelope_invalid(tmp_path: Path) -> None:
+    """§3.4 envelope-level validation surfaces unknown type / bad actor."""
+    _init(tmp_path)
+    _seed_def_and_theorem(tmp_path)
+    files = sorted((tmp_path / "events").rglob("*.json"))
+    target = files[0]
+    body = json.loads(target.read_text(encoding="utf-8"))
+    body["type"] = "rogue.event_type"  # not in §3.4 allowlist
+    target.write_text(json.dumps(body), encoding="utf-8")
+
+    rc = run_linter_on_workspace(workspace_paths(str(tmp_path)))
+    report = _read_report(tmp_path)
+    codes = [v["code"] for v in report["a"]["violations"]]
+    assert "A_envelope_invalid" in codes
+    assert rc == 5
+
+
 def test_category_a_filename_body_event_id_mismatch(tmp_path: Path) -> None:
     _init(tmp_path)
     _seed_def_and_theorem(tmp_path)

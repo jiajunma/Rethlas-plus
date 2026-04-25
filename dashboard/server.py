@@ -147,6 +147,12 @@ class DashboardCore:
             "liveness": live,
         }
 
+    def dashboard(self) -> dict[str, Any]:
+        path = self.state_dir / "dashboard.json"
+        hb = _safe_read_json(path)
+        live = liveness_label(hb.get("updated_at") if hb else None)
+        return {"dashboard": hb or {}, "liveness": live}
+
     def active(self) -> dict[str, Any]:
         coord = _safe_read_json(self.coordinator_path) or {}
         timeout_s = float(coord.get("codex_silent_timeout_seconds", 1800.0) or 1800.0)
@@ -653,6 +659,8 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                 return self._send_json(200, core.coordinator())
             if path == "/api/librarian":
                 return self._send_json(200, core.librarian())
+            if path == "/api/dashboard":
+                return self._send_json(200, core.dashboard())
             if path == "/api/active":
                 return self._send_json(200, core.active())
             if path == "/api/events":

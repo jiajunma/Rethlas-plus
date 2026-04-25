@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Iterator
 
 from common.events.filenames import FilenameError, parse_filename
 from common.events.io import event_sha256, read_event
+from common.events.schema import SchemaError, validate_event_schema
 from common.kb.types import (
     AXIOM_KINDS,
     KIND_PREFIX,
@@ -121,6 +122,20 @@ def check_a_event_integrity(events_dir: Path) -> list[Violation]:
                 )
             )
             continue
+
+        # §3.4 envelope validation — surface bad type / actor / ts / payload
+        # shape before they propagate further (linter is the only Phase I
+        # safety net for this on already-applied events).
+        try:
+            validate_event_schema(body)
+        except SchemaError as exc:
+            out.append(
+                Violation(
+                    "A_envelope_invalid",
+                    f"§3.4 envelope rejected: {exc}",
+                    {"path": str(f), "error": str(exc)},
+                )
+            )
 
         body_event_id = body.get("event_id")
         # filename's event_id reconstructs as iso_ms-seq-uid.
