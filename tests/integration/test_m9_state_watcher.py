@@ -30,6 +30,8 @@ from librarian.heartbeat import (
     LibrarianHeartbeat,
     write_heartbeat as write_librarian_hb,
 )
+from common.kb.kuzu_backend import KuzuBackend
+from common.kb.types import ApplyOutcome
 
 
 PYTHON = sys.executable
@@ -147,6 +149,43 @@ def test_applied_event_envelope_polls_kuzu(tmp_path: Path) -> None:
     applied = [e for e in envs if e["type"] == "applied_event"]
     assert applied, [e["type"] for e in envs]
     assert applied[0]["payload"]["status"] == "applied"
+
+
+def test_applied_event_watermark_uses_event_id_tiebreak(tmp_path: Path) -> None:
+    """Rows with the same ``applied_at`` but higher ``event_id`` must still emit.
+
+    Regression for the bug where the watcher used only ``applied_at`` as its
+    watermark and skipped later rows sharing the same millisecond.
+    """
+    _init_ws(tmp_path)
+    broker = SseBroker()
+    watcher = StateWatcher(tmp_path, broker, poll_interval_s=10.0)
+    backend = KuzuBackend(tmp_path / "knowledge_base" / "dag.kz")
+    try:
+        ts = "2026-04-24T12:00:00.000Z"
+        backend.record_applied_event(
+            event_id="20260424T120000.000-0001-aaaaaaaaaaaaaaaa",
+            status=ApplyOutcome.APPLIED,
+            event_sha256="aa" * 32,
+            applied_at=ts,
+        )
+        watcher.tick(prime=True)
+        backend.record_applied_event(
+            event_id="20260424T120000.000-0002-bbbbbbbbbbbbbbbb",
+            status=ApplyOutcome.APPLY_FAILED,
+            event_sha256="bb" * 32,
+            reason="label_conflict",
+            detail="dup",
+            applied_at=ts,
+        )
+    finally:
+        backend.close()
+
+    envs = watcher.tick()
+    applied = [e for e in envs if e["type"] == "applied_event"]
+    assert len(applied) == 1
+    assert applied[0]["payload"]["event_id"] == "20260424T120000.000-0002-bbbbbbbbbbbbbbbb"
+    assert applied[0]["payload"]["status"] == "apply_failed"
 
 
 def test_truncated_jsonl_resets_offset(tmp_path: Path) -> None:

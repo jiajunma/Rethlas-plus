@@ -145,12 +145,17 @@ def dependents_of(ws_root: Path, label: str) -> list[str]:
         del db
 
 
-def list_applied_since(ws_root: Path, watermark: str) -> list[dict[str, Any]]:
-    """Return ``AppliedEvent`` rows with ``applied_at > watermark``.
+def list_applied_since(
+    ws_root: Path,
+    watermark: tuple[str, str],
+) -> list[dict[str, Any]]:
+    """Return ``AppliedEvent`` rows strictly after ``watermark``.
 
     Used by :class:`dashboard.state_watcher.StateWatcher` to fire the
     ``applied_event`` SSE envelope (§6.7.1). The watermark is the
-    ISO 8601 ``applied_at`` of the most recent row already published.
+    lexicographic tuple ``(applied_at, event_id)`` of the most recent
+    row already published. The tie-break on ``event_id`` matters when
+    multiple AppliedEvent rows share the same millisecond timestamp.
     """
     _check_rebuild(ws_root / "runtime" / "state")
     db_path = ws_root / "knowledge_base" / "dag.kz"
@@ -160,18 +165,21 @@ def list_applied_since(ws_root: Path, watermark: str) -> list[dict[str, Any]]:
     db = kuzu.Database(str(db_path), read_only=True)
     conn = kuzu.Connection(db)
     try:
-        if watermark:
+        applied_at_wm, event_id_wm = watermark
+        if applied_at_wm:
             res = conn.execute(
-                "MATCH (a:AppliedEvent) WHERE a.applied_at > $w "
+                "MATCH (a:AppliedEvent) "
+                "WHERE a.applied_at > $ts "
+                "   OR (a.applied_at = $ts AND a.event_id > $eid) "
                 "RETURN a.event_id, a.status, a.reason, a.detail, a.applied_at, "
-                "a.target_label ORDER BY a.applied_at ASC",
-                {"w": watermark},
+                "a.target_label ORDER BY a.applied_at ASC, a.event_id ASC",
+                {"ts": applied_at_wm, "eid": event_id_wm},
             )
         else:
             res = conn.execute(
                 "MATCH (a:AppliedEvent) "
                 "RETURN a.event_id, a.status, a.reason, a.detail, a.applied_at, "
-                "a.target_label ORDER BY a.applied_at ASC"
+                "a.target_label ORDER BY a.applied_at ASC, a.event_id ASC"
             )
         out: list[dict[str, Any]] = []
         while res.has_next():

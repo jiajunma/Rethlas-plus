@@ -84,7 +84,7 @@ class StateWatcher:
         self._librarian_state = _FileState()
         self._rejected_offset = 0
         self._drift_offset = 0
-        self._applied_watermark = ""
+        self._applied_watermark: tuple[str, str] = ("", "")
         self._primed = False
 
     # --- lifecycle ---
@@ -329,8 +329,10 @@ class StateWatcher:
             return out
         for row in rows:
             applied_at = row.get("applied_at") or ""
-            if applied_at and applied_at > self._applied_watermark:
-                self._applied_watermark = applied_at
+            event_id = row.get("event_id") or ""
+            marker = (applied_at, event_id)
+            if marker > self._applied_watermark:
+                self._applied_watermark = marker
             if prime:
                 continue
             out.append(
