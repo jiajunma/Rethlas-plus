@@ -54,6 +54,7 @@ testpaths = ["tests"]
 markers = [
   "fault: crash / timeout / recovery scenarios",
   "golden: snapshot / golden-output tests",
+  "timeout: per-test wall-clock cap (handled by pytest-timeout when installed)",
 ]
 filterwarnings = [
   "ignore::DeprecationWarning",
