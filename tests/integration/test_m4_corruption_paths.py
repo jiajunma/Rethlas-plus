@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ import pytest
 from common.events.filenames import format_filename
 from common.events.io import atomic_write_event
 from librarian.heartbeat import (
+    PHASE_REPLAYING,
     PHASE_READY,
     STATUS_DEGRADED,
     read_heartbeat,
@@ -86,15 +88,44 @@ def test_unregistered_actor_at_replay_marks_degraded(tmp_path: Path) -> None:
         },
     }
     _drop_canonical_event(tmp_path, body)
+    # A later valid event must NOT be replayed once corruption is hit.
+    good_body = {
+        "event_id": "20260424T010001.000-0001-eeeeeeeeeeeeeeee",
+        "type": "user.node_added",
+        "actor": "user:alice",
+        "ts": "2026-04-24T01:00:01.000+00:00",
+        "target": "def:y",
+        "payload": {
+            "kind": "definition",
+            "statement": "Define Y.",
+            "remark": "",
+            "source_note": "",
+        },
+    }
+    _drop_canonical_event(
+        tmp_path, good_body, iso_ms="20260424T010001.000", uid="e" * 16
+    )
 
     with librarian(tmp_path) as lp:
-        # Daemon should still walk through phases (it doesn't crash on
-        # corruption — it sets status=degraded and continues).
-        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline and lp.proc.poll() is None:
+            time.sleep(0.05)
+        assert lp.proc.poll() is not None, "librarian should halt on replay corruption"
         hb = read_heartbeat(tmp_path / "runtime" / "state" / "librarian.json")
         assert hb is not None
         assert hb["status"] == STATUS_DEGRADED, hb
         assert "corruption" in hb["last_error"].lower() or "rogue" in hb["last_error"].lower()
+        assert hb["startup_phase"] == PHASE_REPLAYING
+        import kuzu
+        db = kuzu.Database(str(tmp_path / "knowledge_base" / "dag.kz"), read_only=True)
+        conn = kuzu.Connection(db)
+        try:
+            res = conn.execute("MATCH (n:Node) RETURN count(*)")
+            assert res.has_next()
+            assert int(res.get_next()[0]) == 0
+        finally:
+            del conn
+            del db
 
 
 def test_cross_batch_cycle_marks_apply_failed(tmp_path: Path) -> None:

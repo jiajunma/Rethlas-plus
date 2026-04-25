@@ -80,6 +80,10 @@ class _Counters:
     last_error: str = ""
 
 
+class _CorruptionHalt(RuntimeError):
+    """Canonical event corruption must halt projection immediately."""
+
+
 def _heartbeat_interval() -> float:
     raw = os.environ.get("RETHLAS_LIBRARIAN_HEARTBEAT_S")
     if raw is None:
@@ -283,7 +287,9 @@ class LibrarianDaemon:
                     pass
         # Replay every event using the same machinery.
         for path in _events_in_order(self.ws.events):
-            self._apply_path(path, render_nodes=False)
+            status, _reason, detail = self._apply_path(path, render_nodes=False)
+            if status == "corruption":
+                raise _CorruptionHalt(detail or f"workspace corruption at {path}")
         # Render nodes/ from final Kuzu state.
         self._render_all_published_nodes()
         # Clear flag.
@@ -299,8 +305,10 @@ class LibrarianDaemon:
         """Idempotent walk over ``events/``; skip already-decided rows."""
         assert self.backend is not None
         for path in _events_in_order(self.ws.events):
-            self._apply_path(path, render_nodes=True)
+            status, _reason, detail = self._apply_path(path, render_nodes=True)
             self._heartbeat()
+            if status == "corruption":
+                raise _CorruptionHalt(detail or f"workspace corruption at {path}")
 
     def _reconcile_nodes_dir(self) -> None:
         """Heal stale ``nodes/*.md`` (crash window) and delete orphans.
@@ -556,7 +564,12 @@ def _events_in_order(events_root: Path) -> list[Path]:
 
 
 def _event_sort_key(path: Path) -> tuple[str, int, str]:
-    parsed = parse_filename(path.name)
+    try:
+        parsed = parse_filename(path.name)
+    except Exception as exc:
+        raise _CorruptionHalt(
+            f"canonical event filename invalid during replay: {path.name}: {exc}"
+        ) from exc
     return (parsed.iso_ms, parsed.seq, parsed.uid)
 
 
