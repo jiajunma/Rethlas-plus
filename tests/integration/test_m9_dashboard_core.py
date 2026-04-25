@@ -199,6 +199,9 @@ def test_node_detail_active_job_includes_log_age_color(tmp_path: Path) -> None:
     # Log was just written → green band.
     assert aj["codex_log_age_color"] == "green"
     assert aj["codex_log_age_seconds"] is not None
+    # §7.4 F4 wrapper-heartbeat freshness must surface here too.
+    assert "wrapper_heartbeat_age_seconds" in aj
+    assert aj["wrapper_heartbeat_age_seconds"] is not None
 
 
 def test_node_detail_unknown_returns_none(tmp_path: Path) -> None:

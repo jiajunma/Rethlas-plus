@@ -248,6 +248,7 @@ class DashboardCore:
     def node_detail(self, label: str) -> dict[str, Any] | None:
         coord = _safe_read_json(self.coordinator_path) or {}
         timeout_s = float(coord.get("codex_silent_timeout_seconds", 1800.0) or 1800.0)
+        now = datetime.now(tz=timezone.utc)
         nodes = list_nodes(self.ws_root)
         passes_by_label = {n.label: n.pass_count for n in nodes}
         all_jobs = list(list_jobs(self.jobs_dir))
@@ -274,6 +275,9 @@ class DashboardCore:
                 log_age = _log_age_seconds(j.log_path, ws_root=self.ws_root)
                 jd["codex_log_age_seconds"] = log_age
                 jd["codex_log_age_color"] = _log_age_color(log_age, timeout_s)
+                jd["wrapper_heartbeat_age_seconds"] = _heartbeat_age_seconds(
+                    j.updated_at, now=now
+                )
                 active_job = jd
                 break
             recent_events: list[dict[str, Any]] = []
