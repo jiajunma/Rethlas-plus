@@ -9,7 +9,11 @@ Thresholds:
 
 from __future__ import annotations
 
-from dashboard.server import _log_age_color
+import os
+import time
+from pathlib import Path
+
+from dashboard.server import _log_age_color, _log_age_seconds
 
 
 def test_green_under_5_minutes() -> None:
@@ -43,3 +47,37 @@ def test_short_timeout_caps_yellow_at_T_over_two() -> None:
 
 def test_unknown_for_missing_file() -> None:
     assert _log_age_color(None, timeout_s=1800.0) == "unknown"
+
+
+def test_log_age_seconds_resolves_relative_path_against_ws_root(tmp_path: Path) -> None:
+    """§6.7.1 stores log_path relative to workspace root; the dashboard's
+    CWD is not the workspace, so the resolver must use ws_root or
+    os.stat will always fail and the §6.7 color grading collapses to
+    "unknown" on every job."""
+    log = tmp_path / "runtime" / "logs" / "ver-test.codex.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("hello", encoding="utf-8")
+    # Set mtime to ~10s ago.
+    os.utime(log, (time.time() - 10, time.time() - 10))
+
+    age = _log_age_seconds("runtime/logs/ver-test.codex.log", ws_root=tmp_path)
+    assert age is not None
+    assert 9.0 <= age <= 30.0
+
+
+def test_log_age_seconds_returns_none_when_relative_unresolvable(tmp_path: Path) -> None:
+    # Without ws_root, a relative path stat-fails (CWD mismatch) and we
+    # return None — better than misreporting a stale age.
+    age = _log_age_seconds("runtime/logs/nope.codex.log", ws_root=tmp_path)
+    assert age is None
+    age = _log_age_seconds("")
+    assert age is None
+
+
+def test_log_age_seconds_accepts_absolute_path(tmp_path: Path) -> None:
+    log = tmp_path / "absolute.log"
+    log.write_text("x", encoding="utf-8")
+    os.utime(log, (time.time() - 5, time.time() - 5))
+    age = _log_age_seconds(str(log))
+    assert age is not None
+    assert 4.0 <= age <= 30.0

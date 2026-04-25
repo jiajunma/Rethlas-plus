@@ -160,7 +160,7 @@ class DashboardCore:
         jobs: list[dict[str, Any]] = []
         for j in list_jobs(self.jobs_dir):
             d = j.to_dict()
-            log_age = _log_age_seconds(j.log_path)
+            log_age = _log_age_seconds(j.log_path, ws_root=self.ws_root)
             d["codex_log_age_seconds"] = log_age
             d["codex_log_age_color"] = _log_age_color(log_age, timeout_s)
             # ARCHITECTURE §6.7 active-jobs panel: surface wrapper
@@ -269,7 +269,9 @@ class DashboardCore:
                 if j.target != label:
                     continue
                 jd = j.to_dict()
-                jd["codex_log_age_seconds"] = _log_age_seconds(j.log_path)
+                jd["codex_log_age_seconds"] = _log_age_seconds(
+                    j.log_path, ws_root=self.ws_root
+                )
                 active_job = jd
                 break
             recent_events: list[dict[str, Any]] = []
@@ -508,12 +510,22 @@ def _heartbeat_age_seconds(
     return max(0.0, (now - parsed).total_seconds())
 
 
-def _log_age_seconds(log_path: str) -> float | None:
-    """Return age (now - mtime) in seconds, or None if the file is missing."""
+def _log_age_seconds(log_path: str, *, ws_root: Path | None = None) -> float | None:
+    """Return age (now - mtime) in seconds, or None if the file is missing.
+
+    ``log_path`` is stored relative to the workspace root in the job
+    file (``runtime/logs/<job_id>.codex.log`` per §6.7.1); the dashboard
+    process's CWD is not the workspace, so callers must pass
+    ``ws_root`` for relative-path resolution. Absolute paths are
+    accepted and used unchanged.
+    """
     if not log_path:
         return None
+    p = Path(log_path)
+    if not p.is_absolute() and ws_root is not None:
+        p = ws_root / p
     try:
-        st = os.stat(log_path)
+        st = os.stat(p)
     except (FileNotFoundError, OSError):
         return None
     return max(0.0, time.time() - st.st_mtime)
