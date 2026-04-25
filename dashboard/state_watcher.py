@@ -149,7 +149,18 @@ class StateWatcher:
                 try:
                     body = json.loads(f.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
-                    body = {"event_id": f.stem.split("--")[-1]}
+                    # Filename body unreadable: fall back to a structured
+                    # event_id parsed from the filename (iso_ms-seq-uid).
+                    try:
+                        from common.events.filenames import parse_filename
+                        parsed = parse_filename(f.name)
+                        body = {
+                            "event_id": (
+                                f"{parsed.iso_ms}-{parsed.seq:04d}-{parsed.uid}"
+                            )
+                        }
+                    except Exception:
+                        body = {"event_id": f.stem}
                 out.append(
                     envelope(
                         "truth_event",

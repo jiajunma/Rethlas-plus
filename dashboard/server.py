@@ -36,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterable
 
+from common.events.filenames import FilenameError, parse_filename
 from common.runtime.jobs import list_jobs
 from coordinator.heartbeat import read_heartbeat as read_coordinator_hb
 from dashboard.kuzu_reader import (
@@ -269,7 +270,13 @@ class DashboardCore:
             "drift_alerts": drift,
         }
 
-    def events(self, limit: int) -> dict[str, Any]:
+    def events(
+        self,
+        limit: int,
+        *,
+        actor: str | None = None,
+        event_type: str | None = None,
+    ) -> dict[str, Any]:
         # §6.7.1: walk events/{YYYY-MM-DD}/*.json reverse-chronologically.
         out: list[dict[str, Any]] = []
         if not self.events_dir.is_dir():
@@ -286,7 +293,35 @@ class DashboardCore:
             for f in files:
                 if len(out) >= limit:
                     break
-                out.append({"event_id": f.stem.split("--")[-1], "filename": f.name, "shard": shard.name})
+                try:
+                    parsed = parse_filename(f.name)
+                except FilenameError:
+                    # Malformed filename — surface it but don't crash.
+                    out.append(
+                        {
+                            "event_id": f.stem,
+                            "filename": f.name,
+                            "shard": shard.name,
+                            "actor": "",
+                            "type": "",
+                            "target": None,
+                        }
+                    )
+                    continue
+                if actor and parsed.actor != actor:
+                    continue
+                if event_type and parsed.event_type != event_type:
+                    continue
+                out.append(
+                    {
+                        "event_id": f"{parsed.iso_ms}-{parsed.seq:04d}-{parsed.uid}",
+                        "filename": f.name,
+                        "shard": shard.name,
+                        "actor": parsed.actor,
+                        "type": parsed.event_type,
+                        "target": parsed.target,
+                    }
+                )
         return {"events": out, "count": len(out), "limit": limit}
 
 
@@ -449,7 +484,11 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                 return self._send_400("limit must be >= 1")
             if limit > _EVENTS_LIMIT_MAX:
                 limit = _EVENTS_LIMIT_MAX
-            return self._send_json(200, core.events(limit))
+            actor = qs.get("actor", [None])[0]
+            event_type = qs.get("type", [None])[0]
+            return self._send_json(
+                200, core.events(limit, actor=actor, event_type=event_type)
+            )
 
         def _handle_sse(self) -> None:
             if broker is None:

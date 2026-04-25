@@ -229,6 +229,34 @@ def test_events_reverse_chronological(tmp_path: Path) -> None:
     # Reverse chronological: latest filename first within shard.
     filenames = [e["filename"] for e in res["events"]]
     assert filenames == sorted(filenames, reverse=True)
+    # Each entry exposes the full reconstructed event_id (iso_ms-seq-uid),
+    # matching the body's event_id — not just the uid.
+    for entry in res["events"]:
+        body = json.loads(
+            (tmp_path / "events" / entry["shard"] / entry["filename"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        assert entry["event_id"] == body["event_id"]
+        assert entry["type"] == body["type"]
+        assert entry["actor"] == body["actor"]
+
+
+def test_events_filter_by_actor_and_type(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
+        "--statement", "Define X.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "def:y", "--kind", "definition",
+        "--statement", "Define Y.", "--actor", "user:bob",
+    )
+    core = DashboardCore(tmp_path)
+    only_alice = core.events(limit=10, actor="user:alice")
+    assert {e["actor"] for e in only_alice["events"]} == {"user:alice"}
+    only_added = core.events(limit=10, event_type="user.node_added")
+    assert all(e["type"] == "user.node_added" for e in only_added["events"])
 
 
 def test_events_limit_clamps_to_500(tmp_path: Path) -> None:
