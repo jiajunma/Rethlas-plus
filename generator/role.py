@@ -252,9 +252,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if outcome.timed_out:
         # Coordinator owns timed_out write per §6.7.1; wrapper just
-        # exits non-zero and lets coordinator detect.
+        # exits 124 and lets coordinator detect on its next tick (see
+        # _reap_finished_workers in coordinator/main.py). Writing a
+        # transient STATUS_CRASHED here would briefly mislabel the job
+        # in the dashboard SSE stream before coordinator's override.
         sys.stderr.write("generator: codex timed out\n")
-        update_job_file(job_path, status=STATUS_CRASHED, detail="timeout")
         return 124
     if outcome.exit_code != 0:
         update_job_file(

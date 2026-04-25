@@ -35,12 +35,19 @@ from cli.workspace import WorkspacePaths, workspace_paths
 from common.config.loader import RethlasConfig, load_config
 from common.runtime.jobs import (
     JobRecord,
+    STATUS_APPLIED,
+    STATUS_APPLY_FAILED,
+    STATUS_CRASHED,
     STATUS_PUBLISHING,
     STATUS_STARTING,
+    STATUS_TIMED_OUT,
     TERMINAL_STATUSES,
+    delete_job_file,
     job_file_path,
     list_jobs,
     make_job_id,
+    read_job_file,
+    update_job_file,
     utc_now_iso,
     write_job_file,
 )
@@ -455,9 +462,64 @@ def _dispatch_job(
 # Reap finished workers
 # ---------------------------------------------------------------------------
 def _reap_finished_workers(state: CoordinatorState) -> None:
-    finished = [jid for jid, proc in state.in_flight_workers.items() if proc.poll() is not None]
-    for jid in finished:
+    """Reap dead wrapper subprocesses; record terminal outcomes (§6.7.1 step 4-5).
+
+    For wrappers that exited without writing ``publishing`` (timeout or
+    crash), the coordinator owns the terminal state-write per §6.7.1:
+
+    - exit_code 124  -> ``status = "timed_out"`` (silent-timeout kill)
+    - any other      -> ``status = "crashed"``
+
+    The outcome is recorded into :class:`OutcomeWindow` so §7.4 / §7.5
+    "3 consecutive" attention triggers can fire, and the file is
+    deleted. Jobs in ``publishing`` are left alone — the AppliedEvent
+    poller (:func:`reconcile_publishing_jobs`) handles those.
+    """
+    finished = [(jid, proc) for jid, proc in state.in_flight_workers.items() if proc.poll() is not None]
+    for jid, proc in finished:
         del state.in_flight_workers[jid]
+        path = job_file_path(state.ws.runtime_jobs, jid)
+        rec = read_job_file(path)
+        if rec is None:
+            # File already gone (race with another reaper path).
+            continue
+        if rec.status == STATUS_PUBLISHING:
+            # Successful publish in flight — applied_poller owns terminal.
+            continue
+        if rec.status in (STATUS_APPLIED, STATUS_APPLY_FAILED):
+            # Already reconciled by applied_poller; just clean up.
+            delete_job_file(path)
+            continue
+        # Wrapper either wrote ``crashed`` itself (decode error /
+        # subprocess crash / silent timeout) or was killed mid-run.
+        # Coordinator owns the canonical terminal-state write per
+        # §6.7.1 step 4-5: exit_code 124 => ``timed_out``, otherwise
+        # ``crashed``. We record the outcome regardless of what the
+        # wrapper wrote — without this the §7.4 / §7.5 "3 consecutive"
+        # attention triggers never fire on decode-error spirals or
+        # silent-timeout loops.
+        if proc.returncode == 124:
+            terminal_status = STATUS_TIMED_OUT
+            update_job_file(
+                path,
+                status=STATUS_TIMED_OUT,
+                detail="codex silent-timeout (exit 124)",
+            )
+        else:
+            terminal_status = STATUS_CRASHED
+            if rec.status != STATUS_CRASHED:
+                update_job_file(
+                    path,
+                    status=STATUS_CRASHED,
+                    detail=f"wrapper exit={proc.returncode}",
+                )
+        state.outcome_window.record(
+            target=rec.target,
+            kind=rec.kind,
+            status=terminal_status,
+            reason=rec.reason or "",
+        )
+        delete_job_file(path)
 
 
 # ---------------------------------------------------------------------------
