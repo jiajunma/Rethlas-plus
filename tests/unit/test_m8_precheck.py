@@ -22,6 +22,7 @@ def _gen_cand(**overrides) -> CandidateInput:
         repair_hint="",
         verification_report="",
         dep_statement_hashes={"def:x": "ef" * 32},
+        dep_pass_counts={"def:x": 1},
         last_rejected_verification_hash="",
     )
     base.update(overrides)
@@ -100,7 +101,7 @@ def test_generator_repair_happy_path() -> None:
 
 
 def test_verifier_happy_path() -> None:
-    cand = _gen_cand(pass_count=0)  # verifier band
+    cand = _gen_cand(pass_count=0, dep_pass_counts={"def:x": 1})  # verifier band
     ctx, fail = precheck_verifier(cand, in_flight_targets=())
     assert fail is None
     assert ctx.h_rejected == ""
@@ -114,6 +115,14 @@ def test_verifier_rejects_negative_pass_count() -> None:
 
 
 def test_verifier_rejects_when_target_in_flight() -> None:
-    cand = _gen_cand(pass_count=0)
+    cand = _gen_cand(pass_count=0, dep_pass_counts={"def:x": 1})
     ctx, fail = precheck_verifier(cand, in_flight_targets=("thm:goal",))
     assert fail.reason == "in_flight"
+
+
+def test_verifier_rejects_when_dep_not_strictly_ahead() -> None:
+    cand = _gen_cand(pass_count=1, dep_pass_counts={"def:x": 1})
+    ctx, fail = precheck_verifier(cand, in_flight_targets=())
+    assert ctx is None
+    assert fail is not None
+    assert fail.reason == "deps_not_strictly_ahead"

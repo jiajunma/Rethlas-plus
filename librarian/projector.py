@@ -336,11 +336,11 @@ class Projector:
                 repair_count=0 if clear_repair_count else existing.repair_count,
                 statement_hash=new_node.statement_hash,
                 verification_hash=new_node.verification_hash,
+                verification_report="" if clear_hint_and_report else existing.verification_report,
+                repair_hint="" if clear_hint_and_report else existing.repair_hint,
                 depends_on=tuple(deps),
             )
         )
-        if clear_hint_and_report:
-            self._kb.set_node_fields(target, verification_report="", repair_hint="")
         if new_node.statement_hash != existing.statement_hash:
             self._cascade_statement_change(target)
         return target
@@ -494,13 +494,11 @@ class Projector:
                         repair_count=0 if clear_repair_count else existing_target.repair_count,
                         statement_hash=node.statement_hash,
                         verification_hash=node.verification_hash,
+                        verification_report="" if clear_hint_and_report else existing_target.verification_report,
+                        repair_hint="" if clear_hint_and_report else existing_target.repair_hint,
                         depends_on=node.depends_on,
                     )
                 )
-                if clear_hint_and_report:
-                    self._kb.set_node_fields(
-                        lbl, verification_report="", repair_hint=""
-                    )
             else:
                 self._kb.create_node(node)
 

@@ -28,8 +28,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-import kuzu
-
 from common.kb.types import AppliedEvent, ApplyOutcome, Node, NodeKind
 
 
@@ -105,6 +103,8 @@ class KuzuBackend:
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
+        import kuzu
+
         self._db = kuzu.Database(str(self._db_path))
         self._conn = kuzu.Connection(self._db)
         self._ensure_schema()
@@ -319,8 +319,8 @@ class KuzuBackend:
             "vh": node.verification_hash,
             "pc": node.pass_count,
             "rc": node.repair_count,
-            "vr": "",
-            "rh": "",
+            "vr": node.verification_report,
+            "rh": node.repair_hint,
             "rem": node.remark,
             "src": node.source_note,
         }

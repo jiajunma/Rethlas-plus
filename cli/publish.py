@@ -29,8 +29,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-import kuzu
-
 from cli.workspace import WorkspacePaths, ensure_initialised, workspace_paths
 from common.events.filenames import escape_label, format_filename
 from common.events.ids import EventIdAllocator
@@ -89,6 +87,7 @@ def _current_kind_lookup(ws: WorkspacePaths) -> Callable[[str], str | None]:
         if not db_path.is_dir() and not db_path.exists():
             return None
         try:
+            import kuzu
             db = kuzu.Database(str(db_path), read_only=True)
             conn = kuzu.Connection(db)
         except Exception:
@@ -155,6 +154,7 @@ def _poll_applied_event(
     while time.monotonic() < deadline:
         if db_path.exists() or db_path.is_dir():
             try:
+                import kuzu
                 db = kuzu.Database(str(db_path), read_only=True)
                 conn = kuzu.Connection(db)
                 try:

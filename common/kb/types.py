@@ -59,6 +59,8 @@ class Node:
     repair_count: int  # ≥ 0
     statement_hash: str  # hex
     verification_hash: str  # hex
+    verification_report: str = ""
+    repair_hint: str = ""
     depends_on: tuple[str, ...] = ()  # label list; empty by default
 
     def initial_count(self) -> int:

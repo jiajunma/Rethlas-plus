@@ -23,8 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cli.workspace import WorkspacePaths, ensure_initialised, workspace_paths
-from common.kb.kuzu_backend import KuzuBackend
-from librarian.rebuild import rebuild_from_events
 
 
 def _utc_now_ms_iso() -> str:
@@ -94,6 +92,9 @@ def run_rebuild(workspace: str | None) -> int:
             else:
                 entry.unlink()
         ws.nodes_dir.mkdir(parents=True, exist_ok=True)
+
+        from common.kb.kuzu_backend import KuzuBackend
+        from librarian.rebuild import rebuild_from_events
 
         backend = KuzuBackend(ws.dag_kz)
         try:

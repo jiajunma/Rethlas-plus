@@ -65,11 +65,19 @@ class CandidateInput:
     repair_hint: str
     verification_report: str
     dep_statement_hashes: dict[str, str]
+    dep_pass_counts: dict[str, int]
     last_rejected_verification_hash: str = ""
 
     @property
     def deps_ready(self) -> bool:
-        return all(bool(h) for h in self.dep_statement_hashes.values())
+        return all(
+            self.dep_pass_counts.get(dep, -1) >= 1 and bool(self.dep_statement_hashes.get(dep))
+            for dep in self.dep_statement_hashes
+        )
+
+    @property
+    def verifier_deps_strictly_ahead(self) -> bool:
+        return all(self.dep_pass_counts.get(dep, -1) > self.pass_count for dep in self.dep_statement_hashes)
 
 
 def precheck_generator(
@@ -145,6 +153,18 @@ def precheck_verifier(
         return None, _fail(cand, "kind", "in_flight", "another job already targets this label")
     if not cand.deps_ready:
         return None, _fail(cand, "kind", "deps_not_ready", "deps not all at pass_count>=1")
+    if not cand.verifier_deps_strictly_ahead:
+        lagging = [
+            f"{dep}={cand.dep_pass_counts.get(dep, -1)}"
+            for dep in cand.dep_statement_hashes
+            if cand.dep_pass_counts.get(dep, -1) <= cand.pass_count
+        ]
+        return None, _fail(
+            cand,
+            "kind",
+            "deps_not_strictly_ahead",
+            "deps not strictly ahead: " + ", ".join(lagging),
+        )
     ctx = DispatchContext(
         target=cand.target,
         target_kind=cand.target_kind,
