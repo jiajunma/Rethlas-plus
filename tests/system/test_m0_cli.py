@@ -64,9 +64,10 @@ def test_each_stub_subcommand_runs_placeholder() -> None:
     wired_in_m7 = {"verifier"}   # CLI form needs --target arg
     wired_in_m8 = {"supervise"}  # long-running daemon — needs workspace
     wired_in_m9 = {"dashboard"}  # standalone HTTP server — needs workspace
+    wired_in_m10 = {"linter"}  # consistency audit — needs workspace
     wired = (
         wired_in_m3 | wired_in_m4 | wired_in_m6
-        | wired_in_m7 | wired_in_m8 | wired_in_m9
+        | wired_in_m7 | wired_in_m8 | wired_in_m9 | wired_in_m10
     )
     remaining = [n for n in SUBCOMMANDS if n not in wired]
     for name in remaining:

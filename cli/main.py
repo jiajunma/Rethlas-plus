@@ -118,9 +118,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="HOST:PORT (default: rethlas.toml [dashboard] bind = 127.0.0.1:8765)",
     )
 
-    # still-placeholder subcommands
-    for name in ("linter",):
-        sp = sub.add_parser(name, help=SUBCOMMANDS[name], description=SUBCOMMANDS[name])
+    # linter (M10)
+    sp = sub.add_parser(
+        "linter", help=SUBCOMMANDS["linter"], description=SUBCOMMANDS["linter"]
+    )
+    sp.add_argument(
+        "--repair-nodes",
+        action="store_true",
+        dest="repair_nodes",
+        help="rewrite divergent nodes/*.md and remove orphans (category E only)",
+    )
+    sp.add_argument(
+        "--allow-concurrent",
+        action="store_true",
+        dest="allow_concurrent",
+        help="run while supervise lock is held (drift entries may be transient)",
+    )
 
     return parser
 
@@ -205,7 +218,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from dashboard.cli import run_dashboard
         return run_dashboard(ws, args)
 
-    # placeholders still — linter
+    if args.command == "linter":
+        from cli.linter import run_linter
+        return run_linter(ws, args)
+
     return _run_stub(args.command)
 
 
