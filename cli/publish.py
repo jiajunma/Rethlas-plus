@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from cli.workspace import WorkspacePaths, ensure_initialised, workspace_paths
+from cli.workspace import WorkspacePaths
 from common.events.filenames import escape_label, format_filename
 from common.events.ids import EventIdAllocator
 from common.events.io import atomic_write_event
