@@ -245,7 +245,7 @@ def test_cross_generator_label_race_yields_apply_failed(tmp_path: Path) -> None:
     _drive_to_ready(tmp_path)
 
     # Construct two generator.batch_committed events that both invent
-    # the same aux label ``lem:helper``.  The projector recomputes
+    # the same aux label ``lem:aux_helper``. The projector recomputes
     # statement/verification hashes from scratch, so we don't bother
     # supplying them.
     from common.events.ids import allocate_event_id
@@ -272,7 +272,7 @@ def test_cross_generator_label_race_yields_apply_failed(tmp_path: Path) -> None:
                 "h_rejected": "",
                 "nodes": [
                     {
-                        "label": "lem:helper",
+                        "label": "lem:aux_helper",
                         "kind": "lemma",
                         "statement": helper_stmt,
                         "proof": "trivial.",
@@ -283,7 +283,7 @@ def test_cross_generator_label_race_yields_apply_failed(tmp_path: Path) -> None:
                         "label": target,
                         "kind": "theorem",
                         "statement": target_stmt,
-                        "proof": r"By \ref{lem:helper}.",
+                        "proof": r"By \ref{lem:aux_helper}.",
                         "remark": "",
                         "source_note": "",
                     },

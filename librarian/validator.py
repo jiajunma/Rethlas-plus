@@ -33,7 +33,13 @@ else:  # pragma: no cover
     import tomli as tomllib  # type: ignore
 
 from common.events.schema import SchemaError, validate_event_schema
-from common.kb.types import KIND_PREFIX, NodeKind, PROOF_REQUIRING_KINDS
+from common.kb.types import (
+    KIND_PREFIX,
+    LABEL_SLUG_RE,
+    NodeKind,
+    PLACEHOLDER_LABELS,
+    PROOF_REQUIRING_KINDS,
+)
 from common.producers import producers_toml_bytes
 
 
@@ -110,6 +116,10 @@ def validate_admission(
             raise AdmissionError(
                 f"kind {kind.value} must not carry a proof"
             )
+        if kind is NodeKind.EXTERNAL_THEOREM and not (payload.get("source_note") or "").strip():
+            raise AdmissionError(
+                "external_theorem requires non-empty source_note"
+            )
         if etype == "user.node_revised" and current_kind_of is not None:
             existing_kind = current_kind_of(target)
             if existing_kind is not None and existing_kind != kind.value:
@@ -134,5 +144,7 @@ def _check_label_prefix(label: str, kind: NodeKind) -> None:
         raise AdmissionError(
             f"label {label!r} prefix does not match kind {kind.value}"
         )
-    if not slug or not re.match(r"^[a-zA-Z0-9_]+$", slug):
+    if not slug or not LABEL_SLUG_RE.match(slug):
         raise AdmissionError(f"label {label!r} has invalid slug")
+    if label in PLACEHOLDER_LABELS:
+        raise AdmissionError(f"label {label!r} is a reserved placeholder")

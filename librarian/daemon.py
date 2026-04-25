@@ -68,7 +68,7 @@ _DEFAULT_HEARTBEAT_S = 30.0
 
 # Reconciliation ignores any file under nodes/ that does not have the
 # expected ``{prefix}_{slug}.md`` shape — leaving operator notes alone.
-_KNOWN_PREFIXES = {"def", "ext_thm", "lem", "thm", "prop"}
+_KNOWN_PREFIXES = {"def", "ext", "lem", "thm", "prop"}
 
 
 @dataclass(slots=True)

@@ -171,8 +171,8 @@ def test_failure_malformed_yaml() -> None:
 
 
 def test_failure_external_theorem_kind() -> None:
-    raw = block("ext_thm:foo", "external_theorem", "S")
-    _expect(REASON_FORBIDDEN_KIND, raw, target="ext_thm:foo")
+    raw = block("ext:foo", "external_theorem", "S")
+    _expect(REASON_FORBIDDEN_KIND, raw, target="ext:foo")
 
 
 def test_failure_prefix_kind_mismatch() -> None:

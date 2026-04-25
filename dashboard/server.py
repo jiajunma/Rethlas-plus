@@ -61,6 +61,7 @@ _RETRY_AFTER_S: int = 5
 # §6.7.1 `/api/events?limit=N` clamp.
 _EVENTS_LIMIT_MAX: int = 500
 _EVENTS_LIMIT_DEFAULT: int = 50
+_NORMAL_APPLY_FAILED_ATTENTION_REASONS = {"hash_mismatch", "label_conflict"}
 
 
 def _utc_now_iso() -> str:
@@ -434,10 +435,13 @@ class DashboardCore:
         except RebuildInProgress:
             apply_failed = []
         for ev in apply_failed[:20]:
+            reason = (ev.get("reason") or "").strip()
+            if reason in _NORMAL_APPLY_FAILED_ATTENTION_REASONS:
+                continue
             items.append(
                 {
                     "kind": "apply_failed",
-                    "message": f"apply_failed: {ev.get('reason', '')}",
+                    "message": f"apply_failed: {reason}",
                     "detail": ev,
                 }
             )

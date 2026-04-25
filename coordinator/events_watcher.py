@@ -34,6 +34,15 @@ class EventFile:
         return (self.iso_ms, self.seq, self.uid)
 
 
+class WatcherCorruption(RuntimeError):
+    """Canonical event file is malformed and must halt dispatch."""
+
+    def __init__(self, path: Path, detail: str) -> None:
+        super().__init__(detail)
+        self.path = path
+        self.detail = detail
+
+
 class EventsWatcher:
     """Stateful scanner that reports unseen event files in causal order."""
 
@@ -41,40 +50,42 @@ class EventsWatcher:
         self.root = events_root
         self._seen: set[Path] = set()
 
-    def prime(self) -> None:
-        """Mark every file currently on disk as already-seen.
-
-        Used after librarian's startup replay finishes so we don't
-        re-emit APPLY for every event we just processed.
-        """
-        if not self.root.is_dir():
-            return
-        for p in self.root.rglob("*.json"):
-            if p.is_file():
-                self._seen.add(p)
-
     def poll(self) -> list[EventFile]:
         """Return new event files in ``(iso_ms, seq, uid)`` order."""
         if not self.root.is_dir():
             return []
         new: list[EventFile] = []
-        for p in self.root.rglob("*.json"):
+        for p in sorted(self.root.rglob("*.json")):
             if not p.is_file():
                 continue
             if p in self._seen:
                 continue
             try:
                 parsed = parse_filename(p.name)
-            except Exception:
-                # Filename does not match §3.2 — skip; linter will surface it.
-                continue
+            except Exception as exc:
+                raise WatcherCorruption(
+                    p,
+                    f"canonical event filename invalid: {p.name}: {exc}",
+                ) from exc
             try:
                 body = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
+            except Exception as exc:
+                raise WatcherCorruption(
+                    p,
+                    f"canonical event body unreadable: {p.name}: {exc}",
+                ) from exc
             event_id = body.get("event_id")
             if not isinstance(event_id, str):
-                continue
+                raise WatcherCorruption(
+                    p,
+                    f"canonical event missing string event_id: {p.name}",
+                )
+            expected_event_id = f"{parsed.iso_ms}-{parsed.seq:04d}-{parsed.uid}"
+            if event_id != expected_event_id:
+                raise WatcherCorruption(
+                    p,
+                    f"canonical event_id mismatch: filename={expected_event_id} body={event_id}",
+                )
             new.append(
                 EventFile(
                     path=p,
@@ -89,4 +100,4 @@ class EventsWatcher:
         return new
 
 
-__all__ = ["EventFile", "EventsWatcher"]
+__all__ = ["EventFile", "EventsWatcher", "WatcherCorruption"]

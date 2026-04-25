@@ -43,25 +43,7 @@ from typing import Callable
 import yaml
 
 from common.kb.hashing import DepRef, statement_hash, verification_hash
-from common.kb.types import KIND_PREFIX, NodeKind
-
-
-# §3.5.2 placeholder blacklist. Phase I keeps this tight; M10 linter
-# extends with an audit list.
-_PLACEHOLDER_LABELS: frozenset[str] = frozenset(
-    {
-        "thm:main",
-        "thm:helper",
-        "thm:placeholder",
-        "lem:helper",
-        "lem:main",
-        "lem:placeholder",
-        "prop:helper",
-        "prop:main",
-        "def:placeholder",
-        "ext_thm:placeholder",
-    }
-)
+from common.kb.types import KIND_PREFIX, LABEL_SLUG_RE, NodeKind, PLACEHOLDER_LABELS
 
 
 # Decoder reasons — keep aligned with §5.2 + PHASE1 §M6.
@@ -153,7 +135,7 @@ def decode_codex_stdout(
                 REASON_DUPLICATE_LABEL, f"duplicate label {label!r} in batch"
             )
         labels_seen.add(label)
-        if label in _PLACEHOLDER_LABELS:
+        if label in PLACEHOLDER_LABELS:
             raise DecodeError(REASON_PLACEHOLDER_LABEL, label)
         kind = _parse_kind(entry["kind"])
         if kind is NodeKind.EXTERNAL_THEOREM:
@@ -379,7 +361,7 @@ def _check_label_prefix(label: str, kind: NodeKind) -> None:
             REASON_PREFIX_KIND_MISMATCH,
             f"label {label!r} prefix mismatch (kind={kind.value} requires {expected})",
         )
-    if not slug or not re.match(r"^[A-Za-z0-9_]+$", slug):
+    if not slug or not LABEL_SLUG_RE.match(slug):
         raise DecodeError(REASON_MALFORMED_NODE, f"label {label!r} has invalid slug")
 
 

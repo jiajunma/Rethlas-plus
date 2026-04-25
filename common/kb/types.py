@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 from typing import Any
 
 
@@ -37,11 +38,27 @@ AXIOM_KINDS: frozenset[NodeKind] = frozenset(
 # Allowed label prefixes per kind (§3.5.2).
 KIND_PREFIX: dict[NodeKind, str] = {
     NodeKind.DEFINITION: "def",
-    NodeKind.EXTERNAL_THEOREM: "ext_thm",
+    NodeKind.EXTERNAL_THEOREM: "ext",
     NodeKind.LEMMA: "lem",
     NodeKind.THEOREM: "thm",
     NodeKind.PROPOSITION: "prop",
 }
+
+LABEL_SLUG_RE = re.compile(r"^[a-z0-9_]+$")
+PLACEHOLDER_LABELS: frozenset[str] = frozenset(
+    {
+        "thm:main",
+        "thm:helper",
+        "thm:placeholder",
+        "lem:helper",
+        "lem:main",
+        "lem:placeholder",
+        "prop:helper",
+        "prop:main",
+        "def:placeholder",
+        "ext:placeholder",
+    }
+)
 
 
 # ---------------------------------------------------------------------------

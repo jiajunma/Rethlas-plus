@@ -66,7 +66,7 @@ from coordinator.dispatcher import (
     select_generator_targets,
     select_verifier_targets,
 )
-from coordinator.events_watcher import EventsWatcher
+from coordinator.events_watcher import EventsWatcher, WatcherCorruption
 from coordinator.heartbeat import (
     CoordinatorHeartbeat,
     IDLE_ALL_DONE,
@@ -371,7 +371,13 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
 # Forward events to librarian
 # ---------------------------------------------------------------------------
 def _forward_new_events(state: CoordinatorState) -> None:
-    for ev in state.watcher.poll():
+    try:
+        pending = state.watcher.poll()
+    except WatcherCorruption as exc:
+        state.pending_corruption = True
+        state.last_corruption_detail = f"{exc.detail} ({exc.path})"
+        return
+    for ev in pending:
         try:
             reply = state.librarian.request(
                 {"cmd": "APPLY", "event_id": ev.event_id, "path": str(ev.path)},
@@ -648,11 +654,6 @@ def run_supervise(workspace: str | None) -> int:
             librarian.shutdown()
             return 3
 
-        # ARCHITECTURE §6.5: librarian's startup replay already applied
-        # every existing event. Mark them seen so the events watchdog
-        # only emits APPLY for truly new files this session.
-        state.watcher.prime()
-
         # PHASE1 M9 — coordinator-managed dashboard child.
         # Disabled for tiny supervise tests via env var so they don't
         # need to bind a real port.
@@ -765,6 +766,16 @@ def _recover_librarian_if_needed(state: "CoordinatorState") -> None:
 def _tick(state: CoordinatorState) -> None:
     """One coordinator tick."""
     _recover_librarian_if_needed(state)
+    if state.dashboard is not None:
+        state.dashboard.tick()
+    if state.pending_corruption:
+        _write_heartbeat(
+            state,
+            status=STATUS_DEGRADED,
+            idle_reason_code=IDLE_CORRUPTION,
+            idle_reason_detail=state.last_corruption_detail or "librarian reported corruption",
+        )
+        return
     _forward_new_events(state)
     _reap_finished_workers(state)
     outcomes = reconcile_publishing_jobs(state.ws.runtime_jobs, state.ws.dag_kz)
@@ -773,8 +784,6 @@ def _tick(state: CoordinatorState) -> None:
             target=o.target, kind=o.kind, status=o.status, reason=o.reason
         )
     reap_orphans(state.ws.runtime_jobs)
-    if state.dashboard is not None:
-        state.dashboard.tick()
 
     if state.pending_corruption:
         _write_heartbeat(

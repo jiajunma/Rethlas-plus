@@ -37,8 +37,10 @@ from common.kb.types import (
     AppliedEvent,
     ApplyOutcome,
     KIND_PREFIX,
+    LABEL_SLUG_RE,
     Node,
     NodeKind,
+    PLACEHOLDER_LABELS,
     PROOF_REQUIRING_KINDS,
 )
 from librarian.validator import (
@@ -211,7 +213,7 @@ class Projector:
         kind = self._parse_kind(payload["kind"])
         _check_label_prefix(target, kind)
         if kind not in PROOF_REQUIRING_KINDS and payload.get("proof"):
-            # Phase I: axioms (def / ext_thm) must have empty proof.
+            # Phase I: axioms (def / ext) must have empty proof.
             raise ProjectionRejection(
                 "schema",
                 f"kind {kind.value} must not carry a proof",
@@ -287,6 +289,10 @@ class Projector:
         if new_kind not in PROOF_REQUIRING_KINDS and proof:
             raise ProjectionRejection(
                 "schema", f"kind {new_kind.value} must not carry a proof"
+            )
+        if new_kind is NodeKind.EXTERNAL_THEOREM and not (payload.get("source_note") or "").strip():
+            raise ProjectionRejection(
+                "schema", "external_theorem requires non-empty source_note"
             )
 
         deps = _extract_refs(statement + "\n" + proof)
@@ -717,8 +723,10 @@ def _check_label_prefix(label: str, kind: NodeKind) -> None:
         raise ProjectionRejection(
             "schema", f"label {label!r} prefix does not match kind {kind.value}"
         )
-    if not slug or not slug.replace("_", "").isalnum():
+    if not slug or not LABEL_SLUG_RE.match(slug):
         raise ProjectionRejection("schema", f"label {label!r} has invalid slug")
+    if label in PLACEHOLDER_LABELS:
+        raise ProjectionRejection("schema", f"label {label!r} is a reserved placeholder")
 
 
 def _stringify(obj: Any) -> str:

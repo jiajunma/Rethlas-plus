@@ -134,12 +134,12 @@ def test_role_rejection_writes_to_jsonl(tmp_path: Path, monkeypatch: pytest.Monk
     # Force a rejection: codex emits a node with kind=external_theorem.
     monkeypatch.setenv(
         "FAKE_CODEX_SCRIPT",
-        quick_success(_block("ext_thm:bad", "external_theorem", "S", "")),
+        quick_success(_block("ext:bad", "external_theorem", "S", "")),
     )
 
     job_id = _seed_job(
         ws_root,
-        target="ext_thm:bad",
+        target="ext:bad",
         mode="fresh",
         target_kind="external_theorem",
         statement="S",
@@ -161,7 +161,7 @@ def test_role_rejection_writes_to_jsonl(tmp_path: Path, monkeypatch: pytest.Monk
     line = rejects.read_text(encoding="utf-8").splitlines()[-1]
     entry = json.loads(line)
     assert entry["reason"] == "forbidden_kind"
-    assert entry["target"] == "ext_thm:bad"
+    assert entry["target"] == "ext:bad"
 
 
 def test_fresh_mode_user_hint_reaches_prompt_via_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

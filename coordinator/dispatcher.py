@@ -9,7 +9,7 @@ Two pools, two ordering rules:
 - **Verifier pool**: candidates at ``pass_count >= 0`` AND
   ``pass_count < desired``, ordered by (``pass_count`` asc,
   ``label`` asc). Both proof-requiring kinds *and* axioms (definition,
-  external_theorem) are valid verifier targets — `def` / `ext_thm` enter
+  external_theorem) are valid verifier targets — `def` / `ext` enter
   the verifier queue at ``pass_count = 0`` and march to ``desired`` like
   any other.
 

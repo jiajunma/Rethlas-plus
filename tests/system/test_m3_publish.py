@@ -57,19 +57,17 @@ def test_add_node_external_theorem_requires_source_note(tmp_path: Path) -> None:
     r = _run(
         "--workspace", str(tmp_path),
         "add-node",
-        "--label", "ext_thm:riemann",
+        "--label", "ext:riemann",
         "--kind", "external_theorem",
         "--statement", "Riemann hypothesis",
         "--actor", "user:alice",
     )
-    # admission rejects — no source_note for external_theorem is an admission-level check?
-    # Our validator only enforces basic shape; projector enforces source_note.
-    # Without librarian running, the CLI only runs admission; the test
-    # must still see a file because admission doesn't check source_note.
-    # But we verify that if the event IS written, projector would reject it.
-    # For M3 we assert the event was still written (admission is permissive).
-    # The stricter "source_note required" check is in projector.
-    assert r.returncode in (0, 3)
+    assert r.returncode != 0
+    rejects = (tmp_path / "runtime/state/rejected_writes.jsonl")
+    assert rejects.is_file()
+    entry = json.loads(rejects.read_text(encoding="utf-8").splitlines()[-1])
+    assert "source_note" in entry["detail"]
+    assert not list((tmp_path / "events").rglob("*.json"))
 
 
 def test_add_node_placeholder_label_rejected(tmp_path: Path) -> None:
@@ -82,13 +80,12 @@ def test_add_node_placeholder_label_rejected(tmp_path: Path) -> None:
         "--statement", "T",
         "--actor", "user:alice",
     )
-    # ``thm:main`` passes label syntax but is a placeholder per §3.5.2.
-    # Our validator currently only checks slug shape; this test flags
-    # the gap and is intentionally permissive to keep M3 shipping. The
-    # §3.5.2 strict placeholder-blacklist belongs in M10 linter tests
-    # alongside canonical-label audits.
-    # We just assert the CLI runs deterministically.
-    assert r.returncode in (0, 3)
+    assert r.returncode != 0
+    rejects = (tmp_path / "runtime/state/rejected_writes.jsonl")
+    assert rejects.is_file()
+    entry = json.loads(rejects.read_text(encoding="utf-8").splitlines()[-1])
+    assert "placeholder" in entry["detail"].lower()
+    assert not list((tmp_path / "events").rglob("*.json"))
 
 
 def test_add_node_prefix_mismatch_rejected(tmp_path: Path) -> None:
