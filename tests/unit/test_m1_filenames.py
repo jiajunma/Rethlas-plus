@@ -111,3 +111,22 @@ def test_format_rejects_bad_iso_ms() -> None:
             seq=1,
             uid="a7b2c912d4f1e380",
         )
+
+
+def test_format_rejects_uppercase_target_slug() -> None:
+    with pytest.raises(FilenameError):
+        format_filename(
+            iso_ms="20260423T143015.123",
+            event_type="user.node_added",
+            target="thm:Main_Result",
+            actor="user:alice",
+            seq=1,
+            uid="a7b2c912d4f1e380",
+        )
+
+
+def test_parse_rejects_uppercase_target_slug() -> None:
+    with pytest.raises(FilenameError):
+        parse_filename(
+            "20260423T143015.123--user.node_added--thm_Main_Result--user_alice--0001--a7b2c912d4f1e380.json"
+        )

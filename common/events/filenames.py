@@ -39,7 +39,7 @@ _ACTOR_RE: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_.-]*$")
 _SEQ_RE: Final[re.Pattern[str]] = re.compile(r"^\d{4}$")
 _UID_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{16}$")
 _TARGET_OR_NONE_RE: Final[re.Pattern[str]] = re.compile(
-    r"^(?:none|[a-z]+_[a-zA-Z0-9_]+)$"
+    r"^(?:none|[a-z]+_[a-z0-9_]+)$"
 )
 
 
