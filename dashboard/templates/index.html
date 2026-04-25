@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Rethlas Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #0f172a;
+      --bg: #ffffff;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --accent: #2563eb;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --bad: #dc2626;
+      --code-bg: #f8fafc;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e2e8f0;
+        --bg: #0b1120;
+        --muted: #94a3b8;
+        --line: #1e293b;
+        --accent: #60a5fa;
+        --ok: #4ade80;
+        --warn: #fbbf24;
+        --bad: #f87171;
+        --code-bg: #111827;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI",
+            "Helvetica Neue", Arial, sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+    }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 1.05rem; letter-spacing: .04em; }
+    main { padding: 1rem 1.5rem; display: grid; gap: 1.25rem; }
+    section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      background: var(--bg);
+    }
+    section > h2 {
+      margin: 0 0 .75rem 0;
+      font-size: .82rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .pill {
+      display: inline-block;
+      padding: .12rem .55rem;
+      border-radius: 999px;
+      font-size: .72rem;
+      font-weight: 600;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .pill.healthy { background: rgba(22,163,74,0.12); color: var(--ok); }
+    .pill.degraded { background: rgba(217,119,6,0.12); color: var(--warn); }
+    .pill.down { background: rgba(220,38,38,0.12); color: var(--bad); }
+    table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+    th, td {
+      text-align: left;
+      padding: .35rem .5rem;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    th { font-weight: 600; color: var(--muted); font-size: .78rem;
+         letter-spacing: .04em; text-transform: uppercase; }
+    code { background: var(--code-bg); padding: 0 .25rem; border-radius: 3px; }
+    .grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    .stat { padding: .5rem .75rem; border: 1px solid var(--line); border-radius: 6px; }
+    .stat .label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .stat .value { font-size: 1.25rem; font-weight: 600; }
+    .empty { color: var(--muted); font-style: italic; }
+    .footnote { color: var(--muted); font-size: .8rem; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Rethlas dashboard</h1>
+  <span id="updated_at" class="footnote"></span>
+</header>
+<main>
+  <section>
+    <h2>Coordinator &amp; Librarian</h2>
+    <div class="grid" id="health"></div>
+  </section>
+  <section>
+    <h2>Knowledge base</h2>
+    <div class="grid" id="kb"></div>
+  </section>
+  <section>
+    <h2>Active jobs</h2>
+    <div id="active"></div>
+  </section>
+  <section>
+    <h2>Human attention</h2>
+    <div id="attention"></div>
+  </section>
+  <section>
+    <h2>Theorems</h2>
+    <div id="theorems"></div>
+  </section>
+</main>
+<script>
+async function fetchJson(path) {
+  try {
+    const r = await fetch(path, { cache: "no-store" });
+    if (!r.ok) return { __error: r.status };
+    return await r.json();
+  } catch (e) {
+    return { __error: e.message };
+  }
+}
+function pill(label) {
+  return `<span class="pill ${label}">${label}</span>`;
+}
+function stat(label, value) {
+  return `<div class="stat"><div class="label">${label}</div>
+                 <div class="value">${value}</div></div>`;
+}
+function rowsToTable(headers, rows) {
+  if (!rows.length) return `<div class="empty">none</div>`;
+  const head = headers.map(h => `<th>${h}</th>`).join("");
+  const body = rows.map(r => `<tr>${
+    headers.map(h => `<td>${r[h] ?? ""}</td>`).join("")
+  }</tr>`).join("");
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+async function refresh() {
+  const overview = await fetchJson("/api/overview");
+  const active = await fetchJson("/api/active");
+  const attention = await fetchJson("/api/attention");
+  const theorems = await fetchJson("/api/theorems");
+  const updated = document.getElementById("updated_at");
+  updated.textContent = "refreshed " + new Date().toLocaleTimeString();
+
+  const health = document.getElementById("health");
+  if (overview.coordinator) {
+    health.innerHTML = [
+      stat("coordinator", pill(overview.coordinator.liveness ?? "down")),
+      stat("librarian", pill(overview.librarian.liveness ?? "down")),
+      stat("loop_seq", overview.coordinator.data?.loop_seq ?? 0),
+      stat("idle_reason", overview.coordinator.data?.idle_reason_code || "—"),
+    ].join("");
+  }
+  const kb = document.getElementById("kb");
+  if (overview.kb) {
+    kb.innerHTML = [
+      stat("nodes", overview.kb.node_count),
+      stat("theorems", overview.kb.theorem_count),
+      stat("done", overview.kb.done_count),
+      stat("unfinished", overview.kb.unfinished_count),
+      stat("in-flight targets", overview.in_flight_target_count ?? 0),
+    ].join("");
+  }
+  document.getElementById("active").innerHTML = rowsToTable(
+    ["job_id", "kind", "target", "mode", "status", "started_at"],
+    (active.jobs ?? []).map(j => ({
+      job_id: `<code>${j.job_id}</code>`, kind: j.kind, target: j.target,
+      mode: j.mode, status: j.status, started_at: j.started_at,
+    }))
+  );
+  document.getElementById("attention").innerHTML = rowsToTable(
+    ["kind", "message"],
+    (attention.items ?? []).map(i => ({ kind: i.kind, message: i.message }))
+  );
+  document.getElementById("theorems").innerHTML = rowsToTable(
+    ["label", "status", "pass_count", "repair_count", "deps"],
+    (theorems.theorems ?? []).map(t => ({
+      label: `<a href="/api/node/${encodeURIComponent(t.label)}">${t.label}</a>`,
+      status: t.status, pass_count: t.pass_count, repair_count: t.repair_count,
+      deps: (t.deps || []).join(", "),
+    }))
+  );
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

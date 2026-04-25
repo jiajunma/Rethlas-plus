@@ -256,6 +256,90 @@ class DashboardCore:
             }
         return None
 
+    def attention(self) -> dict[str, Any]:
+        """Aggregate items that need human attention (ARCHITECTURE §6.7).
+
+        Sources (all read-only, no Kuzu writes):
+        - user-blocked nodes (definition / external_theorem at -1)
+        - high-``repair_count`` nodes (>= 3): generator wheel-spin
+        - recent drift_alerts.jsonl
+        - recent ``apply_failed`` events (via AppliedEvent)
+        - coordinator ``idle_reason_code == corruption_or_drift``
+        - librarian ``status == degraded`` with non-empty ``last_error``
+        """
+        items: list[dict[str, Any]] = []
+
+        # Coordinator-level alerts.
+        coord = _safe_read_json(self.coordinator_path) or {}
+        if coord.get("idle_reason_code") == "corruption_or_drift":
+            items.append(
+                {
+                    "kind": "coordinator_corruption_or_drift",
+                    "message": "coordinator halted dispatch on corruption/drift",
+                    "detail": coord.get("idle_reason_detail", ""),
+                }
+            )
+
+        # Librarian-level alerts.
+        lib = _safe_read_json(self.librarian_path) or {}
+        if lib.get("status") == "degraded" and (lib.get("last_error") or ""):
+            items.append(
+                {
+                    "kind": "librarian_degraded",
+                    "message": "librarian is degraded",
+                    "detail": lib.get("last_error", ""),
+                }
+            )
+
+        # Node-level alerts via Kuzu.
+        try:
+            nodes = list_nodes(self.ws_root)
+        except RebuildInProgress:
+            nodes = []
+        for n in nodes:
+            if n.kind in {"definition", "external_theorem"} and n.pass_count == -1:
+                items.append(
+                    {
+                        "kind": "user_blocked",
+                        "message": f"user must revise {n.label}",
+                        "label": n.label,
+                        "node_kind": n.kind,
+                    }
+                )
+            if n.repair_count >= 3:
+                items.append(
+                    {
+                        "kind": "high_repair_count",
+                        "message": f"{n.label} has been re-repaired {n.repair_count} times",
+                        "label": n.label,
+                        "repair_count": n.repair_count,
+                    }
+                )
+
+        drift = _read_jsonl_tail(
+            self.state_dir / "drift_alerts.jsonl", limit=50
+        )
+        for entry in drift:
+            items.append(
+                {"kind": "drift_alert", "message": "runtime drift recorded", "detail": entry}
+            )
+
+        # Recent apply_failed events from AppliedEvent.
+        try:
+            apply_failed = list_applied_failed(self.ws_root)
+        except RebuildInProgress:
+            apply_failed = []
+        for ev in apply_failed[:20]:
+            items.append(
+                {
+                    "kind": "apply_failed",
+                    "message": f"apply_failed: {ev.get('reason', '')}",
+                    "detail": ev,
+                }
+            )
+
+        return {"items": items, "count": len(items)}
+
     def rejected(self) -> dict[str, Any]:
         rejected_writes = _read_jsonl_tail(
             self.state_dir / "rejected_writes.jsonl", limit=200
@@ -451,9 +535,13 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                 return self._handle_events(qs)
             if path == "/events/stream":
                 return self._handle_sse()
+            if path in ("/", "/index.html"):
+                return self._send_index()
 
             # Kuzu-dependent endpoints — gate on rebuild flag.
-            if path in ("/api/overview", "/api/theorems", "/api/rejected") or path.startswith("/api/node/"):
+            if path in (
+                "/api/overview", "/api/theorems", "/api/rejected", "/api/attention"
+            ) or path.startswith("/api/node/"):
                 try:
                     if path == "/api/overview":
                         return self._send_json(200, core.overview())
@@ -461,6 +549,8 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                         return self._send_json(200, core.theorems())
                     if path == "/api/rejected":
                         return self._send_json(200, core.rejected())
+                    if path == "/api/attention":
+                        return self._send_json(200, core.attention())
                     if path.startswith("/api/node/"):
                         label = urllib.parse.unquote(path[len("/api/node/"):])
                         if not label:
@@ -473,6 +563,17 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                     return self._send_503_rebuild()
 
             return self._send_404()
+
+        def _send_index(self) -> None:
+            from dashboard.templates import INDEX_HTML
+
+            body = INDEX_HTML.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
 
         def _handle_events(self, qs: dict[str, list[str]]) -> None:
             raw = qs.get("limit", [str(_EVENTS_LIMIT_DEFAULT)])[0]

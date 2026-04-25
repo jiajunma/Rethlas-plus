@@ -68,14 +68,28 @@ def lookup_applied(db_path: Path, event_id: str) -> AppliedRow | None:
         del db
 
 
-def reconcile_publishing_jobs(jobs_dir: Path, db_path: Path) -> list[str]:
+@dataclass(frozen=True, slots=True)
+class ReconcileOutcome:
+    """Per-job terminal outcome for §7.4 / §7.5 consecutive-failure tracking."""
+
+    job_id: str
+    target: str
+    kind: str  # "generator" | "verifier"
+    status: str  # "applied" | "apply_failed"
+    reason: str
+
+
+def reconcile_publishing_jobs(
+    jobs_dir: Path, db_path: Path
+) -> list[ReconcileOutcome]:
     """Walk ``runtime/jobs/`` for ``status == publishing`` records.
 
     For each, check if the ``event_id`` it published has a matching
     ``AppliedEvent`` row. If yes, mirror the status into the job file
-    and delete it. Returns the list of ``job_id`` resolved this tick.
+    and delete it. Returns the list of :class:`ReconcileOutcome`
+    records for the caller's :class:`OutcomeWindow`.
     """
-    resolved: list[str] = []
+    resolved: list[ReconcileOutcome] = []
     for rec in list_jobs(jobs_dir):
         if rec.status != "publishing":
             continue
@@ -101,7 +115,15 @@ def reconcile_publishing_jobs(jobs_dir: Path, db_path: Path) -> list[str]:
                 detail=row.detail,
             )
         delete_job_file(path)
-        resolved.append(rec.job_id)
+        resolved.append(
+            ReconcileOutcome(
+                job_id=rec.job_id,
+                target=rec.target,
+                kind=rec.kind,
+                status=row.status,
+                reason=row.reason,
+            )
+        )
     return resolved
 
 
@@ -115,4 +137,9 @@ def _extract_event_id(detail: str) -> str:
     return ""
 
 
-__all__ = ["AppliedRow", "lookup_applied", "reconcile_publishing_jobs"]
+__all__ = [
+    "AppliedRow",
+    "ReconcileOutcome",
+    "lookup_applied",
+    "reconcile_publishing_jobs",
+]

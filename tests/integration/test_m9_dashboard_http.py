@@ -178,6 +178,50 @@ def test_unknown_route_returns_404(tmp_path: Path) -> None:
         assert code == 404
 
 
+def test_index_root_serves_html(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    with _ServerCtx(tmp_path) as ctx:
+        code, hdrs, body = ctx.get("/")
+        assert code == 200
+        assert "text/html" in hdrs.get("Content-Type", "")
+        text = body.decode("utf-8")
+        assert "<title>Rethlas Dashboard</title>" in text
+        # Minimal sanity: the JS must reference each Phase I endpoint.
+        for endpoint in ("/api/overview", "/api/active", "/api/attention", "/api/theorems"):
+            assert endpoint in text
+
+
+def test_attention_endpoint_lists_user_blocked(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    # Seed a definition that will be at pass_count=0 (not -1) — so to make
+    # something user-blocked we tamper Kuzu directly after librarian writes.
+    subprocess.run(
+        [PYTHON, "-m", "cli.main", "--workspace", str(tmp_path), "add-node",
+         "--label", "def:x", "--kind", "definition",
+         "--statement", "Define X.", "--actor", "user:alice"],
+        capture_output=True, text=True, check=False,
+    )
+    from tests.fixtures.librarian_proc import librarian as _librarian
+    from librarian.heartbeat import PHASE_READY
+    with _librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+    import kuzu
+    db = kuzu.Database(str(tmp_path / "knowledge_base" / "dag.kz"))
+    conn = kuzu.Connection(db)
+    try:
+        conn.execute("MATCH (n:Node {label: 'def:x'}) SET n.pass_count = -1")
+    finally:
+        del conn
+        del db
+
+    with _ServerCtx(tmp_path) as ctx:
+        code, _hdrs, body = ctx.get("/api/attention")
+        assert code == 200
+        parsed = json.loads(body)
+        kinds = [i["kind"] for i in parsed["items"]]
+        assert "user_blocked" in kinds
+
+
 def test_malformed_runtime_json_does_not_crash(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     bad = tmp_path / "runtime" / "state" / "coordinator.json"

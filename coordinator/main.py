@@ -147,6 +147,34 @@ def _write_heartbeat(
     in_flight = list_jobs(state.ws.runtime_jobs)
     active_gen = sum(1 for r in in_flight if r.kind == "generator" and r.status not in {"applied", "apply_failed"})
     active_ver = sum(1 for r in in_flight if r.kind == "verifier" and r.status not in {"applied", "apply_failed"})
+
+    # ARCHITECTURE §6.4.2 / §7.4 / §7.5: surface the count of (target, kind)
+    # pairs whose recent outcomes hit the 3x consecutive trigger.
+    repair_spinning = 0
+    seen_keys: set[tuple[str, str]] = set()
+    for (target, kind), dq in state.outcome_window._buf.items():
+        if (target, kind) in seen_keys:
+            continue
+        seen_keys.add((target, kind))
+        # Same-status 3x trigger (crashed / timed_out).
+        for status_marker in ("crashed", "timed_out"):
+            if state.outcome_window.consecutive_status(
+                target=target, kind=kind, status=status_marker
+            ) >= 3:
+                repair_spinning += 1
+                break
+        else:
+            # Same-reason apply_failed 3x trigger (label_conflict / cycle / ...).
+            last_reasons = {
+                r for s, r in dq if s == "apply_failed" and r
+            }
+            for reason in last_reasons:
+                if state.outcome_window.consecutive_apply_failed_reason(
+                    target=target, kind=kind, reason=reason
+                ) >= 3:
+                    repair_spinning += 1
+                    break
+
     hb = CoordinatorHeartbeat(
         pid=os.getpid(),
         started_at=state.started_at,
@@ -164,6 +192,7 @@ def _write_heartbeat(
         user_blocked_count=user_blocked,
         generation_blocked_on_dependency_count=gen_blocked,
         verification_dep_blocked_count=ver_blocked,
+        repair_spinning_count=repair_spinning,
         children={
             "librarian": {
                 "pid": lib_pid,
@@ -466,7 +495,11 @@ def _tick(state: CoordinatorState) -> None:
     """One coordinator tick."""
     _forward_new_events(state)
     _reap_finished_workers(state)
-    reconcile_publishing_jobs(state.ws.runtime_jobs, state.ws.dag_kz)
+    outcomes = reconcile_publishing_jobs(state.ws.runtime_jobs, state.ws.dag_kz)
+    for o in outcomes:
+        state.outcome_window.record(
+            target=o.target, kind=o.kind, status=o.status, reason=o.reason
+        )
     reap_orphans(state.ws.runtime_jobs)
 
     if state.pending_corruption:
