@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from dashboard.kuzu_reader import RebuildInProgress, list_applied_since
 from dashboard.server import SseBroker
 
 
@@ -83,6 +84,7 @@ class StateWatcher:
         self._librarian_state = _FileState()
         self._rejected_offset = 0
         self._drift_offset = 0
+        self._applied_watermark = ""
         self._primed = False
 
     # --- lifecycle ---
@@ -125,6 +127,7 @@ class StateWatcher:
         envelopes.extend(self._scan_coordinator(prime=prime))
         envelopes.extend(self._scan_librarian(prime=prime))
         envelopes.extend(self._scan_alerts(prime=prime))
+        envelopes.extend(self._scan_applied_events(prime=prime))
         if not prime:
             for env in envelopes:
                 self.broker.publish(env)
@@ -308,13 +311,47 @@ class StateWatcher:
                 )
         return out
 
-    # --- AppliedEvent helper ---
-    def emit_applied_event(self, *, event_id: str, status: str, reason: str = "") -> None:
-        """External caller (coordinator's applied poller) invokes this.
+    def _scan_applied_events(self, *, prime: bool) -> list[dict[str, Any]]:
+        """Tail Kuzu's ``AppliedEvent`` for new rows above the watermark.
 
-        Dashboard cannot tail Kuzu directly, so the coordinator-side
-        applied-poller (or any external observer) calls this hook.
-        Tests use it to force the applied_event envelope.
+        Per ARCHITECTURE §6.7.1 the dashboard fires the ``applied_event``
+        SSE envelope when librarian commits an apply / apply_failed.
+        Skip silently while a rebuild is in progress (the table is
+        being rewritten).
+        """
+        out: list[dict[str, Any]] = []
+        try:
+            rows = list_applied_since(self.ws_root, self._applied_watermark)
+        except RebuildInProgress:
+            return out
+        except Exception as exc:
+            log.debug("applied tail failed: %s", exc)
+            return out
+        for row in rows:
+            applied_at = row.get("applied_at") or ""
+            if applied_at and applied_at > self._applied_watermark:
+                self._applied_watermark = applied_at
+            if prime:
+                continue
+            out.append(
+                envelope(
+                    "applied_event",
+                    {
+                        "event_id": row["event_id"],
+                        "status": row["status"],
+                        "reason": row["reason"],
+                        "target": row["target"],
+                    },
+                )
+            )
+        return out
+
+    # --- AppliedEvent helper (manual hook) ---
+    def emit_applied_event(self, *, event_id: str, status: str, reason: str = "") -> None:
+        """Manual fallback used by tests when no real Kuzu is available.
+
+        Production use should rely on :meth:`_scan_applied_events`, which
+        tails Kuzu directly each tick.
         """
         self.broker.publish(
             envelope(

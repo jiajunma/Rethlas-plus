@@ -123,6 +123,32 @@ def test_envelope_schema_all_six_kinds(tmp_path: Path) -> None:
     assert received[0]["payload"]["event_id"] == "abc123"
 
 
+def test_applied_event_envelope_polls_kuzu(tmp_path: Path) -> None:
+    """``applied_event`` envelope fires after librarian commits, without
+    any external hook (regression for the bug where the watcher only
+    accepted manual ``emit_applied_event`` calls).
+    """
+    _init_ws(tmp_path)
+    broker = SseBroker()
+    watcher = StateWatcher(tmp_path, broker, poll_interval_s=10.0)
+    watcher.tick(prime=True)  # baseline; no events
+
+    # Drive a real librarian to commit one user.node_added event.
+    _publish(
+        tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
+        "--statement", "Define X.", "--actor", "user:alice",
+    )
+    from tests.fixtures.librarian_proc import librarian as _librarian
+    from librarian.heartbeat import PHASE_READY
+    with _librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+
+    envs = watcher.tick()
+    applied = [e for e in envs if e["type"] == "applied_event"]
+    assert applied, [e["type"] for e in envs]
+    assert applied[0]["payload"]["status"] == "applied"
+
+
 def test_truncated_jsonl_resets_offset(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     broker = SseBroker()

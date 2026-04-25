@@ -53,6 +53,7 @@ class CoordinatorHeartbeat:
     status: str = STATUS_RUNNING
     loop_seq: int = 0
     desired_pass_count: int = 3
+    codex_silent_timeout_seconds: int = 1800
     active_generator_jobs: int = 0
     active_verifier_jobs: int = 0
     dispatchable_generator_count: int = 0

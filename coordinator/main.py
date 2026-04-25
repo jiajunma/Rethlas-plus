@@ -218,6 +218,7 @@ def _write_heartbeat(
         status=status,
         loop_seq=state.loop_seq,
         desired_pass_count=state.config.scheduling.desired_pass_count,
+        codex_silent_timeout_seconds=state.config.scheduling.codex_silent_timeout_seconds,
         active_generator_jobs=active_gen,
         active_verifier_jobs=active_ver,
         dispatchable_generator_count=dispatchable_gen,

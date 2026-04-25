@@ -149,12 +149,19 @@ class DashboardCore:
     def active(self) -> dict[str, Any]:
         coord = _safe_read_json(self.coordinator_path) or {}
         timeout_s = float(coord.get("codex_silent_timeout_seconds", 1800.0) or 1800.0)
+        now = datetime.now(tz=timezone.utc)
         jobs: list[dict[str, Any]] = []
         for j in list_jobs(self.jobs_dir):
             d = j.to_dict()
             log_age = _log_age_seconds(j.log_path)
             d["codex_log_age_seconds"] = log_age
             d["codex_log_age_color"] = _log_age_color(log_age, timeout_s)
+            # ARCHITECTURE §6.7 active-jobs panel: surface wrapper
+            # heartbeat freshness (§7.4 F4) so dashboard can flag zombie
+            # wrappers whose updated_at has gone stale.
+            d["wrapper_heartbeat_age_seconds"] = _heartbeat_age_seconds(
+                j.updated_at, now=now
+            )
             jobs.append(d)
         return {"jobs": jobs, "count": len(jobs)}
 
@@ -430,6 +437,25 @@ class DashboardCore:
                     }
                 )
         return {"events": out, "count": len(out), "limit": limit}
+
+
+def _heartbeat_age_seconds(
+    updated_at: str, *, now: datetime | None = None
+) -> float | None:
+    """Return ``now - updated_at`` in seconds, or None if unparseable."""
+    if not updated_at:
+        return None
+    try:
+        if updated_at.endswith("Z"):
+            updated_at = updated_at[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
+    return max(0.0, (now - parsed).total_seconds())
 
 
 def _log_age_seconds(log_path: str) -> float | None:

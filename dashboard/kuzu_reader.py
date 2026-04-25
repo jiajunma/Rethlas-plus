@@ -16,8 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import kuzu
-
 from librarian.heartbeat import read_heartbeat as read_librarian_hb
 
 
@@ -51,6 +49,7 @@ def list_nodes(ws_root: Path) -> list[NodeRow]:
     db_path = ws_root / "knowledge_base" / "dag.kz"
     if not db_path.is_dir() and not db_path.exists():
         return []
+    import kuzu
     db = kuzu.Database(str(db_path), read_only=True)
     conn = kuzu.Connection(db)
     try:
@@ -95,6 +94,7 @@ def list_applied_failed(ws_root: Path) -> list[dict[str, Any]]:
     db_path = ws_root / "knowledge_base" / "dag.kz"
     if not db_path.is_dir() and not db_path.exists():
         return []
+    import kuzu
     db = kuzu.Database(str(db_path), read_only=True)
     conn = kuzu.Connection(db)
     try:
@@ -121,4 +121,57 @@ def list_applied_failed(ws_root: Path) -> list[dict[str, Any]]:
         del db
 
 
-__all__ = ["NodeRow", "RebuildInProgress", "list_applied_failed", "list_nodes"]
+def list_applied_since(ws_root: Path, watermark: str) -> list[dict[str, Any]]:
+    """Return ``AppliedEvent`` rows with ``applied_at > watermark``.
+
+    Used by :class:`dashboard.state_watcher.StateWatcher` to fire the
+    ``applied_event`` SSE envelope (§6.7.1). The watermark is the
+    ISO 8601 ``applied_at`` of the most recent row already published.
+    """
+    _check_rebuild(ws_root / "runtime" / "state")
+    db_path = ws_root / "knowledge_base" / "dag.kz"
+    if not db_path.is_dir() and not db_path.exists():
+        return []
+    import kuzu
+    db = kuzu.Database(str(db_path), read_only=True)
+    conn = kuzu.Connection(db)
+    try:
+        if watermark:
+            res = conn.execute(
+                "MATCH (a:AppliedEvent) WHERE a.applied_at > $w "
+                "RETURN a.event_id, a.status, a.reason, a.detail, a.applied_at, "
+                "a.target_label ORDER BY a.applied_at ASC",
+                {"w": watermark},
+            )
+        else:
+            res = conn.execute(
+                "MATCH (a:AppliedEvent) "
+                "RETURN a.event_id, a.status, a.reason, a.detail, a.applied_at, "
+                "a.target_label ORDER BY a.applied_at ASC"
+            )
+        out: list[dict[str, Any]] = []
+        while res.has_next():
+            r = res.get_next()
+            out.append(
+                {
+                    "event_id": r[0],
+                    "status": r[1],
+                    "reason": r[2] or "",
+                    "detail": r[3] or "",
+                    "applied_at": r[4],
+                    "target": r[5] or "",
+                }
+            )
+        return out
+    finally:
+        del conn
+        del db
+
+
+__all__ = [
+    "NodeRow",
+    "RebuildInProgress",
+    "list_applied_failed",
+    "list_applied_since",
+    "list_nodes",
+]
