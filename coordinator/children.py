@@ -124,14 +124,21 @@ def spawn_librarian(workspace: Path, *, env_extra: dict[str, str] | None = None)
     logs_dir = workspace / "runtime" / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     stderr_handle = (logs_dir / "librarian.log").open("ab", buffering=0)
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "cli.main", "--workspace", str(workspace), "librarian"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=stderr_handle,
-        env=env,
-        bufsize=0,
-    )
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "cli.main", "--workspace", str(workspace), "librarian"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=stderr_handle,
+            env=env,
+            bufsize=0,
+        )
+    except Exception:
+        try:
+            stderr_handle.close()
+        except Exception:
+            pass
+        raise
     return LibrarianChild(
         proc=proc,
         workspace=workspace,
