@@ -28,6 +28,7 @@ SUBCOMMANDS: dict[str, str] = {
     "dashboard": "run the read-only dashboard standalone (M9)",
     "linter": "run the workspace linter (M10)",
     "rebuild": "rebuild the projected KB from events/ (M3 / M4)",
+    "librarian": "internal librarian daemon entry (M4)",
     "generator": "internal generator worker entry (M6)",
     "verifier": "internal verifier worker entry (M7)",
 }
@@ -77,6 +78,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # rebuild
     sp = sub.add_parser("rebuild", help=SUBCOMMANDS["rebuild"], description=SUBCOMMANDS["rebuild"])
+
+    # librarian (internal — invoked by coordinator as a subprocess)
+    sp = sub.add_parser(
+        "librarian", help=SUBCOMMANDS["librarian"], description=SUBCOMMANDS["librarian"]
+    )
 
     # still-placeholder subcommands
     for name in ("supervise", "dashboard", "linter", "generator", "verifier"):
@@ -144,6 +150,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "rebuild":
         from cli.rebuild import run_rebuild
         return run_rebuild(ws)
+
+    if args.command == "librarian":
+        from librarian.cli import run_librarian
+        return run_librarian(ws)
 
     # placeholders still — supervise / dashboard / linter / generator / verifier
     return _run_stub(args.command)

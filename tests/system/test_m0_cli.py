@@ -59,7 +59,9 @@ def test_each_stub_subcommand_runs_placeholder() -> None:
     excluded from this placeholder check.
     """
     wired_in_m3 = {"init", "add-node", "revise-node", "attach-hint", "rebuild"}
-    remaining = [n for n in SUBCOMMANDS if n not in wired_in_m3]
+    wired_in_m4 = {"librarian"}  # daemon entry — needs a workspace to run
+    wired = wired_in_m3 | wired_in_m4
+    remaining = [n for n in SUBCOMMANDS if n not in wired]
     for name in remaining:
         result = _run(name)
         assert result.returncode == 0, (

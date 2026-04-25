@@ -41,6 +41,10 @@ from common.kb.types import (
     NodeKind,
     PROOF_REQUIRING_KINDS,
 )
+from librarian.validator import (
+    AdmissionError,
+    validate_producer_registration,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +58,10 @@ REASON_HINT_TARGET_UNREACHABLE = "hint_target_unreachable"
 REASON_HASH_MISMATCH = "hash_mismatch"
 REASON_KIND_MUTATION = "kind_mutation"
 REASON_SELF_REFERENCE = "self_reference"
+# §6.5 "workspace corruption": an event got past admission with a
+# producer-registration or structural shape that should never have been
+# allowed. Caller (daemon) treats this as a fatal halt-projection signal.
+REASON_WORKSPACE_CORRUPTION = "workspace_corruption"
 
 
 class ProjectionRejection(Exception):
@@ -101,6 +109,21 @@ class Projector:
         validate_event_schema(event_body)
         event_id = event_body["event_id"]
 
+        # §6.5 step 1 "structural check": producer-registration must hold
+        # at apply time too. A canonical event whose ``(actor, type)`` is
+        # not in producers.toml means admission was bypassed (manual file
+        # drop, git revert, etc.) — projection halts as workspace
+        # corruption per §3.1.6.
+        try:
+            validate_producer_registration(
+                event_body.get("actor", ""), event_body.get("type", "")
+            )
+        except AdmissionError as exc:
+            raise ProjectionRejection(
+                REASON_WORKSPACE_CORRUPTION,
+                f"unregistered producer at apply time: {exc}",
+            ) from exc
+
         existing = self._kb.applied_event(event_id)
         sha = event_sha256(event_bytes)
         if existing is not None:
@@ -108,7 +131,7 @@ class Projector:
             # workspace-corruption contract.
             if existing.event_sha256 != sha:
                 raise ProjectionRejection(
-                    "workspace_corruption",
+                    REASON_WORKSPACE_CORRUPTION,
                     (
                         f"event_id {event_id!r} already applied with "
                         f"sha={existing.event_sha256[:12]}; re-apply sees "

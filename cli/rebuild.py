@@ -97,7 +97,11 @@ def run_rebuild(workspace: str | None) -> int:
 
         backend = KuzuBackend(ws.dag_kz)
         try:
-            trail = rebuild_from_events(backend=backend, events_root=ws.events)
+            trail = rebuild_from_events(
+                backend=backend,
+                events_root=ws.events,
+                nodes_dir=ws.nodes_dir,
+            )
         finally:
             backend.close()
 

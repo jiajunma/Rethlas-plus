@@ -11,8 +11,9 @@ requires-python = ">=3.11"
 authors = [{ name = "Rethlas" }]
 license = { text = "Proprietary" }
 dependencies = [
-  # Runtime deps filled in later milestones (kuzu, fastapi, etc.)
   # tomli only needed on <3.11; stdlib `tomllib` is used on 3.11+.
+  "kuzu>=0.11,<0.12",
+  "PyYAML>=6.0",
 ]
 
 [project.scripts]
