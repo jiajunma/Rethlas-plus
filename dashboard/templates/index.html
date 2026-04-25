@@ -153,11 +153,13 @@ async function refresh() {
   const updated = document.getElementById("updated_at");
   updated.textContent = "refreshed " + new Date().toLocaleTimeString();
 
+  const dashboardHb = await fetchJson("/api/dashboard");
   const health = document.getElementById("health");
   if (overview.coordinator) {
     health.innerHTML = [
       stat("coordinator", pill(overview.coordinator.liveness ?? "down")),
       stat("librarian", pill(overview.librarian.liveness ?? "down")),
+      stat("dashboard", pill(dashboardHb.liveness ?? "down")),
       stat("loop_seq", overview.coordinator.data?.loop_seq ?? 0),
       stat("idle_reason", overview.coordinator.data?.idle_reason_code || "—"),
     ].join("");

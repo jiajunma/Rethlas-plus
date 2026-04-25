@@ -187,7 +187,10 @@ def test_index_root_serves_html(tmp_path: Path) -> None:
         text = body.decode("utf-8")
         assert "<title>Rethlas Dashboard</title>" in text
         # Minimal sanity: the JS must reference each Phase I endpoint.
-        for endpoint in ("/api/overview", "/api/active", "/api/attention", "/api/theorems"):
+        for endpoint in (
+            "/api/overview", "/api/active", "/api/attention", "/api/theorems",
+            "/api/dashboard",
+        ):
             assert endpoint in text
 
 
