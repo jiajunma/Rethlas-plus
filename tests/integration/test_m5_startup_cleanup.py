@@ -21,6 +21,7 @@ def test_cleanup_wipes_jobs_and_state_snapshots(tmp_path: Path) -> None:
     # Stale snapshots.
     (ws.runtime_state / "coordinator.json").write_text('{"x":1}', encoding="utf-8")
     (ws.runtime_state / "librarian.json").write_text('{"x":1}', encoding="utf-8")
+    (ws.runtime_state / "dashboard.json").write_text('{"x":1}', encoding="utf-8")
     # Append-only history we MUST preserve.
     (ws.runtime_state / "rejected_writes.jsonl").write_text(
         '{"reason":"x"}\n', encoding="utf-8"
@@ -33,12 +34,13 @@ def test_cleanup_wipes_jobs_and_state_snapshots(tmp_path: Path) -> None:
 
     jobs_removed, snapshots_removed = cleanup_runtime(ws)
     assert jobs_removed == 2
-    assert snapshots_removed == 2
+    assert snapshots_removed == 3
 
     assert not (ws.runtime_jobs / "ver-old.json").exists()
     assert not (ws.runtime_jobs / "ver-old.json.tmp").exists()
     assert not (ws.runtime_state / "coordinator.json").exists()
     assert not (ws.runtime_state / "librarian.json").exists()
+    assert not (ws.runtime_state / "dashboard.json").exists()
 
     assert (ws.runtime_state / "rejected_writes.jsonl").exists()
     assert (ws.runtime_state / "drift_alerts.jsonl").exists()

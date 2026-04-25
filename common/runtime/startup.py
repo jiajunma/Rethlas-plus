@@ -5,6 +5,7 @@ When ``rethlas supervise`` boots, the previous run may have left behind:
 - ``runtime/jobs/*.json`` for jobs whose owning processes are gone
 - ``runtime/state/coordinator.json`` from a stopped coordinator
 - ``runtime/state/librarian.json`` from a stopped librarian
+- ``runtime/state/dashboard.json`` from a stopped dashboard child
 - ``runtime/locks/*.lock`` files (lock content is fine to keep — flock
   state is per-fd, not per-file).
 
@@ -71,7 +72,7 @@ def _wipe_state_snapshots(state_dir: Path) -> int:
             continue
         # Only wipe known snapshot files. Anything else (operator notes,
         # custom JSON the user dropped in) is preserved.
-        if entry.name in {"coordinator.json", "librarian.json"} or entry.suffix == ".tmp":
+        if entry.name in {"coordinator.json", "librarian.json", "dashboard.json"} or entry.suffix == ".tmp":
             try:
                 entry.unlink()
                 count += 1
