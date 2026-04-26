@@ -425,17 +425,9 @@ def _topological_order(
     Edges to non-batch labels are ignored. Caller has already verified
     acyclicity.
     """
-    indeg: dict[str, int] = {lbl: 0 for lbl in batch_labels}
-    edges_out: dict[str, list[str]] = {lbl: [] for lbl in batch_labels}
-    for lbl, refs in refs_per_label.items():
-        for r in refs:
-            if r in batch_labels:
-                edges_out[lbl].append(r)
-                indeg[r] += 0  # placeholder to keep linter happy
-    # We want deps first, target last. So a node's prerequisites are its
-    # ``\ref{}`` targets. We treat edges as ``lbl -> ref`` meaning
-    # "lbl needs ref first"; ref appears before lbl in the order.
-    # That's "reverse" Kahn — order the graph so refs precede lbl.
+    # Edges as ``lbl -> ref`` meaning "lbl needs ref first"; ref appears
+    # before lbl in the order. ``in_count[lbl]`` = number of intra-batch
+    # deps of ``lbl``; ``parents[r]`` = labels that depend on ``r``.
     in_count: dict[str, int] = {lbl: 0 for lbl in batch_labels}
     parents: dict[str, list[str]] = {lbl: [] for lbl in batch_labels}
     for lbl, refs in refs_per_label.items():
