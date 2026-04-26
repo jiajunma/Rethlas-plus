@@ -413,11 +413,19 @@ def test_hint_attached_uses_event_body_ts(
     assert "[user @ 2026-04-25T12:34:56.789+00:00]" in node.repair_hint
 
 
-def test_hint_attached_falls_back_to_user_when_no_ts(
+def test_hint_attached_before_verifier_survives_subsequent_merge(
     projector: Projector, kb: KuzuBackend
 ) -> None:
-    """Hand-rolled events that omit body.ts and payload.ts still get a
-    readable section header — the legacy ``"user"`` placeholder."""
+    """User hint attached on a node with empty repair_hint must survive a
+    later verifier verdict's ``_merge_verifier_section`` pass.
+
+    Regression: when ``repair_hint`` was empty, the prior implementation
+    composed the new section as ``"---\\n[user @ ts]\\n..."``. That string
+    starts with ``---``, not ``\\n---\\n``, so the merge's
+    ``existing.split("\\n---\\n")`` returned a single section beginning
+    with ``---``, which the ``[user @ "`` filter rejected — so the next
+    verifier verdict silently dropped the user hint.
+    """
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="lem:stuck",
@@ -427,19 +435,40 @@ def test_hint_attached_falls_back_to_user_when_no_ts(
     )
     projector.apply(body1, raw1)
 
-    body2, raw2 = _event(
+    body2, raw2 = _hint(
         eid="20260425T120005.000-0001-abc0123456789abd",
-        etype="user.hint_attached",
-        actor="user:alice",
         target="lem:stuck",
-        payload={"hint": "h", "remark": ""},
-        ts="",
+        hint="try induction on n",
     )
     r = projector.apply(body2, raw2)
     assert r.status is ApplyOutcome.APPLIED
-    node = kb.node_by_label("lem:stuck")
-    assert node is not None
-    assert "[user @ user]" in node.repair_hint
+
+    after_hint = kb.node_by_label("lem:stuck")
+    assert after_hint is not None
+    assert "try induction on n" in after_hint.repair_hint
+
+    # Now a verifier gap verdict — its ``_merge_verifier_section`` must
+    # preserve the user hint.
+    n0 = kb.node_by_label("lem:stuck")
+    body3, raw3 = _verdict(
+        eid="20260425T120010.000-0001-abc0123456789abe",
+        target="lem:stuck",
+        verdict="gap",
+        verification_hash=n0.verification_hash,
+        repair_hint="verifier suggests reviewing the inductive step",
+    )
+    r = projector.apply(body3, raw3)
+    assert r.status is ApplyOutcome.APPLIED
+
+    after_verdict = kb.node_by_label("lem:stuck")
+    assert after_verdict is not None
+    assert "verifier suggests reviewing the inductive step" in after_verdict.repair_hint
+    assert "[user @" in after_verdict.repair_hint, (
+        f"user section dropped during merge; repair_hint={after_verdict.repair_hint!r}"
+    )
+    assert "try induction on n" in after_verdict.repair_hint, (
+        f"user hint content dropped; repair_hint={after_verdict.repair_hint!r}"
+    )
 
 
 def test_hint_target_missing(projector: Projector, kb: KuzuBackend) -> None:

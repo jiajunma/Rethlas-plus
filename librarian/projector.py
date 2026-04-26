@@ -382,9 +382,19 @@ class Projector:
         # top-level ``ts`` is preferred; ``payload.ts`` is a legacy
         # fallback, and a literal ``"user"`` keeps prior behaviour for
         # hand-rolled events that omit both.
+        #
+        # The ``---`` divider is the *separator* between sections, so it
+        # only appears when there is something to separate from. When
+        # ``repair_hint`` is empty the new section stands alone. Otherwise
+        # the merge in :func:`_merge_verifier_section` would split the
+        # field on ``\n---\n`` and find a single block that begins with
+        # ``---`` rather than ``[user @ ``, dropping the hint silently.
         section_ts = ts or payload.get("ts", "") or "user"
-        new_section = f"---\n[user @ {section_ts}]\n{hint.rstrip()}\n"
-        updated = (existing.repair_hint + "\n" + new_section) if existing.repair_hint else new_section
+        new_section = f"[user @ {section_ts}]\n{hint.rstrip()}\n"
+        if existing.repair_hint:
+            updated = existing.repair_hint + "\n---\n" + new_section
+        else:
+            updated = new_section
         self._kb.set_node_fields(target, repair_hint=updated)
         return target
 
