@@ -84,7 +84,18 @@ latest status wins on recall.
 
 ## Failure Logging
 
-If a decomposition plan does not solve the problem directly after attempting all of its subgoals, append a `failed_paths` record that summarizes the plan-local stuck points and any important proof-migration failures.
+If a decomposition plan does not solve the problem directly after
+attempting all of its subgoals, append a `failed_paths` record:
+
+```json
+{
+  "record_type": "plan_stuck",
+  "plan_id": "...",
+  "stuck_points": ["..."],
+  "migration_failures": ["..."],
+  "branch_id": "optional"
+}
+```
 
 ## Next Skill
 

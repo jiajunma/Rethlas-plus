@@ -132,6 +132,23 @@ time it wants to track parallel state for an alternative.
 - Verified nodes under `knowledge_base/nodes/` are not branch state;
   they are owned by the verifier verdict pipeline, not by skills.
 
+### Identifier conventions
+
+All record IDs in scratch memory are agent-assigned strings — the MCP
+server does not enforce uniqueness or shape. Use these conventions so
+records compose across skills:
+
+| ID | Form | Allocator |
+| --- | --- | --- |
+| `plan_id` | `"plan-{N}"`, `N` ≥ 1 | `$propose-subgoal-decomposition-plans` (one ID per plan; `N` is one greater than the largest existing `plan-` suffix in `subgoals`) |
+| `subgoal_id` | `"{plan_id}.{K}"`, `K` is the 1-based index of the subgoal inside the plan's `subgoals` array | propagated by every skill that attaches reasoning to a specific subgoal — `$construct-toy-examples`, `$construct-counterexamples`, `$obtain-immediate-conclusions`, etc.; omit the key when the record is not subgoal-specific |
+| `branch_id` | `"branch-{N}"` | per the Branches subsection above |
+| `decision_id` | `"decision-{N}"` | `$identify-key-failures` (and any future producer of `big_decisions`) |
+| `record_id` for one-shot records (counterexamples, immediate conclusions) | not used — these records are identified by `target_claim` / `statement` text plus `timestamp_utc` | — |
+
+`memory_search` ranks tied scores newest-first, so recall by ID
+naturally returns the most recent state without extra filtering.
+
 There is no generator-run proof acceptance workflow in Phase I. A proof is only
 accepted after the coordinator later dispatches verifier workers and the
 librarian applies their `verifier.run_completed` events.

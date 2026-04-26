@@ -56,7 +56,18 @@ Append to `counterexamples`:
 }
 ```
 
-If `status="refuted"`, also append to `failed_paths` when it kills a branch.
+If `status="refuted"` and the refutation kills a branch, also append a
+`failed_paths` record:
+
+```json
+{
+  "record_type": "counterexample_refuted",
+  "target_claim": "...",
+  "branch_id": "...",
+  "refuted_by": "<candidate_counterexample summary>",
+  "impact": "..."
+}
+```
 
 If the search produced a concrete non-refuting example, also append a record to `toy_examples`:
 

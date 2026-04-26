@@ -108,7 +108,18 @@ sub-agents.
 
 ## Failure Logging
 
-If every plan fails in the recursive round, append a summary record to `failed_paths` and immediately invoke `$identify-key-failures`.
+If every plan fails in the recursive round, append a summary record to
+`failed_paths` and immediately invoke `$identify-key-failures`:
+
+```json
+{
+  "record_type": "recursive_round_failed",
+  "plan_ids": ["..."],
+  "failed_plan_ids": ["..."],
+  "subagent_ids": ["..."],
+  "shared_stuck_points": {"plan_id": ["..."]}
+}
+```
 
 ## Next Skill
 
