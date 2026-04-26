@@ -272,6 +272,105 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   detail to the skill (single source of truth) and keeps only a
   one-sentence summary plus the cross-reference.
 
+## Third-pass findings (2026-04-27, post G-fixes)
+
+### H1 — ARCH §8 channel list missing `big_decisions`
+- F2 wired the channel through skills, but the canonical channel list
+  in ARCHITECTURE.md §8 still listed only 8 channels.
+- **Status**: resolved. ARCH §8 now lists 9 channels and includes a
+  one-paragraph note on `big_decisions` producers/consumer.
+
+### H2 — `proof_steps.attempt_type` enum was undefined
+- direct-proving hard-coded `attempt_type: "direct"`; G6 added a new
+  context (counterexample refutation) with no schema follow-through.
+- **Status**: resolved. Enum spelled out as
+  `direct|recursive|counterexample_refutation`. Sister-skill writers
+  documented inline in direct-proving (recursive-proving sub-agents,
+  construct-counterexamples G6 stuck records). construct-counterexamples
+  step 5 sets `attempt_type` explicitly.
+
+### H3 — Six generator skills lacked an explicit "Next Skill" exit
+- G2 added Next Skill sections to direct-proving and
+  construct-counterexamples; the other six (obtain-immediate-conclusions,
+  construct-toy-examples, search-math-results, query-memory,
+  propose-subgoal-decomposition-plans, identify-key-failures,
+  recursive-proving) still relied on inline hooks scattered through
+  procedure steps.
+- **Status**: resolved. Every generator skill now has a `## Next Skill`
+  section spelling out exit conditions.
+
+### H4 — `proof_steps` channel was an undocumented reader-side
+- direct-proving wrote it; identify-key-failures and recursive-proving
+  said "direct-proving stuck points" without naming the channel.
+- **Status**: resolved. Both Input Contracts now name `proof_steps`
+  with the appropriate `attempt_type` filter.
+
+### H11 — propose-... did not read prior failed plans
+- G1 added `status: "failed"` records to `subgoals` but the planner
+  did not read `subgoals` itself — only `failed_paths` and `branch_states`.
+- **Status**: resolved. Input Contract now reads prior `subgoals`
+  records with `status="failed"` filter.
+
+### H12 — ARCH referenced a non-existent `resolve-reference` skill
+- Two stale mentions in ARCH §5 / §6.3 of a `resolve-reference` skill
+  that doesn't exist (likely renamed to `check-referenced-statements`).
+- **Status**: resolved. Both mentions point at `check-referenced-statements`.
+
+### H13 — `external_reference_checks.status` example showed only 2 of 5 values
+- Skill schema example listed `missing_from_nodes|not_applicable`,
+  hiding the other three values from anyone reading by example.
+- **Status**: resolved. Example enumerates all 5 with one-line
+  definitions of each per ARCH §6.3.
+
+### H14 — `verify-sequential-statements` step 6 used `critical_error` but `checked_items.status` accepts `critical`
+- The category name and the schema enum value diverged; an agent
+  literally writing `status: "critical_error"` mismatched the
+  synthesize-... output_contract.
+- **Status**: resolved. Step 6 now classifies as `gap` or `critical`
+  to match `checked_items.status` directly.
+
+### H15 — `verify-sequential-statements` Output Contribution didn't show `gaps[]`/`critical_errors[]` shape
+- Skill produced `checked_items` entries but the parallel
+  `{location, issue}` shape for the per-class lists was implicit.
+- **Status**: resolved. Output Contribution now shows the
+  `{location, issue}` example and pairs it with the corresponding
+  `checked_items` entry.
+
+### H16 — F5 fix accidentally re-stated `\ref{}` resolution responsibility
+- `verify-sequential-statements` step 2 said to "check that any
+  `\ref{label}` resolves" — but that's `check-referenced-statements`'
+  job and creates duplication.
+- **Status**: resolved. def/external_theorem rule tightened to
+  statement-coherence-only and explicitly defers ref resolution to
+  `$check-referenced-statements`.
+
+### H17 — `subgoal_id` and other IDs had no derivation rule
+- `subgoal_id` appeared as `optional` in 6 record schemas but no skill
+  said how to allocate one. `branch_id` was partially documented
+  (G3); `plan_id` and `decision_id` had per-skill rules with drift
+  risk.
+- **Status**: resolved. AGENTS.md "Identifier conventions" subsection
+  is the single source of truth: a 5-row table covering `plan_id`,
+  `subgoal_id`, `branch_id`, `decision_id`, and a footnote that
+  one-shot records (counterexamples, immediate_conclusions) are
+  identified by content + `timestamp_utc` and need no ID.
+
+### H18 — `failed_paths` had four producers with ad-hoc shapes
+- direct-proving, construct-counterexamples, recursive-proving, and
+  identify-key-failures all wrote to `failed_paths`. Only
+  identify-key-failures had an explicit `record_type` field.
+- **Status**: resolved. Each producer now writes a record with an
+  explicit `record_type` tag (`plan_stuck`,
+  `counterexample_refuted`, `recursive_round_failed`,
+  `key_failures_summary`). Readers still BM25-search; record_type
+  is for write-side consistency and downstream filtering.
+
+### H19 — Identifier derivation rule duplicated between skill and AGENTS.md
+- After H17, `plan_id` and `decision_id` derivation lived in both
+  AGENTS.md and the producing skills. Drift risk like G9.
+- **Status**: resolved. Per-skill blocks now defer to AGENTS.md
+  "Identifier conventions"; the table is the single source of truth.
+
 ## Already-aligned design (sanity-check pass)
 
 These were verified against ARCH and pass — no action needed:

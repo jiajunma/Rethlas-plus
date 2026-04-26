@@ -39,12 +39,10 @@ Read:
 
 ## Output Contract
 
-`plan_id` must be unique across rounds. Derive it as
-`"plan-{N}"` where `N` is one greater than the largest numeric suffix
-seen via `memory_search(problem_id, "plan-", channels=["subgoals"])`,
-starting from `1`. The MCP server does not enforce uniqueness; if two
-runs produce colliding ids the latest record will silently overwrite
-the earlier one in `query-memory` results.
+`plan_id` derivation: see the AGENTS.md "Identifier conventions" table
+(form `plan-{N}`, allocated by this skill). The MCP server does not
+enforce uniqueness; collisions silently overwrite earlier records on
+recall.
 
 `status` is mutable: append a fresh record with the updated `status`
 each time a plan transitions (`proposed` → `screening` → `screened` →

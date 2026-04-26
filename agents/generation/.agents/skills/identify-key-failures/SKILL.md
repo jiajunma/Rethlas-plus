@@ -98,10 +98,8 @@ Pick `decision_type` per these definitions:
   "every plan from now on must keep $|G| < n$ as a global
   constraint"). `new_approach` describes the elevated invariant.
 
-Derive `decision_id` as `"decision-{N}"` where `N` is one greater
-than the largest numeric suffix seen via
-`memory_search(problem_id, "decision-", channels=["big_decisions"])`,
-starting from `1`.
+`decision_id` derivation: see the AGENTS.md "Identifier conventions"
+table (form `decision-{N}`, allocated by this skill).
 
 Also append a `scratch_events` record indicating that a new planning round is needed.
 
