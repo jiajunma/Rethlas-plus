@@ -27,7 +27,15 @@ Read:
    - search gaps or missing background facts
 4. Summarize what the failures suggest for the next generation of decomposition plans.
 5. Save the synthesized failure knowledge to `failed_paths` so later planning skills can use it.
-6. After recording the failure synthesis, return control to `$propose-subgoal-decomposition-plans`.
+6. If the synthesis points at a strategic pivot rather than another
+   local iteration of the same plan family — for example, every plan
+   hits the same obstruction, the target needs reformulating, or a
+   constraint should be elevated from per-plan to top-level — also
+   append a `big_decisions` record (schema below). Do not write a
+   `big_decisions` record when the failures only suggest a tactical
+   tweak; that belongs in the next round's plans, not in the
+   strategic-decision log.
+7. After recording the failure synthesis, return control to `$propose-subgoal-decomposition-plans`.
 
 ## Output Contract
 
@@ -48,7 +56,31 @@ Append to `failed_paths`:
 }
 ```
 
-Also append an `events` record indicating that a new planning round is needed.
+When step 6 applies, also append to `big_decisions`:
+
+```json
+{
+  "decision_id": "decision-{N}",
+  "round": 0,
+  "decision_type": "strategy_pivot|abandonment|reformulation|elevation",
+  "summary": "...",
+  "previous_approach": "...",
+  "new_approach": "...",
+  "drove_by": {
+    "failed_plan_ids": ["..."],
+    "key_failures": ["..."],
+    "counterexamples": ["..."]
+  },
+  "implications_for_next_plans": ["..."]
+}
+```
+
+Derive `decision_id` as `"decision-{N}"` where `N` is one greater
+than the largest numeric suffix seen via
+`memory_search(problem_id, "decision-", channels=["big_decisions"])`,
+starting from `1`.
+
+Also append a `scratch_events` record indicating that a new planning round is needed.
 
 ## MCP Tools
 
@@ -58,4 +90,4 @@ Also append an `events` record indicating that a new planning round is needed.
 
 ## Failure Logging
 
-If the reports are too weak to identify meaningful common failures, append an `events` record with `event_type="key_failures_inconclusive"` and state what information is still missing.
+If the reports are too weak to identify meaningful common failures, append a `scratch_events` record with `event_type="key_failures_inconclusive"` and state what information is still missing.

@@ -1,61 +1,64 @@
 ---
 name: verify-sequential-statements
-description: Verify a markdown proof in the order it is written. Use when the task is to check local correctness, theorem applicability, and reasoning gaps statement by statement through a paper-style proof.
+description: Verify one target proof in textual order using only the prompt and verified node files.
 ---
 
 # Verify Sequential Statements
 
-Check each statement and subproof in order and log all local issues.
+Check the current target proof step by step. This skill is a reasoning
+procedure, not a persistence workflow.
 
 ## Input Contract
 
-Assume:
+Use only:
 
-- `Proof` is markdown text.
-- The proof is written in good mathematical order.
-- `Statement` contains the target theorem statement and its hypotheses.
+- `Statement` from the prompt
+- `Proof` from the prompt
+- `Kind` from the prompt
+- verified statements explicitly resolved from `knowledge_base/nodes/`
 
-Do not split the proof with utility code. Read the markdown in order and use its own structure.
+Do not use MCP tools, web search, arXiv search, events, runtime logs, or
+generator memory. Do not generate a replacement proof.
 
 ## Procedure
 
-1. Extract the assumptions and hypotheses from `Statement` before checking the proof.
-2. Iterate through the statements/subproofs in the order they appear in the markdown.
-3. For each item, determine a location key:
-   - use the displayed theorem/lemma/claim heading if present,
-   - otherwise use a local textual locator such as `proof paragraph 2`.
-4. Check local reasoning:
-   - Is the inference valid?
-   - Are assumptions stated and sufficient?
-   - Is each theorem application valid in context?
-   - Are there skipped or hand-wavy steps?
-5. Audit whether the assumptions from `Statement` are actually used in the proof.
-6. If some assumptions seem unused, do not assume they are harmless. Reason carefully about whether:
-   - the assumption is truly redundant, or
-   - the proof is silently omitting a necessary use of it and therefore has a gap or error.
-7. Classify findings:
-   - `critical_error`: logical contradiction, invalid theorem use, false implication.
-   - `gap`: missing derivation, vague justification, unsupported step, or suspiciously unused assumptions whose role is not justified.
-8. Persist each checked item to `statement_checks` using `memory_append`.
+1. Extract the target kind, assumptions, and conclusion from the prompt.
+2. If kind is `lemma`, `proposition`, or `theorem` and proof is empty or
+   unusable, record a gap before any further checking.
+   If kind is `definition` or `external_theorem`, an empty proof is
+   expected (these are axioms in Phase I) — do not record a gap on
+   that basis. For `definition` and `external_theorem`, only check
+   that the statement is internally coherent and that any
+   `\ref{label}` it cites resolves; skip per-step proof verification
+   entirely.
+3. Read the proof in textual order.
+4. For each meaningful claim or inference, choose a stable location:
+   - displayed claim/lemma name if present,
+   - otherwise `proof paragraph N`.
+5. Check local validity:
+   - the inference follows from earlier proof text, the target assumptions,
+     or explicitly referenced verified statements;
+   - all hypotheses of a referenced statement are supplied;
+   - definitions and notation are used consistently;
+   - no circular use of the target statement occurs.
+6. Classify issues:
+   - `gap`: missing derivation, vague justification, omitted hypothesis check,
+     or insufficient evidence.
+   - `critical_error`: contradiction, false implication, circular argument,
+     invalid dependency use, or a core claim that appears wrong.
+7. When unsure, classify as `gap`.
 
-## Output Contract
+## Output Contribution
 
-Append records to `statement_checks` with structure like:
+Prepare `checked_items` entries like:
 
 ```json
 {
-  "location": "Lemma 3",
-  "status": "checked",
-  "critical_errors": [
-    {"location": "Lemma 3", "issue": "Incorrect implication from A to B."}
-  ],
-  "gaps": [
-    {"location": "Lemma 3", "issue": "Missing justification of boundedness."}
-  ]
+  "location": "proof paragraph 3",
+  "status": "gap",
+  "notes": "Boundedness is asserted but not derived from the hypotheses."
 }
 ```
 
-## MCP Tools
-
-- `memory_append`
-- `memory_query`
+Contribute all gaps and critical errors to the final report. Do not write
+files.

@@ -90,3 +90,13 @@ def test_user_section_extraction_keeps_only_user_blocks() -> None:
     prompt = compose_prompt(rec)
     assert "user advice" in prompt
     assert "things broken" not in prompt
+
+
+def test_memory_scope_section_surfaces_problem_id() -> None:
+    """Generator agents must be told which ``problem_id`` to pass to MCP
+    memory tools; the colon in the target label is normalised to ``_`` to
+    match ``sanitize_problem_id`` in ``agents/generation/mcp/server.py``."""
+    rec = _job(target="thm:foo")
+    prompt = compose_prompt(rec)
+    assert "## Memory scope" in prompt
+    assert 'problem_id="thm_foo"' in prompt

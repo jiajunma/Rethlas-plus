@@ -19,23 +19,34 @@ Read:
 ## Procedure
 
 1. Confirm that all current decomposition plans have already been attempted with `$direct-proving` and that none has fully solved the problem.
-2. Spawn one sub-agent per decomposition plan.
+2. Spawn at most one bounded layer of sub-agents, one per selected decomposition plan, subject to the run's configured worker/budget limits.
 3. Give each sub-agent:
    - the full target theorem
    - the assigned decomposition plan
    - the key stuck points for its own plan
    - the key stuck points found in the other plans
    - the instruction to follow `AGENTS.md`
+   - an inline reminder of the §6.2 batch contract that any candidate
+     `<node>` blocks must satisfy: `kind` ∈ {lemma, proposition,
+     theorem, definition} (no `external_theorem`); non-empty
+     `statement`; content-descriptive labels with the correct
+     `def:`/`lem:`/`prop:`/`thm:` prefix (no placeholders like
+     `thm:main`); the dispatched target label must appear; only the
+     target may already exist (other batch labels must be brand-new);
+     no duplicate labels; no self-references; every dependency must
+     appear as a `\ref{label}` in the statement or proof and resolve
+     either inside the batch or to an existing verified node;
+     batch-internal references must form a DAG.
 4. Tell each sub-agent to tackle the assigned plan under the instructions in `AGENTS.md`, treating that plan as its starting point rather than restarting the search from zero. If new evidence or discoveries justify it, the sub-agent may refine, extend, or locally revise the plan, but it should preserve continuity with the assigned plan instead of discarding it outright.
-5. Tell each sub-agent that it may itself spawn sub-agents recursively if that helps its assigned plan.
-6. Require each sub-agent to write progress, failures, and any successful proof development back into the shared memory using the same filename-derived `problem_id` as the MCP `problem_id`.
+5. Tell each sub-agent not to spawn further sub-agents. Phase I keeps recursive exploration as a bounded internal search pattern, not an unbounded process tree.
+6. Require each sub-agent to return progress, failures, and any successful candidate node text to the parent generator, which records useful artifacts in scratch memory using the same `problem_id` as the MCP `problem_id`.
 7. Wait for all sub-agents to finish, then gather their reports.
-8. If any plan succeeds, assemble the proof draft from that plan.
+8. If any plan succeeds, assemble candidate `<node>` blocks from that plan. The parent generator emits the only final batch.
 9. If all plans fail, hand the collected reports to `$identify-key-failures`.
 
 ## Output Contract
 
-Append an `events` record for the recursive round:
+Append a `scratch_events` record for the recursive round:
 
 ```json
 {
@@ -51,15 +62,33 @@ Append an `events` record for the recursive round:
 }
 ```
 
-Update `branch_states` with the recursive round status and per-plan outcomes.
+Update `branch_states` by calling `branch_update(problem_id, branch_id, state)`
+once per branch with the recursive round status and per-plan outcomes;
+each call appends a fresh state record (the channel is append-only).
+Reuse stable `branch_id` values across rounds so newest-first ranking
+in `memory_search` surfaces the most recent state for each branch.
 
-## Tools
+## MCP Tools
 
 - `memory_search`
 - `memory_append`
 - `branch_update`
 - `search_arxiv_theorems`
-- Codex sub-agent tools: `spawn_agent`, `send_input`, `wait_agent`, `close_agent`
+
+## Codex Sub-agent Tools
+
+Provided by Codex CLI's `multi_agent` feature, configured in
+`agents/generation/.codex/config.toml` and
+`agents/generation/.codex/agents/subgoal-prover.toml`. Not part of the
+project's MCP server.
+
+- `spawn_agent`
+- `send_input`
+- `wait_agent`
+- `close_agent`
+
+Use exactly one bounded layer; sub-agents must not spawn further
+sub-agents.
 
 ## Failure Logging
 

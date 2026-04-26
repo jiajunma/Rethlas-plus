@@ -1,256 +1,175 @@
-# Math Reasoning Agent
+# Rethlas Generator Agent
 
-This agent solves research-level math problems by following a mathematician-style iterative process. The primary control logic lives in this file and in the skill `SKILL.md` files under `.agents/skills/`.
+This agent proposes mathematical knowledge for one coordinator-dispatched
+target. It does not verify its own work. Verification is a separate coordinator
+scheduled verifier run.
 
 ## Objective
 
-Given the markdown filepath of a math problem, read that file and produce a verified markdown proof blueprint at:
+Given a generator job prompt assembled by `generator/role.py`, produce one
+batch of node proposals as `<node>...</node>` blocks. The wrapper parses those
+blocks, validates them, and atomically publishes exactly one
+`generator.batch_committed` truth event if the batch is admissible.
 
-- working draft: `results/{problem_id}/blueprint.md`
-- section verification report: `results/{problem_id}/section_verification.json`
-- verified proof: `results/{problem_id}/blueprint_verified.md`
+The Codex subprocess must not write truth events, runtime job files, Kuzu, or
+`knowledge_base/nodes/` directly.
 
-Here `problem_id` is the markdown filename without the trailing `.md`.
+## Input Contract
 
-## Workspace Boundary
+The prompt provides:
 
-Do not read anything outside this working directory.
+- target label
+- mode: `fresh` or `repair`
+- target statement and prior proof text if present
+- dispatch hash and dependency statement hashes prepared by coordinator
+- initial user guidance when present
+- repair context when present: latest verification report, repair hint,
+  repair count, and rejected verification hash
 
-This is a hard constraint. Only inspect files, directories, inputs, logs, memory, results, skills, and scripts that are inside the current working directory. Do not read from parent directories, home-directory config, global skill directories, or any other external path.
+Codex may read `knowledge_base/nodes/*.md` through normal shell commands to
+inspect already verified knowledge. Only nodes with `pass_count >= 1` are
+rendered there, so a missing node file means the statement is not available as
+verified context.
 
-## Input
+Do not read `events/`, `runtime/`, Kuzu, verifier results, or previous
+generator attempt logs as truth. Memory MCP tools are a scratchpad only and are
+not knowledge truth. In particular, the MCP channel `scratch_events` is not the
+workspace truth-event directory.
 
-The input is provided directly in the prompt and will include:
+## Available Tools
 
-- the markdown filepath of the math problem
+Generator may use:
 
-Before any reasoning:
-
-1. Resolve the provided filepath to a markdown file inside this workspace.
-2. Read that markdown file carefully.
-3. Set `problem_id` to the filename stem `{filename}`.
-4. Use the markdown file contents as the authoritative local problem statement/context.
-
-
-## Required Memory Policy
-
-All intermediate reasoning artifacts must be persisted in `memory/{problem_id}/` using MCP tools (`memory_init`, `memory_append`, `memory_search`, `branch_update`).
-
-Initialize memory before any reasoning:
-
-- call `memory_init(problem_id=problem_id, meta=...)`
-
-For MCP memory tools, use the filename-derived `problem_id`.
-
-Use append-only channels (except `meta.json`):
-
-- `immediate_conclusions`
-- `toy_examples`
-- `counterexamples`
-- `big_decisions`
-- `subgoals`
-- `proof_steps`
-- `failed_paths`
-- `verification_reports`
-- `branch_states`
-- `events`
-
-## Output Shape Rule
-
-The proof blueprint must follow a divide-and-conquer structure.
-
-- Break the argument into short top-level blocks such as
-  - `# lemma ...`
-  - `# proposition ...`
-  - `# theorem ...`
-- Each top-level block must have
-  - `## statement`
-  - `## proof`
-- Prefer proofs under 100 non-blank lines when practical.
-- Proof length is a quality guideline, not a hard verification condition.
-- If a proof becomes unwieldy, split it into additional lemmas or propositions first.
-- The main theorem should mostly assemble previously proved blocks, not carry the main technical burden by itself.
-
-## Adaptive Control Loop
-
-The agent should repeatedly assess the current state and choose the most appropriate skill(s) for the situation.
-
-### Step 1: Assess state (every iteration)
-
-Think about the following questions:
-
-- What is the current main problem to tackle?
-- Have we already searched extensively, and if so, what can we now do by deep independent reasoning rather than further retrieval?
-- Have we gathered enough information to propose multiple subgoal decomposition plans?
-- What decomposition plans have already been tried, and what stuck points did they reveal?
-- Do we have any fresh constructions / counterexamples?
-- What common failure patterns have already been identified?
-- What grounding references from arXiv might help next?
-
-
-
-Prefer the skill `$search-math-results` as the default retrieval workflow when the agent needs external mathematical results or background.
-Prefer the skill `$query-memory` when the needed information may already exist in local memory.
-External search is a support tool, not a substitute for deep thinking. Besides searching extensively for relevant theorems and background, the agent should also reason deeply about the problem on its own. If extensive search does not produce useful information, the agent should stop leaning on `$search-math-results` and instead push the problem forward with the other available skills.
-
-### Step 2: Choose the next skill(s)
-
-You can choose to invoke any skill at any time based on the current state and needs.
-Do not decide a fixed order of skill usage before tackling the problem. Choose skills adaptively in response to the current proof state, new evidence, verifier feedback, stuck points, and newly discovered opportunities.
-
-- Use `$obtain-immediate-conclusions` when:
-  - starting a new problem/branch/subgoal
-  - you need cheap progress or a cleaner reformulation
-- Use `$search-math-results` when:
-  - you need relevant theorems, constructions, examples, counterexamples, or background
-  - you are starting a new problem and need context
-  - you are constructing examples/counterexamples or proving subgoals and need supporting references
-- Use `$query-memory` when:
-  - you want to check whether earlier conclusions, examples, counterexamples, failed paths, or brach states can bring insight to the current question, claim, subgoal, or branch decision
-  - you want to test a claim against previously saved counterexamples.
-- Use `$construct-toy-examples` when:
-  - you are stuck in reasoning and need simpler examples to regain traction
-  - you need simpler examples that satisfy both assumptions and conclusion
-  - you want to see where the assumptions take effect and gain intuition
-- Use `$construct-counterexamples` when:
-  - you are stuck in reasoning and want to see where the assumptions take effect and gain intuition
-  - a proposed conjecture/claim feels fragile or unproved
-  - you want to test whether the assumptions can hold while the claimed conclusion fails
-- Use `$propose-subgoal-decomposition-plans` when:
-  - you have gathered enough information from examples, counterexamples, search results, and previous failures to propose multiple decomposition plans
-  - you need several materially different ways to break the theorem into subgoals
-- Use `$direct-proving` when:
-  - one or more decomposition plans are created.
-- Use `$recursive-proving` when:
-  - all current decomposition plans have been attempted with `$direct-proving`
-  - none of them fully solved the problem
-  - you have identified key stuck points for each plan and want one sub-agent to work on each plan in parallel
-- Use `$identify-key-failures` when:
-  - recursive attempts on the current decomposition plans all failed
-- Use `$verify-proof` when:
-  - a full candidate proof of the entire problem has been assembled and you want to check it
-
-
-
-### Step 3: Act and persist
-
-After invoking any skill:
-
-1. Persist produced artifacts to the correct channel(s) with `memory_append` using `problem_id=problem_id`.
-2. Update branch state with `branch_update` when a choice is made or backtracking happens.
-3. When a branch dies, append to `failed_paths` with a concrete reason and evidence.
-4. When you propose decomposition plans or identify stuck points, persist them clearly so later skills and sub-agents can reuse them.
-5. If a proof step uses an external result from search tools, record the complete statement and its source identifiers in the proof step itself:
-   - paper id
-   - arXiv id if applicable
-   - theorem id if available
-6. Before using an external result from a paper, expand the definitions and concepts appearing in that statement using the surrounding context of the paper, and check carefully that the result is genuinely applicable in the current setting. Do not assume that the same words mean the same thing across different mathematical contexts.
-
-
-### Verification repair loop
-
-If an informal blueprint or candidate proof does not pass verification:
-
-1. Revise it using the verification report.
-2. Resolve critical errors first.
-3. Do not assume the fix is purely local; if needed, change strategy, backtrack, or choose a different direction.
-4. After critical errors are addressed, resolve all remaining errors and gaps.
-5. Invoke the appropriate skills based on the current state before re-running verification.
-
-Before any full-proof verification attempt, first run section-level verification on `results/{problem_id}/blueprint.md`.
-
-Use:
-
-- `scripts/verify_sections.py results/{problem_id}/blueprint.md`
-
-The section-level verification report must pass three consecutive times before calling `verify_proof_service` on the full draft.
-
-Section-level verification means:
-
-1. check the global structure of the blueprint;
-2. verify top-level proof blocks in order, sequentially by default;
-3. bounded parallel verification is allowed only as an optimization layer on top of the ordered block structure, using a small worker count;
-4. if section verification fails, repair locally and re-run;
-5. only after three consecutive section-verification passes may full verification begin.
-
-If bounded parallel verification is used:
-
-- keep the worker count small;
-- treat rate limits and infrastructure instability as reasons to fall back to sequential mode.
-
-If the problem appears difficult, actively explore different directions and proof strategies instead of forcing one narrow path. In such cases, it is acceptable and encouraged to write long, detailed proof blueprints when they help organize the strategy and preserve partial progress.
-If the current problem appears to be an open conjecture or open problem, that is not a reason to stop. This agent is meant to tackle hard open problems. Keep trying serious approaches, keep refining decomposition plans, and preserve partial progress carefully instead of giving up.
-If extensive searching fails to uncover useful information, do not stall on further retrieval. Switch to deep self-driven exploration of the problem using the non-search skills, and continue trying to make progress without external support.
-If a family of decomposition plans repeatedly fails, use `$identify-key-failures` to summarize the common stuck points, store them in `failed_paths`, and then propose a new generation of decomposition plans.
-
-
-### Step 4: Stopping rules
-
-Stop only when the blueprint passes verification and the verified markdown proof has been published as `blueprint_verified.md`.
-
-## Hard Invariants
-
-1. Every intermediate artifact must be written to memory.
-2. Failed paths are mandatory memory artifacts and must remain queryable.
-3. Decomposition plans and key failures are dynamic: keep proposing new plans, but preserve the failure information from previous plans.
-4. Verification must pass before final output.
-5. Any verifier `wrong` verdict, any critical error, or any gap counts as verification failure.
-6. Supporting definitions, lemmas, and propositions should appear before later statements that rely on them, and the main theorem must appear last.
-7. The proof blueprint must be split into short top-level lemmas/propositions/theorems; long monolithic proofs are not acceptable.
-8. Section-level verification must pass before full verification is attempted.
-9. External results used in proofs must be cited with their complete statement and source identifiers when available.
-10. The final markdown proof text must also include the complete statement, `paper_id`, `theorem_id`, and `arXiv id` when applicable for any cited external result.
-11. External paper results must not be used as black boxes without context-checking: expand the paper's local definitions, disambiguate terminology, and verify applicability before relying on the statement.
-12. Do not read anything outside the current working directory under any circumstance.
-13. For difficult problems, prefer broader exploration of multiple proof strategies and allow long proof blueprints when they help track the argument, but the final published blueprint must still be divided into short verified blocks.
-14. For the final target theorem section, the `## statement` text must be the original complete informal statement from the input markdown problem file, not a shortened or paraphrased version.
-15. If the problem appears to be an open conjecture or open problem, do not treat that as a stopping condition. Keep trying to tackle it seriously, but never claim success unless the proof has actually passed verification.
-16. Extensive search is not enough by itself. The agent must also think deeply and explore the problem on its own, and if retrieval stops being useful, it must continue with the non-search skills rather than waiting for external support.
-
-
-
-Use these tools when relevant:
-
-- `search_arxiv_theorems`
+- `search_arxiv_theorems(query)`
 - `memory_init`
 - `memory_append`
 - `memory_search`
 - `branch_update`
-- `verify_proof_service`
+- shell reads/searches inside the workspace, especially over
+  `knowledge_base/nodes/`
 
-Always call `search_arxiv_theorems` for nontrivial subgoals and key claims to ground reasoning in related literature.
-Use web search early to gather background (terminology, standard lemmas, common techniques) and throughout when constructing examples/counterexamples or proving subgoals.
-Prefer `$search-math-results` to orchestrate this retrieval flow: use `search_arxiv_theorems` first, then fall back to the built-in web search when the theorem search is not useful.
-If `$search-math-results` identifies a useful paper, download it inside the current working directory, extract its text, and read the extracted text before using the paper in reasoning or proof writing.
-If `$search-math-results` identifies a useful theorem, read the proof of that theorem as well and extract any techniques or ideas that may help with the current statement.
-When considering an external theorem from a paper, expand the definitions and concepts in that theorem using the paper's own context and terminology, and check carefully that the theorem is actually applicable to the current situation.
-If extensive retrieval still does not yield useful support, stop relying on search and continue the proof attempt through deep independent reasoning and the other provided skills.
-Use `verify_proof_service` for proof verification instead of relying on model-only checking.
-Only call `verify_proof_service` when a full proof of the whole problem has been assembled in `blueprint.md`. Do not call it on partial proofs, incomplete branches, isolated lemmas, or drafts that have made no real progress on the full theorem.
-When calling `verify_proof_service`, always use a large timeout of `3600` seconds.
-Before the full verification call, run `scripts/verify_sections.py` and repair any structure or section-level failures it reports.
+### Memory scope (`problem_id`)
 
-## Output Contract
+Every memory MCP call requires a `problem_id`. Use the value supplied
+under the prompt's `## Memory scope` section verbatim — it is derived
+deterministically from the dispatched target label, so two dispatches
+against the same target share scratch memory while different targets
+stay isolated. Do not invent a value or vary it across skill calls
+inside one run; that fragments memory and breaks `query-memory`
+recall.
 
-Write the proof in markdown in `results/{problem_id}/blueprint.md`, in a paper-like format such as:
+`memory_search` returns each hit as
+`{score, timestamp_utc, channel, item: <agent record>}`. The fields
+the skill output_contracts describe live under `item`; tied scores are
+broken with newest-first by `timestamp_utc`.
 
-```markdown
-# lemma lem:xxx
+Generator must not call any verifier service. Phase I has no generator-side
+proof-checking tool. Browser-style retrieval and arbitrary file downloads are
+not part of the Phase I generator contract; retrieved external evidence comes
+through `search_arxiv_theorems` and must remain scratch context unless it is
+incorporated into the emitted node text.
 
-## statement
-put the statement here
+## Skill Selection
 
-## proof
-put the proof of this statement here
+Use the reasoning skills adaptively. Retrieval and memory are support tools,
+not acceptance criteria.
+
+- Use `$obtain-immediate-conclusions` to extract cheap consequences and clean
+  reformulations.
+- Use `$search-math-results` for external literature search when a result,
+  construction, example, or counterexample may help.
+- Use `$query-memory` for scratchpad recall only.
+- Use `$construct-toy-examples` and `$construct-counterexamples` to test
+  candidate claims.
+- Use `$propose-subgoal-decomposition-plans`, `$direct-proving`,
+  `$recursive-proving`, and `$identify-key-failures` to build or repair the
+  proposed node batch.
+
+There is no generator-run proof acceptance workflow in Phase I. A proof is only
+accepted after the coordinator later dispatches verifier workers and the
+librarian applies their `verifier.run_completed` events.
+
+The original Rethlas workflow remains useful as internal search discipline:
+record immediate conclusions, toy examples, counterexamples, decomposition
+plans, direct attempts, failed paths, and search/applicability notes in scratch
+memory. Those artifacts help the current run produce a better batch; they are
+not replayable truth and are not visible to verifier.
+
+## Batch Output Contract
+
+Final output must contain one or more complete `<node>` blocks and no claim that
+the proof is verified.
+
+Each block must have YAML frontmatter with:
+
+```yaml
+kind: lemma | proposition | theorem | definition
+label: <content-descriptive label>
+remark: <brief origin/purpose note>
+source_note: ""
 ```
 
-The main theorem should be written at the end. After the proof passes verification, rename the file to `results/{problem_id}/blueprint_verified.md`.
+For Phase I generator batches:
 
-For the final target theorem section, `## statement` must be the original complete statement from the input markdown problem file written in full.
+- `kind: external_theorem` is forbidden; only the user may add external
+  theorems.
+- `statement` must be non-empty.
+- `proof` must be present and may be empty only when appropriate for the kind.
+- `remark` and `source_note` keys must be present.
+- Labels must have the correct prefix for kind:
+  - `def:` for definition
+  - `lem:` for lemma
+  - `prop:` for proposition
+  - `thm:` for theorem
+- Labels must be content-descriptive. Placeholder/local labels such as
+  `thm:main`, `lem:helper`, `prop:aux`, or `def:object` are invalid.
+- The dispatched target label must appear in the batch.
+- A batch may write only its target label and brand-new labels.
+- No duplicate labels may appear in one batch.
+- No node may reference itself.
+- Every dependency must be an explicit `\ref{label}` in the statement or proof.
+- Every `\ref{label}` must resolve either to another node in the same batch or
+  to an existing verified node file under `knowledge_base/nodes/`.
+- Batch-internal references must form a DAG.
 
-If `## proof` cites an external result, include in the proof text:
+Use this shape:
 
-- the complete cited statement
-- `paper_id`
-- `theorem_id`
-- `arXiv id` when applicable
+```markdown
+<node>
+---
+kind: lemma
+label: lem:block_form_for_x0_plus_u
+remark: Block-form reduction used by the target theorem.
+source_note: ""
+---
+**Statement.** If $X$ then $Y$.
+
+**Proof.** By \ref{def:primary_object}, ... $\square$
+</node>
+```
+
+## Repair Mode
+
+In repair mode, use the supplied verification report and repair hint. The
+repair count is advisory: small values suggest local proof repair; larger values
+should make the agent seriously consider revising the statement or producing a
+counterexample proof. There is no hard repair budget.
+
+Repair output may:
+
+1. keep the statement and replace the proof,
+2. revise both statement and proof,
+3. revise the statement to a counterexample/negation form and prove that.
+
+The wrapper rejects a repair batch whose target verification hash is unchanged
+from the latest rejected hash.
+
+## Hard Invariants
+
+1. Produce proposals only; never certify them as verified.
+2. Do not invoke verifier services or verifier skills.
+3. Use only verified node files as mathematical library context.
+4. Do not use unverified, runtime, or event history as truth.
+5. Preserve explicit `\ref{label}` references for every dependency.
+6. Output a full batch for one run; the wrapper publishes it atomically or not
+   at all.

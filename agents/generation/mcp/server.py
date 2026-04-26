@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import re
-import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,8 +24,6 @@ THEOREM_SEARCH_TASK = (
     "lemmas, and definitions, that are useful for solving the given problem."
 )
 
-VERIFY_PROOF_URL = "http://127.0.0.1:8091"
-
 CHANNEL_FILES: Dict[str, str] = {
     "immediate_conclusions": "immediate_conclusions.jsonl",
     "toy_examples": "toy_examples.jsonl",
@@ -35,9 +32,8 @@ CHANNEL_FILES: Dict[str, str] = {
     "subgoals": "subgoals.jsonl",
     "proof_steps": "proof_steps.jsonl",
     "failed_paths": "failed_paths.jsonl",
-    "verification_reports": "verification_reports.jsonl",
     "branch_states": "branch_states.jsonl",
-    "events": "events.jsonl",
+    "scratch_events": "scratch_events.jsonl",
 }
 
 
@@ -182,57 +178,6 @@ def search_arxiv_theorems(
     }
 
 
-def verify_proof_service(
-    statement: str,
-    proof: str,
-    endpoint: str = VERIFY_PROOF_URL,
-    timeout_seconds: int = 14400,
-) -> Dict[str, Any]:
-    if not statement.strip():
-        raise ValueError("statement must be non-empty")
-    if not isinstance(proof, str):
-        raise ValueError("proof must be markdown text")
-    if not proof.strip():
-        raise ValueError("proof markdown must be non-empty")
-
-    payload = {"statement": statement, "proof": proof}
-
-    submit = requests.post(f"{endpoint}/verify_async", json=payload, timeout=30)
-    submit.raise_for_status()
-    accepted = submit.json()
-    run_id = accepted.get("run_id")
-    if not run_id:
-        raise ValueError("verification service did not return a run_id")
-
-    deadline = datetime.now(timezone.utc).timestamp() + timeout_seconds
-    while datetime.now(timezone.utc).timestamp() < deadline:
-        status_resp = requests.get(f"{endpoint}/verify_status/{run_id}", timeout=30)
-        status_resp.raise_for_status()
-        status_payload = status_resp.json()
-        status = status_payload.get("status")
-        if status == "succeeded":
-            result_resp = requests.get(f"{endpoint}/verify_result/{run_id}", timeout=30)
-            result_resp.raise_for_status()
-            body = result_resp.json()
-            if not isinstance(body, dict):
-                raise ValueError("verification service must return a JSON object")
-            break
-        if status in {"failed", "timed_out"}:
-            raise ValueError(f"verification service run failed with status={status}")
-        time.sleep(5)
-    else:
-        raise ValueError(f"verification service timed out waiting for run_id={run_id}")
-
-    return {
-        "statement": statement,
-        "verification_report": body.get("verification_report", {}),
-        "verdict": body.get("verdict"),
-        "repair_hints": body.get("repair_hints"),
-        "endpoint": endpoint,
-        "run_id": run_id,
-    }
-
-
 def memory_init(
     problem_id: str,
     meta: Optional[Dict[str, Any]] = None,
@@ -293,13 +238,13 @@ def memory_append(
     target = _channel_path(problem_id, channel)
     _append_jsonl(target, entry)
 
-    if channel != "events":
+    if channel != "scratch_events":
         event_entry = {
             "timestamp_utc": _utc_now(),
             "event_type": "memory_append",
             "channel": channel,
         }
-        _append_jsonl(_channel_path(problem_id, "events"), event_entry)
+        _append_jsonl(_channel_path(problem_id, "scratch_events"), event_entry)
 
     return {
         "status": "ok",
@@ -321,7 +266,7 @@ def memory_search(
         raise ValueError("limit_per_channel must be > 0")
 
     if channels is None:
-        search_channels = [name for name in CHANNEL_FILES if name != "events"]
+        search_channels = [name for name in CHANNEL_FILES if name != "scratch_events"]
     else:
         search_channels = channels
 
@@ -330,24 +275,37 @@ def memory_search(
     for channel in search_channels:
         path = _channel_path(problem_id, channel)
         items = list(_iter_jsonl(path))
-        documents = [json.dumps(item, ensure_ascii=False) for item in items]
+        # BM25 scoring against the agent-supplied record only — system
+        # metadata (timestamp_utc, channel) would otherwise pollute the
+        # vocabulary and bias scores against records with longer dates.
+        documents = [
+            json.dumps(item.get("record", item), ensure_ascii=False) for item in items
+        ]
         tokenized_documents = [_tokenize_bm25(document) for document in documents]
         scores = _bm25_score_documents(query, tokenized_documents)
 
+        # Sort by descending BM25 score, breaking ties by descending
+        # ``timestamp_utc`` (newest first) so status-mutation channels
+        # surface the latest record per record_id ahead of stale ones.
+        # Python sort is stable, so secondary key first, primary key second.
+        scored = list(zip(items, scores))
+        scored.sort(key=lambda pair: pair[0].get("timestamp_utc", "") if isinstance(pair[0], dict) else "", reverse=True)
+        scored.sort(key=lambda pair: pair[1], reverse=True)
+
         ranked_results: List[Dict[str, Any]] = []
-        for item, score in sorted(
-            zip(items, scores),
-            key=lambda pair: (
-                -pair[1],
-                pair[0].get("timestamp_utc", ""),
-            ),
-        ):
+        for item, score in scored:
             if score <= 0:
                 continue
+            # Unwrap the record so callers see the agent-authored shape
+            # at the top level of ``item``; lift system metadata into
+            # sibling keys so callers can still consult them when needed.
+            inner = item.get("record", {}) if isinstance(item, dict) else {}
             ranked_results.append(
                 {
                     "score": score,
-                    "item": item,
+                    "timestamp_utc": item.get("timestamp_utc", "") if isinstance(item, dict) else "",
+                    "channel": item.get("channel", channel) if isinstance(item, dict) else channel,
+                    "item": inner,
                 }
             )
             if len(ranked_results) >= limit_per_channel:
@@ -393,13 +351,6 @@ def build_mcp_app() -> Optional[Any]:
         num_results: int = 10,
     ) -> Dict[str, Any]:
         return search_arxiv_theorems(query=query, num_results=num_results)
-
-    @app.tool(name="verify_proof_service")
-    def _tool_verify_proof_service(
-        statement: str,
-        proof: str,
-    ) -> Dict[str, Any]:
-        return verify_proof_service(statement=statement, proof=proof)
 
     @app.tool(name="memory_init")
     def _tool_memory_init(

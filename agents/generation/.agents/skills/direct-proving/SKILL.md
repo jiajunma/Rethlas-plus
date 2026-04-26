@@ -29,9 +29,16 @@ Read:
    - partially advanced
    - blocked
 7. If a proof adaptation attempt fails, identify why the migration fails. Be concrete: for example, note which hypothesis is missing, which construction does not transfer, which step breaks, which counterexample blocks the migration, or which part of the searched proof depends on structure absent in the current setting.
-8. If all subgoals are solved directly, mark the plan as solved and assemble the proof draft.
+8. If all subgoals are solved directly, mark the plan as solved and assemble candidate `<node>` blocks for the batch.
+   The blocks must satisfy the §6.2 batch contract restated in
+   `AGENTS.md` "Batch Output Contract": no `kind: external_theorem`;
+   non-empty `statement`; content-descriptive labels with the correct
+   prefix; the dispatched target label must appear; non-target labels
+   must be brand-new; no duplicate labels; no self-references; every
+   dependency present as `\ref{label}` resolving inside the batch or to
+   an existing verified node; intra-batch references form a DAG.
 9. If the plan does not fully go through, then identify the key stuck points as concretely as possible.
-10. Focus on locating the decisive failure modes of the plan after this first full attempt, not on polishing a full proof.
+10. Focus on locating the decisive failure modes of the plan after this first full attempt, not on polishing final node text prematurely.
 
 ## Output Contract
 
@@ -54,7 +61,11 @@ Append one record per attempted subgoal to `proof_steps`:
 }
 ```
 
-Update the corresponding decomposition-plan record in `subgoals` to `screening`, `screened`, or `solved`.
+Update the status of the corresponding decomposition-plan in `subgoals`
+by appending a fresh record with the same `plan_id` and the new
+`status` (one of `screening`, `screened`, `solved`). The MCP channel
+is append-only; `memory_search` ranks ties newest-first so the latest
+status wins on recall.
 
 ## MCP Tools
 

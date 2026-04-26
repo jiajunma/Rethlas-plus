@@ -1,6 +1,6 @@
 ---
 name: query-memory
-description: Retrieve previously saved immediate conclusions, toy examples, counterexamples, subgoal plans, direct-proof attempts, failed paths, or branch states from memory. Use when you want to check whether earlier conclusions, examples, counterexamples, plan records, direct attempts, failed paths, or branch states can bring insight to the current question, claim, subgoal, or branch decision, or when you want to test a claim against previously saved counterexamples.
+description: Retrieve previously saved immediate conclusions, toy examples, counterexamples, subgoal plans, direct-proof attempts, failed paths, branch states, or big strategic decisions from memory. Use when you want to check whether earlier conclusions, examples, counterexamples, plan records, direct attempts, failed paths, branch states, or strategic decisions can bring insight to the current question, claim, subgoal, or branch decision, or when you want to test a claim against previously saved counterexamples.
 ---
 
 
@@ -22,6 +22,7 @@ Read:
   - `proof_steps`
   - `failed_paths`
   - `branch_states`
+  - `big_decisions`
   - `scratch_events`
 
 ## Procedure

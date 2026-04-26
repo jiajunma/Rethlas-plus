@@ -30,6 +30,7 @@ from common.runtime.jobs import JobRecord
 def compose_prompt(rec: JobRecord, *, latest_rejection: str = "") -> str:
     parts: list[str] = []
     parts.append(_generation_prompt(rec))
+    parts.append(_memory_scope(rec))
     initial = _initial_guidance(rec)
     if initial:
         parts.append(initial)
@@ -62,6 +63,38 @@ def _generation_prompt(rec: JobRecord) -> str:
             f" Introduce auxiliary lemmas under brand-new labels as needed."
         )
     return _section("Task", intro)
+
+
+def _problem_id_for(target: str) -> str:
+    """Deterministic ``problem_id`` derived from the dispatched target label.
+
+    Mirrors ``agents/generation/mcp/server.py:sanitize_problem_id``: any
+    character outside ``[A-Za-z0-9._-]`` becomes ``_``, runs collapse,
+    leading/trailing ``._`` are stripped. So ``lem:foo`` → ``lem_foo``.
+    Two dispatches against the same target share a ``problem_id`` and
+    therefore share scratch memory; different targets stay isolated.
+    """
+    import re
+    cleaned = re.sub(r"\s+", "_", target.strip())
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", cleaned)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._")
+    return cleaned or "problem"
+
+
+def _memory_scope(rec: JobRecord) -> str:
+    """Tell the agent which ``problem_id`` to pass to MCP memory tools.
+
+    Without this section the agent has nothing to pass and must invent
+    a value, which sharded memory across skill calls in the past.
+    """
+    pid = _problem_id_for(rec.target)
+    body = (
+        f"Use `problem_id=\"{pid}\"` for every "
+        "`memory_search`, `memory_append`, `memory_init`, and "
+        "`branch_update` MCP call in this run. The same value is reused "
+        "across repair rounds for the same target."
+    )
+    return _section("Memory scope", body)
 
 
 def _initial_guidance(rec: JobRecord) -> str:
