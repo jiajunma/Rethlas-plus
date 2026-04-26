@@ -152,6 +152,15 @@ class LibrarianDaemon:
         events_root = self.ws.events
         files = list(events_root.rglob("*.json")) if events_root.is_dir() else []
         decided = self.counters.applied + self.counters.failed
+        applied_total = self.counters.applied
+        failed_total = self.counters.failed
+        last_applied = self.counters.last_applied
+        if self.backend is not None:
+            try:
+                decided, applied_total, failed_total = self.backend.applied_event_counts()
+                last_applied = self.backend.last_applied_event_id() or last_applied
+            except Exception:
+                pass
         backlog = max(0, len(files) - decided)
         hb = LibrarianHeartbeat(
             pid=os.getpid(),
@@ -160,9 +169,9 @@ class LibrarianDaemon:
             status=self.status,
             startup_phase=self.phase,
             last_seen_event_id=self.counters.last_seen,
-            last_applied_event_id=self.counters.last_applied,
-            events_applied_total=self.counters.applied,
-            events_apply_failed_total=self.counters.failed,
+            last_applied_event_id=last_applied,
+            events_applied_total=applied_total,
+            events_apply_failed_total=failed_total,
             projection_backlog=backlog,
             rebuild_in_progress=self.rebuild_in_progress,
             last_rebuild_at=self.last_rebuild_at,

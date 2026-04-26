@@ -216,6 +216,30 @@ class KuzuBackend:
             target_label=target_label,
         )
 
+    def applied_event_counts(self) -> tuple[int, int, int]:
+        """Return ``(total, applied, apply_failed)`` from ``AppliedEvent``."""
+        total_res = self._conn.execute("MATCH (a:AppliedEvent) RETURN count(*)")
+        applied_res = self._conn.execute(
+            "MATCH (a:AppliedEvent) WHERE a.status = 'applied' RETURN count(*)"
+        )
+        failed_res = self._conn.execute(
+            "MATCH (a:AppliedEvent) WHERE a.status = 'apply_failed' RETURN count(*)"
+        )
+        total = int(total_res.get_next()[0]) if total_res.has_next() else 0
+        applied = int(applied_res.get_next()[0]) if applied_res.has_next() else 0
+        failed = int(failed_res.get_next()[0]) if failed_res.has_next() else 0
+        return total, applied, failed
+
+    def last_applied_event_id(self) -> str:
+        """Latest applied event by ``(applied_at, event_id)`` order."""
+        res = self._conn.execute(
+            "MATCH (a:AppliedEvent) WHERE a.status = 'applied' "
+            "RETURN a.event_id ORDER BY a.applied_at DESC, a.event_id DESC LIMIT 1"
+        )
+        if not res.has_next():
+            return ""
+        return res.get_next()[0] or ""
+
     # ---- Node helpers ---------------------------------------------
     def node_by_label(self, label: str) -> RawNodeRow | None:
         res = self._conn.execute(

@@ -106,6 +106,8 @@ def test_replay_skips_already_decided_events(tmp_path: Path) -> None:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
         hb2 = read_heartbeat(tmp_path / "runtime" / "state" / "librarian.json")
         assert hb2 is not None
+        assert hb2["events_applied_total"] == 2
+        assert hb2["events_apply_failed_total"] == 0
         assert hb2["projection_backlog"] == 0
 
     # After both runs: open a read-only Kuzu connection and assert the
