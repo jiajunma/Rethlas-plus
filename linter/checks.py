@@ -382,7 +382,17 @@ def _statement_changing_iso_ms(events_dir: Path, label: str) -> str | None:
 
 
 def check_c_pass_count(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
-    """C. Audit ``pass_count`` against §5.5.1 replay."""
+    """C. Audit ``pass_count`` against §5.5.1 replay.
+
+    Mirrors category D's filtering: only verifier facts whose target is
+    this label, whose ``AppliedEvent.status`` is ``"applied"``, and whose
+    ``iso_ms`` is strictly after the most recent statement-mutating event
+    for the label (§5.4 revision boundary) participate in the audit.
+    Without these filters, ``apply_failed`` verdicts whose ``vh`` happens
+    to match the current node and pre-revision verdicts whose target
+    statement was later rewritten produce phantom drift on the rare
+    ``A → Y → A`` revision path.
+    """
     out: list[Violation] = []
     facts = _replay_verifier_facts(events_dir)
     for label in backend.node_labels():
@@ -393,7 +403,20 @@ def check_c_pass_count(events_dir: Path, backend: "KuzuBackend") -> list[Violati
             kind = NodeKind(row.kind)
         except ValueError:
             continue
-        audit = _audit_pass_count(row, kind, facts)
+        last_change = _statement_changing_iso_ms(events_dir, label)
+        label_facts: list[dict[str, Any]] = []
+        for f in facts:
+            if f.get("target") != label:
+                continue
+            eid = f.get("event_id", "")
+            iso_ms = eid.split("-", 1)[0] if eid else ""
+            if last_change and iso_ms <= last_change:
+                continue
+            applied = backend.applied_event(eid)
+            if applied is None or applied.status.value != "applied":
+                continue
+            label_facts.append(f)
+        audit = _audit_pass_count(row, kind, label_facts)
         if audit != row.pass_count:
             out.append(
                 Violation(

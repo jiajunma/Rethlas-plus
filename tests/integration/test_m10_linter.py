@@ -190,6 +190,191 @@ def test_category_c_pass_count_drift(tmp_path: Path) -> None:
     assert rc == 5
 
 
+def test_category_c_ignores_apply_failed_verdict(tmp_path: Path) -> None:
+    """An ``apply_failed`` verdict whose payload.vh matches the current
+    node must NOT be counted by the pass_count audit.
+
+    Mirrors category D's behaviour. Without this, a hash-mismatch'd
+    verifier verdict whose vh happens to match the node's current vh
+    (e.g. after a revise-and-revert sequence) would phantom-bump the
+    audit and surface a false-positive ``C_pass_count_drift``.
+    """
+    from common.events.filenames import format_filename
+    from common.events.io import atomic_write_event
+    from common.events.ids import allocate_event_id
+
+    _init(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "lem:x", "--kind", "lemma",
+        "--statement", "S.", "--proof", "p.", "--actor", "user:alice",
+    )
+    _drive_to_ready(tmp_path)
+
+    backend = KuzuBackend(str(tmp_path / "knowledge_base" / "dag.kz"))
+    try:
+        # Fresh lemma starts at pass_count=0. We plant ONE apply_failed
+        # verdict at the current vh and assert the audit still returns
+        # 0 (the buggy code path returned 1 because it filtered only by
+        # vh-match without consulting AppliedEvent.status).
+        res = backend._conn.execute(
+            "MATCH (n:Node {label: 'lem:x'}) RETURN n.verification_hash, n.pass_count"
+        )
+        row = res.get_next()
+        vh = row[0]
+        stored = int(row[1])
+    finally:
+        backend.close()
+    assert stored == 0, f"fresh lemma should start at pass_count=0, got {stored}"
+
+    # Plant a verifier event in events/ whose payload.vh matches the
+    # current node, and an AppliedEvent row marking it apply_failed.
+    eid = allocate_event_id()
+    body = {
+        "event_id": eid.event_id,
+        "type": "verifier.run_completed",
+        "actor": "verifier:codex-test",
+        "ts": "2026-04-26T00:00:00.000+00:00",
+        "target": "lem:x",
+        "payload": {
+            "verdict": "accepted",
+            "verification_hash": vh,
+            "verification_report": {
+                "summary": "ok", "checked_items": [], "gaps": [],
+                "critical_errors": [], "external_reference_checks": [],
+            },
+            "repair_hint": "",
+        },
+    }
+    shard = tmp_path / "events" / "2026-04-26"
+    shard.mkdir(parents=True, exist_ok=True)
+    fname = format_filename(
+        iso_ms=eid.iso_ms,
+        event_type="verifier.run_completed",
+        target="lem:x",
+        actor="verifier:codex-test",
+        seq=eid.seq,
+        uid=eid.uid,
+    )
+    atomic_write_event(shard / fname, json.dumps(body).encode("utf-8"))
+
+    backend = KuzuBackend(str(tmp_path / "knowledge_base" / "dag.kz"))
+    try:
+        backend._conn.execute(
+            "CREATE (a:AppliedEvent {event_id: $eid, status: 'apply_failed', "
+            "reason: 'hash_mismatch', detail: 'simulated', "
+            "event_sha256: 'deadbeef', applied_at: '2026-04-26T00:00:00.000Z', "
+            "target_label: 'lem:x'})",
+            {"eid": eid.event_id},
+        )
+    finally:
+        backend.close()
+
+    run_linter_on_workspace(workspace_paths(str(tmp_path)))
+    report = _read_report(tmp_path)
+    c_codes = [v["code"] for v in report["c"]["violations"]]
+    assert "C_pass_count_drift" not in c_codes, (
+        f"audit incorrectly counted the apply_failed verdict; "
+        f"violations={report['c']['violations']}"
+    )
+
+
+def test_category_c_ignores_pre_revision_verdicts(tmp_path: Path) -> None:
+    """A user revision resets pass_count to ``initial_count``. A verdict
+    that landed *before* the revision must not contribute to the audit
+    even if its payload.vh happens to match the current vh (revise-and-
+    revert pattern).
+    """
+    from common.events.filenames import format_filename
+    from common.events.io import atomic_write_event
+    from common.events.ids import allocate_event_id
+
+    _init(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "lem:x", "--kind", "lemma",
+        "--statement", "S.", "--proof", "p.", "--actor", "user:alice",
+    )
+    _drive_to_ready(tmp_path)
+
+    backend = KuzuBackend(str(tmp_path / "knowledge_base" / "dag.kz"))
+    try:
+        res = backend._conn.execute(
+            "MATCH (n:Node {label: 'lem:x'}) RETURN n.verification_hash"
+        )
+        vh = res.get_next()[0]
+    finally:
+        backend.close()
+
+    # Plant a hand-rolled "applied" verdict at vh=current with
+    # iso_ms < the upcoming revision's iso_ms.
+    early_eid = allocate_event_id()
+    early_body = {
+        "event_id": early_eid.event_id,
+        "type": "verifier.run_completed",
+        "actor": "verifier:codex-test",
+        "ts": "2026-04-26T00:00:00.000+00:00",
+        "target": "lem:x",
+        "payload": {
+            "verdict": "accepted",
+            "verification_hash": vh,
+            "verification_report": {
+                "summary": "ok", "checked_items": [], "gaps": [],
+                "critical_errors": [], "external_reference_checks": [],
+            },
+            "repair_hint": "",
+        },
+    }
+    shard = tmp_path / "events" / "2026-04-26"
+    shard.mkdir(parents=True, exist_ok=True)
+    early_fname = format_filename(
+        iso_ms=early_eid.iso_ms,
+        event_type="verifier.run_completed",
+        target="lem:x",
+        actor="verifier:codex-test",
+        seq=early_eid.seq,
+        uid=early_eid.uid,
+    )
+    atomic_write_event(shard / early_fname, json.dumps(early_body).encode("utf-8"))
+
+    # Mark it applied in Kuzu so it would otherwise count toward the audit.
+    backend = KuzuBackend(str(tmp_path / "knowledge_base" / "dag.kz"))
+    try:
+        backend._conn.execute(
+            "CREATE (a:AppliedEvent {event_id: $eid, status: 'applied', "
+            "reason: '', detail: '', event_sha256: 'deadbeef', "
+            "applied_at: '2026-04-26T00:00:00.000Z', target_label: 'lem:x'})",
+            {"eid": early_eid.event_id},
+        )
+    finally:
+        backend.close()
+
+    # Now publish a node_revised with a *later* iso_ms — this is the
+    # boundary. After replay, pass_count is reset to initial_count = 0.
+    _publish(
+        tmp_path, "revise-node", "--label", "lem:x", "--kind", "lemma",
+        "--statement", "S.", "--proof", "p.", "--actor", "user:alice",
+    )
+    _drive_to_ready(tmp_path)
+
+    # Stored pass_count should be 0 (revision reset).
+    backend = KuzuBackend(str(tmp_path / "knowledge_base" / "dag.kz"))
+    try:
+        res = backend._conn.execute(
+            "MATCH (n:Node {label: 'lem:x'}) RETURN n.pass_count"
+        )
+        stored = int(res.get_next()[0])
+    finally:
+        backend.close()
+    assert stored == 0, f"expected stored pass_count=0 after revision, got {stored}"
+
+    run_linter_on_workspace(workspace_paths(str(tmp_path)))
+    report = _read_report(tmp_path)
+    c_codes = [v["code"] for v in report["c"]["violations"]]
+    assert "C_pass_count_drift" not in c_codes, (
+        f"audit incorrectly counted a pre-revision verdict; "
+        f"violations={report['c']['violations']}"
+    )
+
+
 def test_category_d_repair_count_drift(tmp_path: Path) -> None:
     _init(tmp_path)
     _seed_def_and_theorem(tmp_path)
