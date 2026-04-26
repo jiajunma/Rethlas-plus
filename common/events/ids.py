@@ -27,7 +27,7 @@ import os
 import secrets
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 _UID_BYTES = 8  # 8 bytes → 16 hex chars per §3.2.
@@ -45,6 +45,11 @@ def _iso_ms_of(dt: datetime) -> str:
     # ``%f`` is microseconds; truncate to milliseconds.
     micro = dt_utc.strftime("%Y%m%dT%H%M%S.%f")
     return micro[:-3]
+
+
+def _next_iso_ms(iso_ms: str) -> str:
+    dt = datetime.strptime(iso_ms, "%Y%m%dT%H%M%S.%f").replace(tzinfo=timezone.utc)
+    return _iso_ms_of(dt + timedelta(milliseconds=1))
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,14 +101,23 @@ class EventIdAllocator:
                 self._last_seq = 1
             elif iso_ms == self._last_iso_ms:
                 # Same millisecond — advance seq.
-                self._last_seq += 1
+                if self._last_seq >= 9999:
+                    self._last_iso_ms = _next_iso_ms(self._last_iso_ms)
+                    self._last_seq = 1
+                else:
+                    self._last_seq += 1
             else:
                 # Clock regressed — clamp to the latest iso_ms we have
                 # already committed to. Without this, a step-back would
                 # let the allocator emit events whose lexicographic order
                 # contradicts emission order.
-                iso_ms = self._last_iso_ms
-                self._last_seq += 1
+                if self._last_seq >= 9999:
+                    self._last_iso_ms = _next_iso_ms(self._last_iso_ms)
+                    self._last_seq = 1
+                else:
+                    self._last_seq += 1
+
+            iso_ms = self._last_iso_ms
 
             seq = self._last_seq
 

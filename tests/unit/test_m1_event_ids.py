@@ -58,3 +58,18 @@ def test_full_event_id_string_format() -> None:
     # uid is 16 lowercase hex chars
     assert len(e.uid) == 16
     assert all(c in "0123456789abcdef" for c in e.uid)
+
+
+def test_seq_rolls_over_to_next_millisecond_after_9999() -> None:
+    clock = FakeClock()
+    alloc = EventIdAllocator(clock=clock, rng=counter_rng())
+    last = None
+    for _ in range(9_999):
+        last = alloc.allocate()
+    assert last is not None
+    assert last.iso_ms == "20260425T120000.000"
+    assert last.seq == 9_999
+
+    rolled = alloc.allocate()
+    assert rolled.iso_ms == "20260425T120000.001"
+    assert rolled.seq == 1
