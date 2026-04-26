@@ -1,11 +1,13 @@
-"""M6 — prompt composer tests, especially the §6.2 step 2 user-hint
-on-fresh-dispatch regression guard.
+"""M6 — prompt composer tests, especially the §6.2 step 3 user-hint
+on-fresh-dispatch regression guard and the §6.2 step 2 Memory scope
+problem_id assertion.
 """
 
 from __future__ import annotations
 
+from agents.generation.mcp.server import sanitize_problem_id
 from common.runtime.jobs import JobRecord, utc_now_iso
-from generator.prompt import compose_prompt
+from generator.prompt import _problem_id_for, compose_prompt
 
 
 def _job(**overrides) -> JobRecord:
@@ -100,3 +102,31 @@ def test_memory_scope_section_surfaces_problem_id() -> None:
     prompt = compose_prompt(rec)
     assert "## Memory scope" in prompt
     assert 'problem_id="thm_foo"' in prompt
+
+
+def test_problem_id_for_matches_mcp_sanitize_problem_id() -> None:
+    """``generator/prompt.py:_problem_id_for`` is a hand-mirrored copy of
+    ``agents/generation/mcp/server.py:sanitize_problem_id`` (the worker
+    layer keeps the MCP server import optional, see ARCH §6.2). Drift
+    between the two would silently shard parent and sub-agent scratch
+    memory under the same target. Pin them against the same fixture so
+    any divergence fails this test."""
+    cases = [
+        "thm:foo",
+        "lem:block_form_for_x0_plus_u",
+        "def:primary_object",
+        "ext:vogan_green_2025",
+        "  whitespace  in  middle  ",
+        "label/with/slashes",
+        "label.with.dots",
+        "label-with-dashes",
+        "Mixed:Case_Label",
+        "",
+        "___",
+        "...",
+        "label:with::doubles",
+    ]
+    for case in cases:
+        assert _problem_id_for(case) == sanitize_problem_id(case), (
+            f"drift detected for input {case!r}"
+        )
