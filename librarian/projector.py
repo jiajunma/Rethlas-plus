@@ -32,7 +32,7 @@ from typing import Any
 from common.events.io import event_sha256
 from common.events.schema import SchemaError, validate_event_schema
 from common.kb.hashing import DepRef, statement_hash, verification_hash
-from common.kb.kuzu_backend import KuzuBackend, RawNodeRow
+from common.kb.kuzu_backend import KuzuBackend, RawNodeRow, _bfs_path
 from common.kb.types import (
     AppliedEvent,
     ApplyOutcome,
@@ -222,7 +222,7 @@ class Projector:
         statement = payload["statement"]
         if not statement:
             raise ProjectionRejection("schema", "statement must be non-empty")
-        if kind is NodeKind.EXTERNAL_THEOREM and not payload.get("source_note"):
+        if kind is NodeKind.EXTERNAL_THEOREM and not (payload.get("source_note") or "").strip():
             raise ProjectionRejection(
                 "schema", "external_theorem requires non-empty source_note"
             )
@@ -486,15 +486,39 @@ class Projector:
                 )
 
         # Cross-batch cycle check. After the staged batch lands, does any
-        # dep edge close a cycle through existing edges?
+        # dep edge close a cycle? We build a working adjacency map of the
+        # current KB edges, then walk the batch in topological order
+        # adding each label's NEW outgoing edges (full deps, including
+        # batch-internal references). For the target — which already
+        # exists and is being revised — we drop its old edges first
+        # since update_node will replace them. Per-label deps are checked
+        # against the running map, so an intra-batch edge that, combined
+        # with another already-staged batch edge, closes a cycle through
+        # existing KB nodes is caught here. Without this, a multi-node
+        # batch could land a real cycle (e.g. KB has b->c; batch revises
+        # c to ref new a, and a refs existing b — closing c->a->b->c).
+        adjacency: dict[str, list[str]] = {}
+        res = self._kb._conn.execute(
+            "MATCH (u:Node)-[:DependsOn]->(v:Node) RETURN u.label, v.label"
+        )
+        while res.has_next():
+            src, dst = res.get_next()
+            adjacency.setdefault(src, []).append(dst)
+        if existing_target is not None:
+            adjacency.pop(target, None)
+
         for lbl in order:
             node = staged[lbl]
-            # For each dep that already exists (not a batch label), test
-            # would_introduce_cycle against the current KB.
-            existing_deps = [d for d in node.depends_on if d not in batch_label_set]
-            cycle = self._kb.would_introduce_cycle(lbl, existing_deps)
-            if cycle is not None:
-                raise ProjectionRejection(REASON_CYCLE, _cycle_detail(cycle))
+            for dep in node.depends_on:
+                if dep == lbl:
+                    raise ProjectionRejection(REASON_SELF_REFERENCE, lbl)
+                path = _bfs_path(adjacency, dep, lbl)
+                if path is not None:
+                    raise ProjectionRejection(
+                        REASON_CYCLE, _cycle_detail([lbl, *path])
+                    )
+            if node.depends_on:
+                adjacency.setdefault(lbl, []).extend(node.depends_on)
 
         # Apply in order: brand-new nodes with CREATE, target node with
         # UPDATE if it already exists else CREATE.

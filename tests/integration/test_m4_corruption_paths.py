@@ -203,3 +203,71 @@ def test_cross_batch_cycle_marks_apply_failed(tmp_path: Path) -> None:
         assert reply["reply"] == "APPLY_FAILED", reply
         assert reply["reason"] == "cycle", reply
         assert "lem:" in reply["detail"], reply
+
+
+def test_multi_node_cross_batch_cycle_marks_apply_failed(tmp_path: Path) -> None:
+    """A batch with TWO new edges that close a cycle through existing KB
+    must be apply_failed with reason=cycle.
+
+    Setup: KB has lem:b -> lem:c (b depends on c, c is a leaf).
+    Batch (target=lem:c) revises lem:c to depend on a NEW lem:a, AND
+    introduces lem:a depending on the EXISTING lem:b.
+    Result after apply (if not caught): lem:c -> lem:a -> lem:b -> lem:c.
+
+    Decoder cannot detect this — the batch-internal subgraph (lem:c ->
+    lem:a) is acyclic. Only the projector, which sees the staged edges
+    plus the existing KB edges together, can catch it.
+    """
+    _init_workspace(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "lem:c", "--kind", "lemma",
+        "--statement", "leaf c", "--proof", "p",
+        "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "lem:b", "--kind", "lemma",
+        "--statement", r"b uses \ref{lem:c}", "--proof", "p",
+        "--actor", "user:alice",
+    )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+
+        body = {
+            "event_id": "20260424T030000.000-0001-bbbbbbbbbbbbbbbb",
+            "type": "generator.batch_committed",
+            "actor": "generator:test",
+            "ts": "2026-04-24T03:00:00.000+00:00",
+            "target": "lem:c",
+            "payload": {
+                "target": "lem:c",
+                "mode": "fresh",
+                "nodes": [
+                    {
+                        "label": "lem:a",
+                        "kind": "lemma",
+                        "statement": r"a uses \ref{lem:b}",
+                        "proof": "p",
+                        "remark": "",
+                        "source_note": "",
+                    },
+                    {
+                        "label": "lem:c",
+                        "kind": "lemma",
+                        "statement": r"c now uses \ref{lem:a}",
+                        "proof": "p",
+                        "remark": "",
+                        "source_note": "",
+                    },
+                ],
+            },
+        }
+        path = _drop_canonical_event(
+            tmp_path, body,
+            iso_ms="20260424T030000.000",
+            seq=1, uid="b" * 16,
+        )
+        lp.send({"cmd": "APPLY", "event_id": body["event_id"], "path": str(path)})
+        reply = lp.recv(timeout=15.0)
+        assert reply["reply"] == "APPLY_FAILED", reply
+        assert reply["reason"] == "cycle", reply
