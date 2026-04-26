@@ -234,6 +234,51 @@ def test_active_lists_runtime_jobs(tmp_path: Path) -> None:
     assert active["jobs"][0]["target"] == "thm:t"
 
 
+def test_active_ignores_terminal_job_files(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    rec = JobRecord(
+        job_id="ver-20260424T100420.111-deadbeefdeadbeef",
+        kind="verifier", target="thm:t", mode="single",
+        dispatch_hash="ab" * 32,
+        pid=12345, pgid=12345,
+        started_at="2026-04-24T10:04:20.111Z",
+        updated_at="2026-04-24T10:04:25.300Z",
+        status="applied",
+        log_path=str(tmp_path / "runtime" / "logs" / "x.codex.log"),
+    )
+    write_job_file(
+        tmp_path / "runtime" / "jobs" / f"{rec.job_id}.json", rec
+    )
+    core = DashboardCore(tmp_path)
+    active = core.active()
+    assert active["count"] == 0
+    assert active["jobs"] == []
+
+
+def test_node_detail_ignores_terminal_job_files(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _seed_kb(tmp_path)
+    rec = JobRecord(
+        job_id="ver-20260424T100420.111-deadbeefdeadbeef",
+        kind="verifier", target="thm:t", mode="single",
+        dispatch_hash="ab" * 32,
+        pid=12345, pgid=12345,
+        started_at="2026-04-24T10:04:20.111Z",
+        updated_at="2026-04-24T10:04:25.300Z",
+        status="apply_failed",
+        log_path="runtime/logs/ver-test.codex.log",
+    )
+    write_job_file(
+        tmp_path / "runtime" / "jobs" / f"{rec.job_id}.json", rec
+    )
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+    core = DashboardCore(tmp_path)
+    detail = core.node_detail("thm:t")
+    assert detail is not None
+    assert detail["active_job"] is None
+
+
 def test_rejected_merges_three_sources(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     state_dir = tmp_path / "runtime" / "state"

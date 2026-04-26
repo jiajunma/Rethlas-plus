@@ -133,6 +133,27 @@ def test_active_endpoint_lists_jobs(tmp_path: Path) -> None:
         assert parsed["jobs"][0]["target"] == "lem:foo"
 
 
+def test_active_endpoint_ignores_terminal_jobs(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    rec = JobRecord(
+        job_id="gen-20260424T120000.000-deadbeefdeadbeef",
+        kind="generator", target="lem:foo", mode="fresh",
+        dispatch_hash="cd" * 32,
+        pid=99, pgid=99,
+        started_at="2026-04-24T12:00:00.000Z",
+        updated_at="2026-04-24T12:00:01.000Z",
+        status="crashed",
+        log_path=str(tmp_path / "runtime" / "logs" / "x.codex.log"),
+    )
+    write_job_file(tmp_path / "runtime" / "jobs" / f"{rec.job_id}.json", rec)
+    with _ServerCtx(tmp_path) as ctx:
+        code, _hdrs, body = ctx.get("/api/active")
+        assert code == 200
+        parsed = json.loads(body)
+        assert parsed["count"] == 0
+        assert parsed["jobs"] == []
+
+
 def test_rebuild_in_progress_returns_503(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     hb = LibrarianHeartbeat(

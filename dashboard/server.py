@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from common.events.filenames import FilenameError, parse_filename
-from common.runtime.jobs import list_jobs
+from common.runtime.jobs import TERMINAL_STATUSES, list_jobs
 from coordinator.heartbeat import read_heartbeat as read_coordinator_hb
 from dashboard.kuzu_reader import (
     NodeRow,
@@ -160,6 +160,8 @@ class DashboardCore:
         now = datetime.now(tz=timezone.utc)
         jobs: list[dict[str, Any]] = []
         for j in list_jobs(self.jobs_dir):
+            if j.status in TERMINAL_STATUSES:
+                continue
             d = j.to_dict()
             log_age = _log_age_seconds(j.log_path, ws_root=self.ws_root)
             d["codex_log_age_seconds"] = log_age
@@ -178,6 +180,7 @@ class DashboardCore:
         nodes = list_nodes(self.ws_root)
         in_flight_targets = {
             j.target for j in list_jobs(self.jobs_dir)
+            if j.status not in TERMINAL_STATUSES
         }
         passes_by_label = {n.label: n.pass_count for n in nodes}
 
@@ -216,7 +219,10 @@ class DashboardCore:
 
     def theorems(self) -> dict[str, Any]:
         nodes = list_nodes(self.ws_root)
-        in_flight_targets = {j.target for j in list_jobs(self.jobs_dir)}
+        in_flight_targets = {
+            j.target for j in list_jobs(self.jobs_dir)
+            if j.status not in TERMINAL_STATUSES
+        }
         passes_by_label = {n.label: n.pass_count for n in nodes}
 
         out: list[dict[str, Any]] = []
@@ -252,7 +258,10 @@ class DashboardCore:
         now = datetime.now(tz=timezone.utc)
         nodes = list_nodes(self.ws_root)
         passes_by_label = {n.label: n.pass_count for n in nodes}
-        all_jobs = list(list_jobs(self.jobs_dir))
+        all_jobs = [
+            j for j in list_jobs(self.jobs_dir)
+            if j.status not in TERMINAL_STATUSES
+        ]
         in_flight_targets = {j.target for j in all_jobs}
         for n in nodes:
             if n.label != label:
