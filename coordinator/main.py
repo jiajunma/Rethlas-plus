@@ -385,6 +385,14 @@ def _forward_new_events(state: CoordinatorState) -> None:
             )
         except RuntimeError:
             return
+        # Drain stale replies whose event_id does not match this APPLY.
+        # When a prior APPLY's recv timed out at 30 s, the late reply
+        # arrives in the pipe afterwards. The coordinator's re-send on
+        # the next tick yields an *additional* idempotent reply
+        # (§5.5.0 #3); without this drain, the next event in ``pending``
+        # would otherwise be acked against the wrong reply.
+        while reply is not None and reply.get("event_id") != ev.event_id:
+            reply = state.librarian.recv(timeout=30.0)
         if reply is None:
             return
         state.watcher.ack(ev.path)
