@@ -108,6 +108,49 @@ def test_verifier_agent_contract_forbids_mcp_and_external_search() -> None:
     assert "external_reference_checks" in text
 
 
+def test_generator_agents_md_documents_memory_scope_section() -> None:
+    """H20/F9: AGENTS.md must teach Codex to use the prompt's Memory scope
+    section verbatim, otherwise sub-agents shard scratch memory."""
+    text = (ROOT / "agents" / "generation" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert "### Memory scope (`problem_id`)" in text
+    assert "## Memory scope" in text
+
+
+def test_generator_agents_md_documents_identifier_conventions() -> None:
+    """H17: AGENTS.md must hold the canonical derivation rules for
+    plan_id / subgoal_id / branch_id / decision_id; skill files defer
+    to this table to avoid drift."""
+    text = (ROOT / "agents" / "generation" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    assert "### Identifier conventions" in text
+    for token in ("plan_id", "subgoal_id", "branch_id", "decision_id"):
+        assert token in text
+
+
+def test_decoder_reason_constants_match_documented_count() -> None:
+    """H21: ARCH §6.2 promises "twelve `reason` values" as the complete
+    decoder rejection surface, and PHASE1 M6 promises 12 failure modes.
+    This test pins the count so any new constant must update both
+    documents and add a dedicated unit test."""
+    decoder_text = (ROOT / "generator" / "decoder.py").read_text(
+        encoding="utf-8"
+    )
+    constants = re.findall(r"^REASON_[A-Z_]+ = \"[^\"]+\"", decoder_text, re.M)
+    assert len(constants) == 12, (
+        f"expected 12 REASON_* constants, found {len(constants)}; "
+        "update ARCH §6.2 + PHASE1 M6 if this changes"
+    )
+
+    arch_text = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    assert "twelve `reason` values" in arch_text
+
+    phase1_text = (ROOT / "docs" / "PHASE1.md").read_text(encoding="utf-8")
+    assert "12 failure modes" in phase1_text
+
+
 def test_verifier_skills_keep_phase1_status_vocabulary() -> None:
     text = (
         ROOT
