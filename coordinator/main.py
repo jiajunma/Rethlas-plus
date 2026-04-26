@@ -458,11 +458,14 @@ def _dispatch_job(
     )
     state.in_flight_workers[job_id] = proc
 
-    # Patch pid/pgid into job file now that we know them.
-    rec.pid = proc.pid
-    rec.pgid = proc.pid
-    rec.updated_at = utc_now_iso()
-    write_job_file(job_file_path(state.ws.runtime_jobs, job_id), rec)
+    # Patch pid/pgid via read-modify-write so a wrapper that already
+    # raced ahead and wrote ``STATUS_RUNNING`` between the initial
+    # create and this patch is not clobbered. Spec §6.7.1 pins status
+    # transitions to the wrapper; coordinator only owns pid/pgid.
+    update_job_file(
+        job_file_path(state.ws.runtime_jobs, job_id),
+        extra={"pid": proc.pid, "pgid": proc.pid},
+    )
 
 
 # ---------------------------------------------------------------------------
