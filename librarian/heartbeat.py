@@ -78,10 +78,16 @@ def write_heartbeat(path: Path, hb: LibrarianHeartbeat) -> None:
 
 
 def read_heartbeat(path: Path) -> dict | None:
-    """Return the parsed JSON or ``None`` if the file is missing / unreadable."""
+    """Return the parsed JSON or ``None`` if the file is missing / unreadable.
+
+    Tolerant of any filesystem error (permission, broken symlink, EIO) so
+    callers — coordinator dispatch loop, dashboard supervisor, dashboard
+    HTTP layer — don't crash on transient read failures of this
+    observability artefact.
+    """
     try:
         raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except OSError:
         return None
     try:
         return json.loads(raw)

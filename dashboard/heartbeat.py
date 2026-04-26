@@ -55,9 +55,15 @@ def write_heartbeat(path: Path, hb: DashboardHeartbeat) -> None:
 
 
 def read_heartbeat(path: Path) -> dict | None:
+    """Return the parsed heartbeat or ``None`` on any filesystem / parse error.
+
+    Tolerant of permission errors, EIO, and broken symlinks: heartbeats
+    are observability state, so transient read failures should not crash
+    the dashboard supervisor or HTTP layer.
+    """
     try:
         raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except OSError:
         return None
     try:
         return json.loads(raw)

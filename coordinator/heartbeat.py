@@ -95,9 +95,15 @@ def write_heartbeat(path: Path, hb: CoordinatorHeartbeat) -> None:
 
 
 def read_heartbeat(path: Path) -> dict[str, Any] | None:
+    """Return the parsed heartbeat or ``None`` on any filesystem / parse error.
+
+    Heartbeats are observability state; transient read failures should
+    not crash the dashboard or other consumers. Catching the broader
+    ``OSError`` covers permission errors, EIO, and broken symlinks too.
+    """
     try:
         raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+    except OSError:
         return None
     try:
         return json.loads(raw)
