@@ -40,6 +40,18 @@ def test_placeholder_label_rejected() -> None:
         )
 
 
+def test_additional_placeholder_examples_rejected() -> None:
+    for label, kind in (
+        ("def:object", "definition"),
+        ("prop:claim1", "proposition"),
+        ("lem:key_step", "lemma"),
+    ):
+        with pytest.raises(AdmissionError, match="placeholder"):
+            validate_admission(
+                _body(label=label, kind=kind, proof="" if kind == "definition" else "p")
+            )
+
+
 def test_uppercase_slug_rejected() -> None:
     with pytest.raises(AdmissionError, match="invalid slug"):
         validate_admission(

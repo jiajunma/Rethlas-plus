@@ -185,6 +185,11 @@ def test_failure_placeholder_label() -> None:
     _expect(REASON_PLACEHOLDER_LABEL, raw, target="thm:main")
 
 
+def test_failure_additional_placeholder_label() -> None:
+    raw = block("prop:claim1", "proposition", "S", "P")
+    _expect(REASON_PLACEHOLDER_LABEL, raw, target="prop:claim1")
+
+
 def test_failure_duplicate_label() -> None:
     raw = block("thm:goal", "theorem", "S1", "P1") + "\n" + block(
         "thm:goal", "theorem", "S2", "P2"
