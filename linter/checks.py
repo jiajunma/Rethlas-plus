@@ -405,13 +405,22 @@ def _audit_pass_count(
     ]
     if not matching:
         return 0
-    last = matching[-1]
-    last_verdict = last.get("payload", {}).get("verdict")
+    # Mirror projector semantics (§5.5.1): a gap/critical verdict resets
+    # pass_count to -1, and the next accepted verdict sets it to 1 (not
+    # prior+1). So the audit value is the count of consecutive accepted
+    # verdicts at the tail of the list — anything before the most recent
+    # gap/critical was wiped out by that reset.
+    tail_accepted = 0
+    for f in reversed(matching):
+        verdict = f.get("payload", {}).get("verdict")
+        if verdict == "accepted":
+            tail_accepted += 1
+        elif verdict in ("gap", "critical"):
+            break
+    last_verdict = matching[-1].get("payload", {}).get("verdict")
     if last_verdict in ("gap", "critical"):
         return -1
-    return sum(
-        1 for f in matching if f.get("payload", {}).get("verdict") == "accepted"
-    )
+    return tail_accepted
 
 
 def check_d_repair_count(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
