@@ -1699,21 +1699,37 @@ librarian watches, applies → dag.kz + nodes/*.md
 After one attempt completes, the KB may have several new / revised
 nodes, each entering its own verify-or-regenerate cycle.
 
-**Decoder failure modes:**
-- `<node>` block malformed → reject attempt (runtime failure; no truth event emitted)
-- `kind: external_theorem` appears → reject (user-only)
-- label prefix does not match `kind` (§3.5.2 mapping, e.g. `thm:foo` with `kind: lemma`) → reject
-- non-target existing label in `nodes[]` → reject (violates the
-  write-scope invariant — generator can touch only the batch's target
-  or brand-new labels). **Best-effort only**: decoder sees existing
-  labels via `nodes/*.md` (count ≥ 1), so this check misses any KB
-  label currently at `pass_count < 1` (e.g. a `user.node_added` def
-  still awaiting verifier). Those are caught at apply time by
-  librarian's Kuzu-authoritative label-uniqueness check
+**Decoder failure modes:** (canonical reason strings written to
+`runtime/state/rejected_writes.jsonl`; the `reason` column matches
+the `REASON_*` constants exported by `generator/decoder.py`)
+- `no_nodes_in_batch` → stdout parses with zero `<node>` blocks
+  (e.g. Codex emitted only prose / a verdict with no batch). Reject
+  attempt; no truth event emitted.
+- `malformed_node` — `<node>` block parses but is missing required
+  frontmatter, has invalid YAML, lacks a `Statement` body, etc.
+- `forbidden_kind` — `kind: external_theorem` appears (user-only kind)
+- `prefix_kind_mismatch` — label prefix does not match `kind`
+  (§3.5.2 mapping, e.g. `thm:foo` with `kind: lemma`)
+- `placeholder_label` — placeholder / local label name
+  (`thm:main`, `lem:helper`, etc.)
+- `duplicate_label_in_batch` — same label appears twice within one
+  batch's `nodes[]`
+- `target_mismatch` — batch `target` field is absent from `nodes[]`,
+  or differs from the dispatch parameter the wrapper read from the
+  job file
+- `existing_non_target_label` — non-target existing label in `nodes[]`
+  → reject (violates the write-scope invariant — generator can touch
+  only the batch's target or brand-new labels). **Best-effort only**:
+  decoder sees existing labels via `nodes/*.md` (count ≥ 1), so this
+  check misses any KB label currently at `pass_count < 1` (e.g. a
+  `user.node_added` def still awaiting verifier). Those are caught at
+  apply time by librarian's Kuzu-authoritative label-uniqueness check
   (`apply_failed(reason=label_conflict)`, §6.5). One wasted batch
   per missed collision; no truth corruption.
-- placeholder / local label name (`thm:main`, `lem:helper`, etc.) → reject
-- unresolved `\ref{}` — every `\ref{label}` must resolve in
+- `self_reference` — a batch node's own `statement` or `proof`
+  `\ref{}`s the node itself (also enforced as an `apply_failed`
+  reason at librarian apply time for defense-in-depth, §3.1.6)
+- `ref_unresolved` — unresolved `\ref{}` — every `\ref{label}` must resolve in
   **(batch labels ∪ labels present in `nodes/*.md`)**. This is
   Kuzu-free by construction: generator's dep-readiness filter
   (§10.2.2) requires existing deps to be at `pass_count ≥ 1`, so
@@ -1722,11 +1738,11 @@ nodes, each entering its own verify-or-regenerate cycle.
   (generator must not reference unverified nodes). Failure →
   reject the batch with `reason=ref_unresolved` and detail naming
   the unresolved label.
-- **Repair-must-change-hash** (mode=repair only): decoder must verify
-  that the repair target's **post-batch** `verification_hash` differs
-  from the `verification_hash` carried by the most recent
-  gap/critical `verifier.run_completed` for that target (call it
-  `H_rejected`). Procedure:
+- `repair_no_change` (**Repair-must-change-hash**, mode=repair only):
+  decoder must verify that the repair target's **post-batch**
+  `verification_hash` differs from the `verification_hash` carried
+  by the most recent gap/critical `verifier.run_completed` for that
+  target (call it `H_rejected`). Procedure:
 
   1. Compute each batch node's `statement_hash` using strict
      batch-internal topological order of `\ref{}` edges. Values
@@ -1751,6 +1767,17 @@ nodes, each entering its own verify-or-regenerate cycle.
   batch's post-application view captures this correctly; it also
   still blocks genuine no-ops (generator re-emits identical content
   with no new helpers).
+- `cycle` — batch's own labels form a directed cycle among
+  themselves. Algorithm and `detail` format documented under
+  "Batch-internal cycle detection (decoder)" below; cross-batch
+  cycles are not decoder's responsibility (caught at apply time as
+  `apply_failed(reason=cycle)`, see "Cross-batch cycle detection
+  (librarian)" below and §6.5).
+
+The above twelve `reason` values are the complete decoder rejection
+surface; any new rejection mode must add a `REASON_*` constant to
+`generator/decoder.py`, an entry to this list, and a dedicated test
+in `tests/unit/test_m6_decoder.py` (PHASE1 M6 acceptance criteria).
 
 **Intra-batch ordering.** Within one generator batch, the wrapper
 topologically orders the included node states by their explicit `\ref{}`

@@ -385,6 +385,25 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H21 — Decoder rejection surface undercounted in docs
+- `generator/decoder.py` exports 12 `REASON_*` constants and ships
+  a dedicated unit test for each (`tests/unit/test_m6_decoder.py`),
+  but PHASE1 M6 listed only "11 failure modes" and ARCH §6.2's
+  "Decoder failure modes" bullet list named just 7 of them
+  (`malformed_node`, `forbidden_kind`, `prefix_kind_mismatch`,
+  `existing_non_target_label`, `placeholder_label`, `ref_unresolved`,
+  the unnamed repair-no-change). The missing five
+  (`no_nodes_in_batch`, `duplicate_label_in_batch`, `target_mismatch`,
+  `self_reference`, `cycle`) lived in adjacent paragraphs or only
+  in code, so a reader could not reconcile the documented surface
+  with the test matrix.
+- **Status**: resolved. ARCH §6.2 now enumerates all 12 reasons by
+  their canonical `REASON_*` string, links the bullet list to the
+  separate cycle / repair-no-change paragraphs, and adds the
+  invariant that any new rejection mode must add a constant + bullet
+  + dedicated unit test. PHASE1 M6 updated to "12 failure modes" and
+  the empty-batch case now appears in the test list.
+
 ## Already-aligned design (sanity-check pass)
 
 These were verified against ARCH and pass — no action needed:

@@ -728,11 +728,14 @@ lock behavior and with ARCHITECTURE §4.1's single-process model.
   - optional `cost` field: either absent, or has all four
     subfields (`input_tokens`, `output_tokens`, `reasoning_tokens`,
     `cost_usd`) plus `duration_seconds`
-- `integration`: decoder rejects each of the 11 failure modes per
+- `integration`: decoder rejects each of the 12 failure modes per
   ARCHITECTURE §3.5.1 + §6.2. Each has a dedicated bad-fixture
   test and produces exactly one line in
   `runtime/state/rejected_writes.jsonl` with the right `reason`
   + `detail`; no truth event is published:
+  - empty batch — stdout parses with zero `<node>` blocks
+    (`reason=no_nodes_in_batch`); see
+    `generator/decoder.py:REASON_NO_NODES`
   - malformed `<node>` block
   - `kind: external_theorem` in batch (user-only kind)
   - wrong label prefix / kind pairing (e.g. `thm:foo, kind=lemma`)
