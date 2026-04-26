@@ -489,6 +489,8 @@ class DashboardCore:
                     parsed = parse_filename(f.name)
                 except FilenameError:
                     # Malformed filename — surface it but don't crash.
+                    if actor or event_type:
+                        continue
                     out.append(
                         {
                             "event_id": f.stem,

@@ -316,6 +316,25 @@ def test_events_filter_by_actor_and_type(tmp_path: Path) -> None:
     assert all(e["type"] == "user.node_added" for e in only_added["events"])
 
 
+def test_events_filter_excludes_malformed_filename_rows(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
+        "--statement", "Define X.", "--actor", "user:alice",
+    )
+    shard = next((tmp_path / "events").iterdir())
+    bad = shard / "malformed-event.json"
+    bad.write_text("{}", encoding="utf-8")
+
+    core = DashboardCore(tmp_path)
+    filtered = core.events(limit=10, actor="user:alice")
+    assert all(e["actor"] == "user:alice" for e in filtered["events"])
+    assert all(e["filename"] != "malformed-event.json" for e in filtered["events"])
+
+    unfiltered = core.events(limit=10)
+    assert any(e["filename"] == "malformed-event.json" for e in unfiltered["events"])
+
+
 def test_events_limit_clamps_to_500(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     # No need to seed — empty events/ still tests the clamp on the limit
