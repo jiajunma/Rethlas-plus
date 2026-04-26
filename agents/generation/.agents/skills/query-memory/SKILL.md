@@ -1,12 +1,12 @@
 ---
 name: query-memory
-description: Retrieve previously saved immediate conclusions, toy examples, counterexamples, failed paths, or branch states from memory. Use when you want to check whether earlier conclusions, examples, counterexamples, failed paths, or brach states can bring insight to the current question, claim, subgoal, or branch decision, or when you want to test a claim against previously saved counterexamples.
+description: Retrieve previously saved immediate conclusions, toy examples, counterexamples, subgoal plans, direct-proof attempts, failed paths, or branch states from memory. Use when you want to check whether earlier conclusions, examples, counterexamples, plan records, direct attempts, failed paths, or branch states can bring insight to the current question, claim, subgoal, or branch decision, or when you want to test a claim against previously saved counterexamples.
 ---
 
 
 # Query Memory
 
-Use this skill when you want to check whether earlier conclusions, examples, counterexamples, failed paths, or brach states can bring insight to the current question, claim, subgoal, or branch decision, or when you want to test a claim against previously saved counterexamples.
+Use this skill when you want to check whether earlier conclusions, examples, counterexamples, subgoal plans, direct attempts, failed paths, or branch states can bring insight to the current question, claim, subgoal, or branch decision, or when you want to test a claim against previously saved counterexamples.
 
 ## Input Contract
 
@@ -18,8 +18,11 @@ Read:
   - `immediate_conclusions`
   - `toy_examples`
   - `counterexamples`
+  - `subgoals`
+  - `proof_steps`
   - `failed_paths`
   - `branch_states`
+  - `scratch_events`
 
 ## Procedure
 
@@ -32,7 +35,7 @@ Read:
 
 ## Output Contract
 
-Append a summary record to `events`:
+Append a summary record to `scratch_events`:
 
 ```json
 {
@@ -61,7 +64,7 @@ Append a summary record to `events`:
 
 ## Failure Logging
 
-If the retrieval is not useful, append an `events` record with:
+If the retrieval is not useful, append a `scratch_events` record with:
 
 - `event_type="query_memory_stalled"`
 - the attempted query

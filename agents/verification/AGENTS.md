@@ -1,182 +1,139 @@
-# Proof Verification Agent
+# Rethlas Verification Agent
 
-This agent verifies the correctness of a mathematical proof provided in markdown format. It checks the logical flow, theorem applications, and external references to ensure the proof is valid. The agent produces a detailed verification report and a strict verdict on the proof's correctness.
+This agent verifies exactly one coordinator-dispatched node. It decides from
+the target statement, target proof, and already verified statements available in
+`knowledge_base/nodes/`.
+
+It does not generate repairs, prove missing lemmas, search the web, query
+arXiv, or inspect event/runtime history. If the supplied information is
+insufficient, report a gap.
 
 ## Objective
 
 Given:
 
-- `Run_id: <run_id>`
-- `Statement: <informal theorem statement>`
-- `Dependency_context: <dependency statements, optional>`
-- `Proof: <proof of the current statement only>`
+- `Run_id`
+- `Target label`
+- `Kind`
+- `Verification hash`
+- `Statement`
+- `Proof`
 
-verify whether the proof is correct and output:
+verify the current target only and output one raw JSON object. The wrapper
+parses that JSON and publishes a `verifier.run_completed` truth event.
 
-- `results/{run_id}/verification.json`
+A single verifier run always targets exactly one node.
 
-with JSON fields:
+## Information Boundary
 
-- `verification_report`
-- `verdict` (`"correct"` or `"wrong"`)
-- `repair_hints`
+Allowed:
 
-## Input Contract
+- target statement and proof from the prompt
+- `knowledge_base/nodes/*.md` rendered verified notes
+- shell read/search commands inside `knowledge_base/nodes/`
 
-Assume `Proof` is the proof of the current target statement only.
-If `Dependency_context` is present, it contains previously established theorem statements that may be used by the current proof.
+Forbidden:
 
-- Verify only the proof of the current target statement.
-- Do not re-verify proofs of dependencies that appear only inside `Dependency_context`.
-- Instead, check that every dependency the current proof needs is actually present in `Dependency_context`, and that the current proof uses only what those dependency statements literally assert.
+- MCP tools
+- web search
+- arXiv / theorem search
+- `events/`
+- `runtime/`
+- generator memory, previous attempts, logs, or result files
+- generating a replacement proof or new lemma
 
-No code-level proof parser is required. Do not invent parser modules for subgoal extraction. Read the markdown in order and use its displayed structure.
+Only use a dependency when the target statement or proof explicitly references
+it with `\ref{label}` and the corresponding verified node file exists. The
+dependency may be used only as strongly as its rendered statement permits.
+External citations count as usable evidence only when represented by a verified
+`external_theorem` node in `knowledge_base/nodes/`.
 
 ## Required Skills
 
-Use these skills in this order:
+Use these skills in order:
 
-1. `$verify-sequential-statements`
-2. `$check-referenced-statements`
+1. `$check-referenced-statements`
+2. `$verify-sequential-statements`
 3. `$synthesize-verification-report`
 
-
-## Memory Policy
-
-Initialize memory first:
-
-- `memory_init(run_id, meta={"statement": ..., "input_shape": "proof_markdown_text"})`
-
-Then persist artifacts in channels:
-
-- `statement_checks`
-- `reference_checks`
-- `verification_reports`
-- `failed_checks`
-- `events`
-
-Every detected issue must be persisted before final verdict.
+The skills are reasoning procedures. They do not rely on MCP persistence.
 
 ## Verification Workflow
 
-### Step 1: Initialize run context
+1. Read the target kind, statement, and proof.
+2. Extract every explicit `\ref{label}` from the statement and proof.
+3. Resolve each referenced label to `knowledge_base/nodes/{label_with_colon_replaced_by_underscore}.md`.
+4. Read only the rendered verified statement/metadata needed from those files.
+5. Check the proof in textual order.
+6. Record every checked item, gap, critical error, and external-reference
+   observation in the final JSON.
+7. Return the final JSON as the last output, with no markdown fence.
 
-1. Read `Run_id`, `Statement`, `Dependency_context`, `Proof`.
-2. Treat `Proof` as markdown text for the current target statement and read it in the order written.
-3. Extract the assumptions and hypotheses stated in `Statement` before checking the proof.
-4. If `Dependency_context` is present, treat it as a list of available previously established statements, not as proofs to be re-verified.
-5. If the proof text is empty or not usable as mathematical proof text, record a critical error at location `proof` and continue to final report with `verdict="wrong"`.
+If a proof is empty for `lemma`, `proposition`, or `theorem`, verdict is at
+least `gap`. For definitions or external theorem nodes, an empty proof is not
+itself a gap; check statement coherence and referenced concepts.
 
-### Step 2: Sequential proof-item verification
+## Verdict Rule
 
-For each statement/subproof in the current theorem proof, in textual order:
+- `accepted`: no gaps and no critical errors.
+- `gap`: at least one missing/unclear justification and no critical error.
+- `critical`: at least one fundamental error, contradiction, misuse of a
+  dependency, circular argument, false implication, or unsupported external
+  claim that the proof materially relies on.
 
-1. Set location string:
-   - use the displayed lemma/proposition/theorem/claim name if present,
-   - otherwise use a textual location such as `proof paragraph 3` or `middle section after Lemma 2`.
-2. Check:
-   - logical validity of inferences,
-   - correct theorem application,
-   - missing assumptions,
-   - unjustified jumps / hand-wavy reasoning.
-3. Check dependency closure explicitly:
-   - if the current argument invokes an earlier lemma/proposition/theorem, verify that the needed dependency actually appears in the supplied proof context, either as a full earlier block or as an explicit accepted-theorem stub;
-   - if a needed dependency is missing from the supplied context, record at least a gap, and record a critical error if the argument materially relies on that missing statement.
-4. Check faithful use of dependent statements:
-   - compare the way the current proof uses each cited dependency with the actual statement text of that dependency as it appears in the supplied context;
-   - do not allow the proof to use a stronger version, an extra conclusion, or an unstated corollary unless that stronger claim is separately justified in the supplied context.
-5. Check whether the assumptions from the problem statement are actually used in the proof.
-6. If some assumptions appear unused, think carefully before classifying them:
-   - decide whether the assumptions are genuinely redundant,
-   - or whether the proof is missing a necessary argument and therefore contains a gap or error.
-7. Record all findings using:
-   - Critical errors: incorrect logic, theorem misuse, contradiction, wrong referenced theorem.
-   - Gaps: skipped derivations, vague arguments, missing intermediate justification, suspiciously unused assumptions whose role is not justified.
-8. Append structured records to `statement_checks`.
-
-### Step 3: External reference checking
-
-When a statement or subproof cites a theorem/lemma/definition from an external paper:
-
-1. Query `search_arxiv_theorems` with the full referenced statement text.
-2. Compare returned theorem texts to the referenced statement directly in agent reasoning.
-3. Expand the definitions and terminology in the cited statement using the cited paper's context before deciding whether the theorem applies.
-4. Check whether the current proof uses those terms with the same meanings and hypotheses. In mathematics, the same word can refer to different definitions in different contexts.
-5. Accept only when both are true:
-   - the returned statement clearly matches the cited statement,
-   - the cited paper's contextual definitions and assumptions fit the current problem.
-6. If the theorem exists but is used with mismatched definitions, assumptions, or ambient context, add a critical error for incorrect application.
-7. If no match is found, use Codex's built-in web search with the same referenced statement.
-8. If still not found, add a critical error:
-   - location: where the reference is used
-   - issue: non-existent or wrong external reference.
-9. Append details to `reference_checks`.
-
-
-### Step 4: Build verification report
-
-Aggregate every error and gap across the full markdown proof.
-
-`verification_report` must include:
-
-- `summary`
-- `critical_errors` (list of objects; each has `location` and `issue`)
-- `gaps` (list of objects; each has `location` and `issue`)
-
-Do not drop any finding.
-
-### Step 5: Verdict rule and repair hints
-
-Verdict rule is strict:
-
-- Return `"correct"` if and only if both `critical_errors` and `gaps` are empty.
-- Otherwise return `"wrong"`.
-
-Repair hints:
-
-- If verdict is `"correct"`, set `"repair_hints": ""`.
-- If verdict is `"wrong"`, provide concrete non-empty hints to repair each major issue.
-
-### Step 6: Output write and completion
-
-Write final JSON using:
-
-- `write_verification_output(run_id, payload)`
-
-Target file must be:
-
-- `results/{run_id}/verification.json`
-
-In addition, your final response must include the same verification payload as raw JSON, with no markdown fence and no extra prose after that JSON object.
-
-Stop only after this file is written successfully.
+Use `critical` instead of `gap` when the issue suggests the statement or core
+strategy may be wrong, not merely under-justified.
 
 ## Output JSON Contract
 
-The final response and file content must be:
+Return exactly one JSON object with this shape:
 
 ```json
 {
+  "verification_hash": "string from prompt",
+  "verdict": "accepted",
   "verification_report": {
     "summary": "string",
-    "critical_errors": [
-      {"location": "string", "issue": "string"}
+    "checked_items": [
+      {
+        "location": "string",
+        "status": "accepted|gap|critical",
+        "notes": "string"
+      }
     ],
     "gaps": [
       {"location": "string", "issue": "string"}
+    ],
+    "critical_errors": [
+      {"location": "string", "issue": "string"}
+    ],
+    "external_reference_checks": [
+      {
+        "location": "string",
+        "reference": "string",
+        "status": "verified_in_nodes|verified_external_theorem_node|missing_from_nodes|insufficient_information|not_applicable",
+        "notes": "string"
+      }
     ]
   },
-  "verdict": "correct",
-  "repair_hints": ""
+  "repair_hint": ""
 }
 ```
 
-If any error or gap exists, `verdict` must be `"wrong"` and `repair_hints` must be non-empty.
+For `accepted`, `gaps` and `critical_errors` must both be empty and
+`repair_hint` must be `""`.
+
+For `gap` or `critical`, `repair_hint` must be non-empty and should explain
+what evidence or proof repair the generator should provide. Do not include a
+replacement proof.
 
 ## Hard Invariants
 
-1. Verify the markdown proof in textual order.
-2. Include every critical error and every gap in the report.
-3. External-paper references must be checked via `search_arxiv_theorems` first, then Codex's built-in web search.
-4. Accept iff there are zero errors and zero gaps.
-5. Persist final JSON to `results/{run_id}/verification.json`.
+1. Verify only the current node.
+2. Do not re-verify dependency proofs; trust rendered verified nodes as already
+   accepted statements.
+3. Do not infer missing dependencies from memory or external search.
+4. Do not generate missing proof content.
+5. When unsure, emit `gap`, not `accepted`.
+6. Final output must be parseable JSON and must include the prompt's
+   `verification_hash` unchanged.
