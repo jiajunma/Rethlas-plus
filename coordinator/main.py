@@ -29,8 +29,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import kuzu
-
 from cli.workspace import WorkspacePaths, workspace_paths
 from common.config.loader import RethlasConfig, load_config
 from common.kb.types import PROOF_REQUIRING_KINDS
@@ -56,6 +54,7 @@ from common.runtime.reaper import OutcomeWindow, reap_orphans
 from common.runtime.spawn import spawn_wrapper
 from common.runtime.startup import cleanup_runtime
 from coordinator.applied_poller import reconcile_publishing_jobs
+from coordinator.kb_client import coordinator_snapshot
 from coordinator.children import LibrarianChild, spawn_librarian
 from coordinator.dashboard_child import (
     DashboardSupervisor,
@@ -305,67 +304,42 @@ class _KBSnapshot:
 
 
 def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
-    """Open the KB read-only and pull the per-node dispatch context.
-
-    Returns ``None`` when the KB doesn't exist yet (fresh workspace).
-    """
-    db_path = ws.dag_kz
-    if not db_path.is_dir() and not db_path.exists():
-        return _KBSnapshot(candidates=[])
-    try:
-        db = kuzu.Database(str(db_path), read_only=True)
-        conn = kuzu.Connection(db)
-    except Exception:
+    rows = coordinator_snapshot(ws)
+    if rows is None:
         return None
-    try:
-        # Pull every node + its DependsOn dep statement_hashes.
-        res = conn.execute(
-            """
-            MATCH (n:Node)
-            OPTIONAL MATCH (n)-[:DependsOn]->(d:Node)
-            RETURN n.label, n.kind, n.statement, n.proof, n.statement_hash,
-                   n.verification_hash, n.pass_count, n.repair_count,
-                   n.repair_hint, n.verification_report,
-                   collect(d.label), collect(d.statement_hash), collect(d.pass_count)
-            """
-        )
-        out: list[CandidateInput] = []
-        while res.has_next():
-            row = res.get_next()
-            dep_labels = row[10] or []
-            dep_hashes = row[11] or []
-            dep_counts = row[12] or []
-            deps = {
-                lbl: sh
-                for lbl, sh in zip(dep_labels, dep_hashes)
-                if lbl is not None
-            }
-            dep_pass_counts = {
-                lbl: int(pc) if pc is not None else -1
-                for lbl, pc in zip(dep_labels, dep_counts)
-                if lbl is not None
-            }
-            out.append(
-                CandidateInput(
-                    target=row[0],
-                    target_kind=row[1],
-                    statement=row[2] or "",
-                    proof=row[3] or "",
-                    statement_hash=row[4] or "",
-                    verification_hash=row[5] or "",
-                    pass_count=int(row[6]) if row[6] is not None else -1,
-                    repair_count=int(row[7]) if row[7] is not None else 0,
-                    repair_hint=row[8] or "",
-                    verification_report=row[9] or "",
-                    dep_statement_hashes=deps,
-                    dep_pass_counts=dep_pass_counts,
-                    last_rejected_verification_hash=row[5] or "",
-                )
+    out: list[CandidateInput] = []
+    for row in rows:
+        dep_labels = row.get("dep_labels") or []
+        dep_hashes = row.get("dep_hashes") or []
+        dep_counts = row.get("dep_counts") or []
+        deps = {
+            lbl: sh
+            for lbl, sh in zip(dep_labels, dep_hashes)
+            if isinstance(lbl, str)
+        }
+        dep_pass_counts = {
+            lbl: int(pc) if pc is not None else -1
+            for lbl, pc in zip(dep_labels, dep_counts)
+            if isinstance(lbl, str)
+        }
+        out.append(
+            CandidateInput(
+                target=row.get("target", ""),
+                target_kind=row.get("target_kind", ""),
+                statement=row.get("statement", "") or "",
+                proof=row.get("proof", "") or "",
+                statement_hash=row.get("statement_hash", "") or "",
+                verification_hash=row.get("verification_hash", "") or "",
+                pass_count=int(row.get("pass_count", -1)),
+                repair_count=int(row.get("repair_count", 0)),
+                repair_hint=row.get("repair_hint", "") or "",
+                verification_report=row.get("verification_report", "") or "",
+                dep_statement_hashes=deps,
+                dep_pass_counts=dep_pass_counts,
+                last_rejected_verification_hash=row.get("verification_hash", "") or "",
             )
-        return _KBSnapshot(candidates=out)
-    finally:
-        del conn
-        del db
+        )
+    return _KBSnapshot(candidates=out)
 
 
 # ---------------------------------------------------------------------------
@@ -793,7 +767,7 @@ def _tick(state: CoordinatorState) -> None:
         return
     _forward_new_events(state)
     _reap_finished_workers(state)
-    outcomes = reconcile_publishing_jobs(state.ws.runtime_jobs, state.ws.dag_kz)
+    outcomes = reconcile_publishing_jobs(state.ws.runtime_jobs, state.ws.root)
     for o in outcomes:
         state.outcome_window.record(
             target=o.target, kind=o.kind, status=o.status, reason=o.reason

@@ -594,6 +594,8 @@ class LibrarianDaemon:
         with self._kb_lock:
             if op == "list_nodes":
                 return self.backend.dashboard_node_rows()
+            if op == "coordinator_snapshot":
+                return self.backend.coordinator_candidate_rows()
             if op == "list_applied_failed":
                 return self.backend.applied_failed_rows()
             if op == "current_kind_of":

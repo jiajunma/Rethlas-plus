@@ -1,4 +1,4 @@
-"""Poll ``AppliedEvent`` for jobs that just exited (ARCHITECTURE §6.7.1 step 3).
+"""Poll librarian QUERY(applied_event_status) for jobs that just exited.
 
 When a wrapper exits with ``status == "publishing"``, coordinator on
 its next tick reads the corresponding ``AppliedEvent`` row from Kuzu
@@ -14,14 +14,12 @@ critical-section gate too.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import kuzu
-
+from cli.workspace import workspace_paths
+from coordinator.kb_client import applied_event_status
 from common.runtime.jobs import (
-    JobRecord,
     STATUS_APPLIED,
     STATUS_APPLY_FAILED,
     delete_job_file,
@@ -29,43 +27,6 @@ from common.runtime.jobs import (
     list_jobs,
     update_job_file,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class AppliedRow:
-    event_id: str
-    status: str  # "applied" | "apply_failed"
-    reason: str
-    detail: str
-
-
-def lookup_applied(db_path: Path, event_id: str) -> AppliedRow | None:
-    """Open a short-lived read-only Kuzu connection and look up the row."""
-    if not db_path.is_dir() and not db_path.exists():
-        return None
-    try:
-        db = kuzu.Database(str(db_path), read_only=True)
-        conn = kuzu.Connection(db)
-    except Exception:
-        return None
-    try:
-        res = conn.execute(
-            "MATCH (a:AppliedEvent {event_id: $eid}) "
-            "RETURN a.status, a.reason, a.detail",
-            {"eid": event_id},
-        )
-        if not res.has_next():
-            return None
-        status, reason, detail = res.get_next()
-        return AppliedRow(
-            event_id=event_id,
-            status=status,
-            reason=reason or "",
-            detail=detail or "",
-        )
-    finally:
-        del conn
-        del db
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +41,7 @@ class ReconcileOutcome:
 
 
 def reconcile_publishing_jobs(
-    jobs_dir: Path, db_path: Path
+    jobs_dir: Path, ws_root: Path
 ) -> list[ReconcileOutcome]:
     """Walk ``runtime/jobs/`` for ``status == publishing`` records.
 
@@ -90,6 +51,7 @@ def reconcile_publishing_jobs(
     records for the caller's :class:`OutcomeWindow`.
     """
     resolved: list[ReconcileOutcome] = []
+    ws = workspace_paths(str(ws_root))
     for rec in list_jobs(jobs_dir):
         if rec.status != "publishing":
             continue
@@ -97,7 +59,7 @@ def reconcile_publishing_jobs(
         event_id = _extract_event_id(rec.detail)
         if not event_id:
             continue
-        row = lookup_applied(db_path, event_id)
+        row = applied_event_status(ws, event_id)
         if row is None:
             continue
         path = job_file_path(jobs_dir, rec.job_id)
@@ -138,8 +100,6 @@ def _extract_event_id(detail: str) -> str:
 
 
 __all__ = [
-    "AppliedRow",
     "ReconcileOutcome",
-    "lookup_applied",
     "reconcile_publishing_jobs",
 ]

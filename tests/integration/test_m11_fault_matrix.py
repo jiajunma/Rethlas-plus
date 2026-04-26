@@ -172,9 +172,11 @@ def test_dashboard_golden_overview_and_theorems(tmp_path: Path) -> None:
     finally:
         backend.close()
 
-    core = DashboardCore(tmp_path, desired_pass_count=3)
-    overview = core.overview()
-    theorems = core.theorems()
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=30.0)
+        core = DashboardCore(tmp_path, desired_pass_count=3)
+        overview = core.overview()
+        theorems = core.theorems()
 
     # Overview shape must contain the documented fields.
     assert {"coordinator", "librarian", "kb", "in_flight_target_count"} <= overview.keys()
@@ -200,22 +202,24 @@ def test_dashboard_node_detail_golden(tmp_path: Path) -> None:
         "--statement", "Define X.", "--actor", "user:alice",
     )
     _drive_to_ready(tmp_path)
-    core = DashboardCore(tmp_path)
-    detail = core.node_detail("def:x")
-    assert detail is not None
-    # Every documented field is present (ARCHITECTURE §6.7 per-node detail).
-    expected = {
-        "label", "kind", "statement", "proof", "pass_count", "repair_count",
-        "statement_hash", "verification_hash", "repair_hint",
-        "verification_report", "deps", "dependents", "status",
-        "active_job", "recent_events",
-    }
-    assert expected <= set(detail)
-    assert detail["label"] == "def:x"
-    assert detail["statement"] == "Define X."
-    # statement_hash is content-derived → stable across runs.
-    sh = detail["statement_hash"]
-    assert isinstance(sh, str) and len(sh) == 64
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=30.0)
+        core = DashboardCore(tmp_path)
+        detail = core.node_detail("def:x")
+        assert detail is not None
+        # Every documented field is present (ARCHITECTURE §6.7 per-node detail).
+        expected = {
+            "label", "kind", "statement", "proof", "pass_count", "repair_count",
+            "statement_hash", "verification_hash", "repair_hint",
+            "verification_report", "deps", "dependents", "status",
+            "active_job", "recent_events",
+        }
+        assert expected <= set(detail)
+        assert detail["label"] == "def:x"
+        assert detail["statement"] == "Define X."
+        # statement_hash is content-derived → stable across runs.
+        sh = detail["statement_hash"]
+        assert isinstance(sh, str) and len(sh) == 64
 
 
 # ---------------------------------------------------------------------------

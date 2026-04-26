@@ -272,6 +272,42 @@ class KuzuBackend:
             )
         return out
 
+    def coordinator_candidate_rows(self) -> list[dict[str, Any]]:
+        res = self._conn.execute(
+            """
+            MATCH (n:Node)
+            OPTIONAL MATCH (n)-[:DependsOn]->(d:Node)
+            RETURN n.label, n.kind, n.statement, n.proof, n.statement_hash,
+                   n.verification_hash, n.pass_count, n.repair_count,
+                   n.repair_hint, n.verification_report,
+                   collect(d.label), collect(d.statement_hash), collect(d.pass_count)
+            """
+        )
+        out: list[dict[str, Any]] = []
+        while res.has_next():
+            r = res.get_next()
+            dep_labels = [d for d in (r[10] or []) if d is not None]
+            dep_hashes = [h or "" for h in (r[11] or [])]
+            dep_counts = [int(c) if c is not None else -1 for c in (r[12] or [])]
+            out.append(
+                {
+                    "target": r[0],
+                    "target_kind": r[1],
+                    "statement": r[2] or "",
+                    "proof": r[3] or "",
+                    "statement_hash": r[4] or "",
+                    "verification_hash": r[5] or "",
+                    "pass_count": int(r[6]) if r[6] is not None else -1,
+                    "repair_count": int(r[7]) if r[7] is not None else 0,
+                    "repair_hint": r[8] or "",
+                    "verification_report": r[9] or "",
+                    "dep_labels": dep_labels,
+                    "dep_hashes": dep_hashes,
+                    "dep_counts": dep_counts,
+                }
+            )
+        return out
+
     def applied_failed_rows(self) -> list[dict[str, Any]]:
         res = self._conn.execute(
             "MATCH (a:AppliedEvent) WHERE a.status = 'apply_failed' "
