@@ -873,9 +873,9 @@ No separate `verified` field — `pass_count` alone conveys both binary
 
 **Codex reads `nodes/`** via bash (`ls`, `cat`, `grep`, `find`) inside
 this directory with `cwd = nodes/` and `--sandbox read-only`. When
-Codex encounters `\ref{lem:foo}` in a proof, the `resolve-reference`
-skill teaches it to `cat nodes/lem_foo.md` (colon→underscore) to see
-the dependency.
+Codex encounters `\ref{lem:foo}` in a proof, the
+`check-referenced-statements` skill teaches it to `cat nodes/lem_foo.md`
+(colon→underscore) to see the dependency.
 
 **Rendering contract (deterministic, byte-exact).** Startup
 reconciliation (§6.5) and linter category E (§6.6) both check
@@ -1966,7 +1966,7 @@ library — via bash (`ls`, `cat`, `grep`, `find`) and can consult any
 relevant file on its own:
 - Codex sees `\ref{lem:bar}` in the proof
 - Codex runs `cat nodes/lem_bar.md` (after label-to-filename conversion)
-- The skill `resolve-reference` teaches Codex this convention
+- The skill `check-referenced-statements` teaches Codex this convention
 - Codex may also browse siblings, search for related lemmas, or
   cross-check definitions — all via bash inside `nodes/`
 

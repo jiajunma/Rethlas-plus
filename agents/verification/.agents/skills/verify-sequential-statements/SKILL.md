@@ -27,10 +27,12 @@ generator memory. Do not generate a replacement proof.
    unusable, record a gap before any further checking.
    If kind is `definition` or `external_theorem`, an empty proof is
    expected (these are axioms in Phase I) — do not record a gap on
-   that basis. For `definition` and `external_theorem`, only check
-   that the statement is internally coherent and that any
-   `\ref{label}` it cites resolves; skip per-step proof verification
-   entirely.
+   that basis. For these kinds, only check that the statement is
+   internally coherent (no contradiction, no undefined notation in the
+   statement itself, domain terminology used consistently); skip
+   per-step proof verification entirely. Dependency resolution for any
+   `\ref{label}` in the statement is owned by
+   `$check-referenced-statements` — do not redo it here.
 3. Read the proof in textual order.
 4. For each meaningful claim or inference, choose a stable location:
    - displayed claim/lemma name if present,
@@ -41,10 +43,13 @@ generator memory. Do not generate a replacement proof.
    - all hypotheses of a referenced statement are supplied;
    - definitions and notation are used consistently;
    - no circular use of the target statement occurs.
-6. Classify issues:
-   - `gap`: missing derivation, vague justification, omitted hypothesis check,
-     or insufficient evidence.
-   - `critical_error`: contradiction, false implication, circular argument,
+6. Classify issues. The `checked_items.status` field accepts exactly
+   `accepted|gap|critical`; an issue that is itself a gap or critical
+   error must also surface in the corresponding `gaps[]` /
+   `critical_errors[]` list during synthesis.
+   - `gap`: missing derivation, vague justification, omitted hypothesis
+     check, or insufficient evidence.
+   - `critical`: contradiction, false implication, circular argument,
      invalid dependency use, or a core claim that appears wrong.
 7. When unsure, classify as `gap`.
 
@@ -60,5 +65,17 @@ Prepare `checked_items` entries like:
 }
 ```
 
-Contribute all gaps and critical errors to the final report. Do not write
-files.
+For every issue classified `gap` or `critical` in step 6, also prepare
+a parallel entry for the corresponding `gaps[]` or `critical_errors[]`
+list using this shape (`location` should match the `checked_items`
+entry):
+
+```json
+{
+  "location": "proof paragraph 3",
+  "issue": "Boundedness is asserted but not derived from the hypotheses."
+}
+```
+
+Contribute these to `$synthesize-verification-report` for assembly into
+the final report. Do not write files.

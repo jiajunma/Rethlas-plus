@@ -51,10 +51,25 @@ Prepare `external_reference_checks` entries like:
 {
   "location": "proof paragraph 2",
   "reference": "paper theorem or \\ref{ext:...}",
-  "status": "missing_from_nodes|not_applicable",
+  "status": "verified_in_nodes|verified_external_theorem_node|missing_from_nodes|insufficient_information|not_applicable",
   "notes": "The cited result is not available as a verified node."
 }
 ```
+
+`status` must be exactly one of the five values; the verifier wrapper's
+schema validator (and ARCH §6.3) enforces this. Pick per the procedure:
+
+- `verified_in_nodes` — the dependency resolved to a non-`external_theorem`
+  verified node and the proof's use is consistent with its statement.
+- `verified_external_theorem_node` — same, but the resolved node is an
+  `external_theorem`.
+- `missing_from_nodes` — the `\ref{label}` does not match any file under
+  `knowledge_base/nodes/`.
+- `insufficient_information` — an external paper citation is invoked but
+  no `external_theorem` node represents it; the proof's reliance cannot
+  be verified locally.
+- `not_applicable` — an external-reference slot exists structurally but
+  no actual external citation is being relied on at that location.
 
 Also contribute any dependency-related gaps or critical errors to the final
 report. Do not write files.
