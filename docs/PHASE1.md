@@ -103,45 +103,25 @@ so the fake must forge it). Every daemon's scaled-timing helper
 lives in `common/runtime/timing.py` so the implementation is
 centralized.
 
-### Pre-M2 Kuzu stress validation
+### Kuzu access model
 
-Rethlas uses **multiple OS processes** (librarian, coordinator,
-dashboard, linter, worker wrappers) all accessing the same
-`dag.kz/`. That is a stronger requirement than most embedded DBs'
-defaults: SQLite handles it via WAL / shm files; DuckDB historically
-single-process; LMDB natively multi-reader-single-writer; Kuzu's
-multi-process guarantees are not obvious from the docs. Before
-committing to the Phase I design, validate Kuzu in **two steps**,
-in this order:
+Phase I does **not** validate or rely on multiple OS processes opening
+the same `dag.kz/` directory. ARCHITECTURE §4.1 fixes the model:
+only librarian opens Kuzu. Coordinator, dashboard, linter, and user
+CLI read derived state through librarian's IPC `QUERY(...)` API;
+writes arrive through `APPLY(event_id, path)`. Workers never read
+Kuzu.
 
-**Step 1 — multi-process open.** Two independent Python processes
-both open the same `knowledge_base/dag.kz/` and each run a simple
-query loop. If this fails (lock errors, "database in use",
-segfault), the ARCHITECTURE §4.1 "sole writer: librarian; multiple
-readers" model is not achievable directly and Phase I must revise
-the storage layer — likely route all reads through librarian via
-a small IPC (Unix socket JSON-RPC) rather than direct Kuzu open.
-This is a significant design change; knowing at M2 day-1 is
-cheap, finding out at M6 is not.
+The validation target before building coordinator/dashboard is the
+librarian-mediated access path:
 
-**Step 2 — snapshot isolation (only if Step 1 passes).** One
-writer loop + several reader loops hammering `Node` / `AppliedEvent`
-queries for ~10⁴ iterations. Readers must never observe a
-partially-committed transaction (Node's `pass_count` updated but
-not yet `AppliedEvent` row, etc.). If this fails, readers could
-see logically-impossible states mid-commit.
+- one librarian process opens Kuzu and initializes schema;
+- several client processes concurrently issue `QUERY(...)` requests;
+- coordinator-style clients issue ordered `APPLY(...)` requests;
+- clients never open `dag.kz/` directly.
 
-  - Cross-process lock is not a simple fix here: an advisory
-    `flock` around every Kuzu operation would serialize all DB
-    access across processes, killing dashboard responsiveness.
-    The cleaner Phase I fallback is the same as Step 1's — a
-    librarian-mediated read API — but narrower in scope, only for
-    the operations that actually need serialization.
-
-- If Step 1 and Step 2 both pass, proceed with the architecture
-  as written.
-- If either fails, **stop and revise** before building projector /
-  coordinator / dashboard on top.
+This keeps Phase I aligned with Kuzu's exclusive database-directory
+lock behavior and with ARCHITECTURE §4.1's single-process model.
 
 ---
 
@@ -371,6 +351,8 @@ see logically-impossible states mid-commit.
   - hash-changing rewrite clears hint/report
 - `integration`: `apply_failed` reasons:
   - `label_conflict`
+  - `target_missing`
+  - `write_scope_violation`
   - `cycle`
   - `ref_missing`
   - `hint_target_missing`
@@ -384,6 +366,9 @@ see logically-impossible states mid-commit.
     (`"thm:a → lem:b → thm:a"` style)
   - `label_conflict`: detail names the conflicting label **and**
     the winning `event_id`
+  - `target_missing`: detail names the missing target label
+  - `write_scope_violation`: detail names the offending label or
+    missing batch target
   - `hash_mismatch`: detail contains both the stale hash prefix
     and the current hash prefix as **12 hex chars** each
   - `ref_missing`: detail names the missing `\ref{}` target
@@ -708,6 +693,12 @@ see logically-impossible states mid-commit.
 - updated `generator/AGENTS.md`
 - updated `generator/.codex/config.toml`
 - updated `generator/mcp/server.py` to exact Phase I toolset
+- updated generator skills, preserving original-Rethlas useful
+  reasoning workflows but rewriting their contracts to Phase I:
+  immediate conclusions, toy examples, counterexamples, decomposition
+  plans, direct attempts, one-layer bounded recursive exploration,
+  failure synthesis, and external-result applicability checks all write
+  only to MCP scratch memory and ultimately feed a `<node>` batch
 - decoder with full batch validation
   - parser is **tolerant of real Codex output noise**: ANSI escape
     codes may appear (strip before parsing); MCP-tool-call traces
@@ -782,6 +773,24 @@ see logically-impossible states mid-commit.
   contains an "Initial guidance" section with the user-hint body
   verbatim and no "Repair context" section. Guards against the
   "hint dropped on fresh dispatch" regression.
+- `static`: generator skill docs contain no old execution-path
+  language: no `blueprint.md`, no `section_verification`, no
+  `verify_proof_service`, no generator-side proof acceptance, no
+  workspace truth `events` scratch channel. Scratch event-like notes
+  must be called `scratch_events`.
+- `static`: generator MCP channel map includes `scratch_events` and does
+  not expose old verifier-service channels such as `verification_reports`.
+- `static`: generator skill docs do not require Codex to download PDFs
+  or write workspace files. External search may record complete
+  statement/source/applicability metadata in scratch memory or in the
+  emitted node text, but `external_theorem` remains user-only.
+- `static`: recursive generator skill docs allow at most one bounded
+  internal exploration layer per run and require the parent generator
+  to emit the only final `<node>` batch.
+- `static`: `agents/generation/.codex/config.toml` enforces that same
+  bound in shipped config (`features.multi_agent = true`,
+  `agents.max_depth = 2`) so the runtime cannot recurse deeper than the
+  documented single child layer.
 - `integration`: decoder rejections append to `runtime/state/rejected_writes.jsonl`
 - `static`: `generator/role.py` and its transitive imports do **not**
   import `common/kb` (enforces Kuzu-free worker invariant)
@@ -803,6 +812,10 @@ see logically-impossible states mid-commit.
 
 - `verifier/role.py`
 - updated `verifier/AGENTS.md`
+- updated verifier skills, preserving original-Rethlas strict checking:
+  dependency-faithfulness, every material finding retained in the
+  report, uncertainty as `gap`, and repair hints as requests for more
+  evidence rather than generated repairs
 - pruned verifier MCP usage per architecture
 - verdict JSON parser is **tolerant of real Codex output** for the
   same reasons as M6: Codex may emit ANSI codes, reasoning prose,
@@ -827,6 +840,12 @@ see logically-impossible states mid-commit.
   - consistency: `verdict=accepted` ⇒ `gaps=[]` AND
     `critical_errors=[]`; `verdict=gap` ⇒ `gaps` non-empty;
     `verdict=critical` ⇒ `critical_errors` non-empty
+  - prompt includes `kind`; empty proof is a `gap` for
+    `lemma|proposition|theorem` but not automatically wrong for
+    `definition|external_theorem`
+  - `external_reference_checks.status` is one of
+    `verified_in_nodes`, `verified_external_theorem_node`,
+    `missing_from_nodes`, `insufficient_information`, `not_applicable`
   - optional `cost`: same shape check as M6
 - `integration`: malformed verdict JSON becomes `status = "crashed"` and no truth event
 - `integration`: emitted `verifier.run_completed` event carries
@@ -842,6 +861,16 @@ see logically-impossible states mid-commit.
   mirroring step is coordinator's responsibility
 - `static`: `verifier/role.py` and its transitive imports do **not**
   import `common/kb`
+- `static`: verifier config and skill docs expose no MCP server, no web
+  or arXiv search, no `Dependency_context`, no `correct|wrong`
+  verdict vocabulary, no `repair_hints`, and no
+  `results/{run_id}/verification.json` output contract.
+- `static`: `agents/verification/.codex/config.toml` contains no
+  `mcp_servers` section; verifier must remain a no-MCP single-call
+  worker in Phase I.
+- `static`: verifier package has no active `api/` or `mcp/` service path,
+  and verifier requirements do not include `api/requirements.txt` or
+  `mcp/requirements.txt`.
 - `system`: `rethlas verifier --target ...` works with fake Codex
 
 **Exit**
@@ -1017,7 +1046,7 @@ see logically-impossible states mid-commit.
 
 - `dashboard/server.py`
 - `dashboard/state_watcher.py`
-- `dashboard/kuzu_reader.py`
+- `dashboard/kb_client.py` (librarian IPC client; dashboard never opens Kuzu directly)
 - `dashboard/templates/`
 - `cli/dashboard.py`
 - coordinator child-process integration for dashboard
@@ -1028,7 +1057,7 @@ see logically-impossible states mid-commit.
 **Tests**
 
 - `integration`: `/api/coordinator` returns raw `coordinator.json`
-- `integration`: `/api/overview` joins runtime state + Kuzu correctly
+- `integration`: `/api/overview` joins runtime state + librarian KB query results correctly
 - `integration`: `/api/theorems` status vocabulary covers:
   - `done`
   - `verified`
@@ -1063,9 +1092,9 @@ see logically-impossible states mid-commit.
   - `alert` (new line appended to `rejected_writes.jsonl` or
     `drift_alerts.jsonl`)
   Per §6.7.1.
-- `integration`: Kuzu-dependent endpoints return 503 + `Retry-After: 5` during rebuild
+- `integration`: KB-dependent endpoints return 503 + `Retry-After: 5` during rebuild
 - `integration`: while `librarian.json.rebuild_in_progress = true`,
-  Kuzu-dependent endpoints (`/api/overview`, `/api/theorems`,
+  KB-dependent endpoints (`/api/overview`, `/api/theorems`,
   `/api/node/{label}`, `/api/rejected`) return HTTP 503 with
   `Retry-After: 5`; non-Kuzu endpoints (`/api/coordinator`,
   `/api/active`, raw `/events/stream`) continue to serve
@@ -1118,8 +1147,9 @@ see logically-impossible states mid-commit.
   Additional A-fixtures:
   - two event files with the same `event_id` but different filenames /
     bytes → duplicate event-id violation
-  - event with `parent_event_id` (or other event reference field)
-    pointing at a missing prior event → missing-reference violation
+  - event body containing a Phase-I-unknown event-reference field
+    such as `parent_event_id` → schema violation (ARCHITECTURE §3.4
+    explicitly has no causal-chain field in Phase I)
 - `integration`: **category B** (KB structural) — fixture with a
   cycle hand-inserted into Kuzu `DependsOn`; linter reports the
   cycle path. Additional B-fixtures:

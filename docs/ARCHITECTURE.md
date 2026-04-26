@@ -68,8 +68,6 @@ Rethlas/
 ├── verifier/            # verifier agent (internal structure follows original)
 │   ├── .agents/skills/
 │   ├── .codex/
-│   ├── mcp/
-│   ├── api/
 │   ├── AGENTS.md
 │   ├── role.py          # NEW
 │   └── ...
@@ -331,6 +329,7 @@ belong to derived `knowledge_base/nodes/*.md`, not to `events/`.
   "payload": {
     "kind": "definition",
     "statement": "A primary object is ...",
+    "proof": "",
     "remark": "Local foundational definition.",
     "source_note": ""
   }
@@ -507,6 +506,12 @@ the verdict is `accepted`.
 - `gaps`: array
 - `critical_errors`: array
 - `external_reference_checks`: array
+
+Each `external_reference_checks[]` item carries `location`,
+`reference`, `status`, and `notes`. Phase I `status` values are
+`verified_in_nodes`, `verified_external_theorem_node`,
+`missing_from_nodes`, `insufficient_information`, and
+`not_applicable`.
 
 Expected consistency:
 - `accepted` ⇒ `gaps = []` and `critical_errors = []`
@@ -1059,8 +1064,19 @@ each row where `status = "apply_failed"`, librarian also populates
 specific trigger (so dashboard can render it without cross-joining
 to `events/`):
 
-- `label_conflict` — node with this label already exists.
+- `label_conflict` — an add-style operation tried to create a node
+  whose label already exists. This applies to `user.node_added` and
+  to any brand-new node entry inside `generator.batch_committed`.
   `detail` example: `"label thm:foo already applied by event 202604...-a7b2c912d4f1e380"`
+- `target_missing` — a target-bearing event references a node that
+  does not exist when existence is required. Applies to
+  `user.node_revised`, `verifier.run_completed`, and
+  `generator.batch_committed` in repair mode. `detail` names the
+  missing target label.
+- `write_scope_violation` — a generator batch attempted to revise an
+  existing non-target node, omitted its required target node, or
+  otherwise violated the generator write-scope invariant (§6.2).
+  `detail` names the offending label or missing target.
 - `cycle` — applying this event would introduce a dependency cycle.
   `detail` example: `"would close cycle: thm:a -> lem:b -> thm:a"`
 - `ref_missing` — an explicit `\ref{}` target does not exist at apply
@@ -1335,13 +1351,14 @@ audit_count(node) =
     e for e in events if
     e.type == "verifier.run_completed" and
     e.target == node.label and
-    e.payload.verification_hash == node.verification_hash
+    e.payload.verification_hash == node.verification_hash and
+    AppliedEvent[e.event_id].status == "applied"
   ]
 
   if matching_verdicts is empty:
     return 0  (has proof but not yet verified against current hash)
 
-  last = matching_verdicts[-1]  # by event_id ordering
+  last = matching_verdicts[-1]  # by (iso_ms, seq, uid) ordering
   if last.verdict in ("gap", "critical"):
     return -1  (latest matching verdict rejects ⇒ needs repair)
 
@@ -1350,9 +1367,10 @@ audit_count(node) =
 ```
 
 **Inputs needed:** `node.kind`, `node.verification_hash`, and `node.proof`
-must be read from current Kuzu state; all other inputs (the event facts)
-come from `events/`. The audit is therefore a join of the event stream
-with the current node snapshot.
+must be read from current Kuzu state; verdict event facts come from
+`events/`; and verdict realization comes from `AppliedEvent`. The audit
+is therefore a join of the event stream, the current node snapshot, and
+`AppliedEvent`.
 
 Linter's audit check: for every node, recompute `audit_count` from the
 event stream and assert it equals the stored `Node.pass_count`.
@@ -1381,7 +1399,7 @@ preserved by the repair-must-change-hash invariant.
 
 ```
 audit_repair_count(node) =
-  let T = iso_ms of the most recent event that caused node's
+  let K = order_key(iso_ms, seq, uid) of the most recent event that caused node's
           statement_hash to take its current value. This is either:
     - a user.node_added / user.node_revised / generator.batch_committed
       event that directly wrote node.label with the current
@@ -1393,7 +1411,7 @@ audit_repair_count(node) =
     e in events where
       e.type == "verifier.run_completed" and
       e.target == node.label and
-      e.iso_ms > T and
+      order_key(e.iso_ms, e.seq, e.uid) > K and
       AppliedEvent[e.event_id].status == "applied" and
       e.verdict in ("gap", "critical")
   )
@@ -1405,6 +1423,8 @@ event body. The audit computation must join the event stream (read from
 `common/kb`). Concretely: iterate events from `events/`, and for each
 candidate check `kb.applied_event_status(e.event_id) == "applied"`.
 The join is efficient because `AppliedEvent.event_id` is the primary key.
+All event comparisons use the full replay order key `(iso_ms, seq, uid)`,
+not `iso_ms` alone.
 
 Linter asserts `audit_repair_count(node) == Node.repair_count` for
 every node. Drift = librarian bug.
@@ -1594,6 +1614,9 @@ Hard invariants:
 - Librarian is the only writer of `dag.kz` and `nodes/`
 - Coordinator only schedules; never reads/writes derived state directly (it reads KB)
 - Codex components are read-only in the filesystem (enforced by sandbox)
+- Generator MCP scratch writes are the one permitted non-truth exception:
+  they are performed by the generator MCP server, not by direct Codex
+  filesystem writes, and are never replayed by librarian.
 - Runtime orchestration data lives under `runtime/`, not `events/`
 
 ### 6.2 Generator
@@ -1865,6 +1888,47 @@ source_note: ""
 Inside proofs, cross-references use `\ref{label}` (Lean Blueprint
 convention).
 
+**What Phase I keeps from original Rethlas generator design.** Original
+Rethlas used a productive mathematician-style workflow: immediate
+consequences, toy examples, counterexamples, subgoal decomposition,
+direct attempts, recursive exploration, external-result search, and
+failure synthesis. Phase I keeps those as **generator-internal reasoning
+skills**, but rewrites their contract around the event-sourced KB:
+
+- Skills may write only to generator MCP scratch memory, never to
+  workspace `events/`, `runtime/`, `knowledge_base/`, or Kuzu.
+- Scratch memory channel names such as `failed_paths`,
+  `counterexamples`, `subgoals`, and `scratch_events` are not
+  knowledge truth and are not replayed by librarian.
+- The final product of a generator run is not a blueprint file or a
+  verified proof; it is one complete `<node>` batch emitted on stdout
+  for the wrapper to decode and publish as one
+  `generator.batch_committed` event.
+- The old "failure paths are mandatory and queryable" discipline is
+  retained inside scratch memory because it materially improves repair
+  prompts and prevents repeating bad proof strategies.
+- The old external-search discipline is retained only for generator
+  reasoning: when a retrieved result influences a proposed proof, the
+  generator must preserve the complete statement, source identifiers,
+  definition-context notes, and applicability check in `remark`,
+  `source_note`, proof text, or scratch memory as appropriate. Generator
+  still may not create `external_theorem`; user imports those.
+- Broad exploration from original Rethlas is retained, but bounded to
+  the current coordinator-dispatched job. Recursive/sub-agent work is
+  at most one internal exploration layer per generator run unless
+  `rethlas.toml` later adds an explicit budget. Sub-agents, if used,
+  may return candidate reasoning only; the parent generator is still
+  responsible for emitting the single final batch.
+- The shipped generator Codex configuration must enforce that bound in
+  practice: `multi_agent = true` is allowed, but the checked-in
+  `generator/.codex/config.toml` caps recursion at one child layer
+  (root generator + at most one sub-agent depth). Increasing that is
+  an architecture change, not a local prompt tweak.
+- The old section-verification/blueprint workflow is not retained as an
+  execution path. Its useful idea survives as a shaping rule: prefer
+  short, named lemmas/propositions with explicit `\ref{}` dependencies
+  instead of one monolithic proof.
+
 **Truth events emitted:**
 - `generator.batch_committed`
 
@@ -1889,6 +1953,8 @@ verdict JSON. **No external stage orchestration.**
 ```
 Run_id: ...
 Target label: lem:block_form_for_x0_plus_u
+Kind: lemma
+Verification hash: <dispatch_hash>
 Statement: <target statement>
 Proof: <target proof>   (empty for definition / external_theorem)
 + instructions from AGENTS.md
@@ -1957,8 +2023,44 @@ seeing `critical` considers deeper rewrites or counter-example.
   `user.node_revised(kind=external_theorem)` (generator NEVER touches external
   theorems — they are strictly user-authored, require citation)
 
-Internal structure follows original Rethlas (`.agents/skills/`,
-`.codex/`, `mcp/`, `api/`, `AGENTS.md`). Phase I's `role.py` is
+**What Phase I keeps from original Rethlas verifier design.** Original
+Rethlas verifier behavior was useful in two ways: strict acceptance and
+structured failure reporting. Phase I keeps both while removing the old
+HTTP/MCP/result-file service:
+
+- A verifier accepts iff it finds zero gaps and zero critical errors.
+  Uncertainty is a `gap`, not an acceptance.
+- Dependency-faithfulness is mandatory: a proof may use an explicit
+  `\ref{label}` only as strongly as the rendered verified statement in
+  `nodes/` permits. Stronger corollaries require their own proof in the
+  target proof or a separate verified node.
+- Verifier must report every material issue in
+  `verification_report.checked_items`, `gaps`, `critical_errors`, and
+  `external_reference_checks`; it must not summarize away weak but real
+  concerns to make the verdict cleaner.
+- Verifier does not search externally. If an external citation is needed
+  but is not represented by a verified `external_theorem` node in
+  `nodes/`, verifier records `insufficient_information` or
+  `missing_from_nodes` and emits `gap`/`critical` depending on
+  materiality.
+- `external_reference_checks.status` values in Phase I are:
+  `verified_in_nodes`, `verified_external_theorem_node`,
+  `missing_from_nodes`, `insufficient_information`, and
+  `not_applicable`.
+- `repair_hint` is not a generated repair proof. It is a concise request
+  for more evidence, a missing dependency, or a statement/proof revision
+  that the coordinator will pass to a later generator run.
+- The shipped verifier skill pack must preserve the original Rethlas
+  strictness discipline: sequential proof checking, dependency-faithful
+  use of verified nodes only, explicit recording of every material gap /
+  critical error / external-reference observation, and no silent
+  upgrade of uncertainty into acceptance. These are contract
+  requirements, not prompt-style preferences.
+
+Verifier keeps only the original Rethlas prompt/skill shape
+(`.agents/skills/`, `.codex/`, `AGENTS.md`). The old verifier `mcp/`
+and `api/` service paths are not active Phase I components. Phase I's
+`role.py` is
 **Kuzu-free**, same discipline as the generator (§6.2): it reads
 `runtime/jobs/{job_id}.json` for coordinator-provided context
 (target label, statement, proof, and `dispatch_hash`), reads
@@ -2139,8 +2241,9 @@ coordinator maintains three things in memory:
    - `0 ≤ pass_count < DESIRED_COUNT`
    - For every dep: `dep.pass_count > node.pass_count` (strict monotone)
    Priority: `pass_count` ascending.
-3. **KB read handle** — opens `dag.kz/` read-only via `common/kb` to
-   compute candidates for the two queues on each loop iteration
+3. **KB query client** — sends read-only `QUERY(...)` requests to
+   librarian's IPC channel to compute candidates for the two queues on
+   each loop iteration
 
 Queues are **ephemeral** (in-memory) and re-derived from current KB on each
 loop start. Coordinator runtime job bookkeeping lives under `runtime/`; there
@@ -2598,7 +2701,7 @@ after each event projection attempt, periodically while idle (every
   catching up" when > 0.
 - `rebuild_in_progress` flips to `true` before librarian unlinks
   `dag.kz/` during `rethlas rebuild`, and back to `false` after the
-  replay finishes. Dashboard serves 503 for Kuzu-dependent endpoints
+  replay finishes. Dashboard serves 503 for KB-dependent endpoints
   while it is `true` (see §6.7.1). Coordinator also treats this as
   a dispatch gate (same treatment as `startup_phase != "ready"`).
 
@@ -3327,8 +3430,8 @@ parser):
 ## 8. MCP Tools
 
 **Only generator uses MCP in Phase I.** No other component uses MCP for any
-truth-bearing purpose. Python components (coordinator, librarian, linter,
-dashboard) use `common/kb` directly. Rethlas does not expose an MCP server to
+truth-bearing purpose. Python components use the librarian IPC API for KB
+queries; only librarian opens Kuzu. Rethlas does not expose an MCP server to
 external callers.
 
 Generator's MCP server process is launched by Codex per invocation. Code
@@ -3348,6 +3451,20 @@ server pointing at `./mcp/server.py`.
 | --- | --- |
 | `search_arxiv_theorems(query)` | External literature search via leansearch.net (existing) |
 | `memory_init` / `memory_append` / `memory_search` | Codex scratchpad (existing) |
+
+Generator scratch memory is explicitly non-truth. The MCP server may expose
+channels for original-Rethlas-style reasoning artifacts
+(`immediate_conclusions`, `toy_examples`, `counterexamples`, `subgoals`,
+`proof_steps`, `failed_paths`, `branch_states`, `scratch_events`), but these
+files are not workspace `events/`, are not replayed, and may be deleted without
+changing KB truth. Skills must call the channel `scratch_events` rather than
+plain `events` to avoid confusion with truth events.
+
+Codex built-in web browsing is **not** part of the Phase I generator contract.
+The only external-search tool promised by Rethlas is `search_arxiv_theorems`.
+If an implementation later enables web browsing as an operator option, any
+results remain generator scratch context and still cannot create
+`external_theorem` nodes.
 
 ### 8.2 Verifier-only tools
 
@@ -3374,7 +3491,8 @@ truth-event producer (admission layer, pre-publish):
     uid    = random 16 hex
   run structural_check (§3.1.6) against current KB snapshot
     # "current KB snapshot" source is producer-specific:
-    #   - user CLI: reads Kuzu directly (§4.1 allows user CLI read)
+    #   - user CLI: queries librarian IPC when supervise is running,
+    #     or uses a short-lived librarian apply/query path in standalone mode
     #   - worker wrapper (gen/ver): reads nodes/*.md + job file
     #     only (Kuzu-free per §4.1); best-effort for checks that
     #     need count<1 KB state — librarian is authoritative at
@@ -3393,8 +3511,7 @@ truth-event producer (admission layer, pre-publish):
 
 # --- User CLI path ---------------------------------------------
 # `rethlas add-node` / `revise-node` / `attach-hint` are publishers
-# that directly read Kuzu for their own feedback (user CLI is not a
-# worker; §4.1 allows user CLI to read AppliedEvent):
+# that poll librarian for their own feedback:
 user CLI polls librarian for fate:
   loop until timeout (30 s):
     status = kb.applied_event_status(event_id)
@@ -3768,8 +3885,9 @@ commits, but the runtime is **not** multi-master:
 6. **Linter only reports, never repairs.**
 7. **Truth-bearing components communicate via truth events + KB.**
    Runtime orchestration uses local subprocess control and `runtime/`.
-8. **Python components use `common/kb` directly.** Generator uses MCP.
-   Verifier has no Phase I MCP tools.
+8. **Only librarian opens Kuzu.** Other Python components query KB state
+   through librarian IPC. Generator uses MCP; verifier has no Phase I MCP
+   tools.
 9. **Codex is read-only on filesystem.** Sandbox-enforced.
 10. **Truth-event producers are intentionally small in Phase I.**
     `user`, `generator`, and `verifier` are the only truth writers.
@@ -3885,17 +4003,42 @@ commits, but the runtime is **not** multi-master:
   a long-thinking job progress without guessing when it will be
   killed (§6.7)
 
-### 13.10 Why signed count vs unsigned + separate wrong flag
+### 13.10 What original Rethlas keeps, and what changes
+
+Phase I intentionally keeps the parts of original Rethlas that improved
+mathematical search quality:
+
+- adaptive proof-search skills rather than a single monolithic prompt;
+- toy examples and counterexamples as first-class reasoning artifacts;
+- multiple decomposition plans and failure synthesis before retrying;
+- external-result search that records complete statements, source ids,
+  proof ideas, local definitions, and applicability checks;
+- strict verifier reporting with no silent acceptance of gaps;
+- single-call verifier execution, so coordinator sees one run and one
+  verdict event per target.
+
+Phase I deliberately removes the parts that conflicted with an
+event-sourced KB:
+
+- mutable blueprint files as truth;
+- generator self-verification via a verifier HTTP/MCP service;
+- verifier MCP memory/result files;
+- dependency context injection assembled by another process;
+- unlimited recursive worker spawning inside one generator job;
+- any Codex write path into truth, runtime, Kuzu, or rendered nodes.
+
+### 13.11 Why signed count vs unsigned + separate wrong flag
 
 - Coordinator decisions all become `if count < 0 / == 0 / < DESIRED` —
   compact
 - One field vs two fields (less drift opportunity)
 
-### 13.11 What we're NOT doing
+### 13.12 What we're NOT doing
 
 - No complex cascade field semantics — status simply derives from
   current hashes
-- No `common/mcp/` shared module — each agent has its own
+- No `common/mcp/` shared module — generator MCP stays under generator;
+  verifier has no Phase I MCP server
 - No `adapters/codex/` nesting — Phase II if/when Claude is added
 - No runtime heartbeat files — log mtime suffices
 - No status enum in Kuzu
@@ -3907,32 +4050,31 @@ commits, but the runtime is **not** multi-master:
 These are resolved at implementation time without blocking design:
 
 1. **`rethlas init` scaffolding** — what a fresh workspace contains
-2. **Generator `memory_*` MCP tools** — keep as-is or migrate to event-driven notes
-3. **Frontend minimal HTML/JS** — exact markup and style for Phase I
+2. **Frontend minimal HTML/JS** — exact markup and style for Phase I
    dashboard
-4. **API key management** — environment variables inherited from
+3. **API key management** — environment variables inherited from
    the `rethlas supervise` shell into Codex wrappers (§6.7.1 job
    lifecycle step 1). Phase I does not add Rethlas-specific key
    storage; operators use whatever Codex expects (`OPENAI_API_KEY`
    etc.).
-5. **Windows support** — Phase II. Requires replacing `flock`,
+4. **Windows support** — Phase II. Requires replacing `flock`,
    process groups, and POSIX signals with Windows equivalents
    (named mutexes, Job Objects, `signal.CTRL_C_EVENT`).
-6. **`runtime/logs/` retention** — Phase I has no rotation; logs
+5. **`runtime/logs/` retention** — Phase I has no rotation; logs
    accumulate until `rethlas rebuild` wipes them. Phase II may add
    size-based or age-based rotation, or a `rethlas logs prune` CLI.
-7. **`external_theorem.source_note` structured parsing** — Phase I
+6. **`external_theorem.source_note` structured parsing** — Phase I
    treats it as free-form text (operator convention, BibTeX key or
    DOI or plain citation). Phase II can add structured parsing if
    downstream tooling (importers, citation checks) needs it.
-8. **Orphan aux-node GC** — a generator aux lemma that no live
+7. **Orphan aux-node GC** — a generator aux lemma that no live
    node transitively depends on (e.g. the target that introduced it
    was later revised to a counter-example with a different proof
    structure) stays in KB forever. Phase I accepts this as harmless
    noise; Phase II may add a "reachability from top-level theorems"
    garbage-collection sweep (report-only or opt-in delete via a
    compaction event).
-9. **Filesystem event delivery on network / container FS** —
+8. **Filesystem event delivery on network / container FS** —
    Phase I's dashboard and librarian rely on `watchdog` (Linux
    inotify / macOS FSEvents). These work on local ext4/APFS but
    **may silently drop events on NFS, docker bind mounts with
@@ -4030,11 +4172,11 @@ See `PHASE1.md` for the concrete task list.
     log a startup warning (Phase I has no auth).
   - `rethlas rebuild` behavior: librarian sets
     `rebuild_in_progress = true` before unlinking `dag.kz/`;
-    dashboard returns 503 `Retry-After: 5` for Kuzu-dependent
-    endpoints while it is `true`; non-Kuzu endpoints stay up.
-  - Kuzu concurrent-read note: librarian single writer, other
-    components read; brief latency spikes during commit accepted in
-    Phase I.
+    dashboard returns 503 `Retry-After: 5` for KB-dependent
+    endpoints while it is `true`; runtime-only endpoints stay up.
+  - Kuzu concurrent-read note: librarian is the only process that
+    opens Kuzu; other components read via librarian IPC. Brief query
+    latency spikes during commit are accepted in Phase I.
   - Staleness thresholds (dashboard UI only): `<= 60 s` healthy,
     `60 s < age <= 5 min` degraded, `> 5 min` / missing down. Same
     thresholds for coordinator.json and librarian.json.
