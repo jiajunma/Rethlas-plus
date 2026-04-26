@@ -338,22 +338,35 @@ def _replay_verifier_facts(events_dir: Path) -> list[dict[str, Any]]:
     return out
 
 
-def _statement_changing_iso_ms(events_dir: Path, label: str) -> str | None:
-    """Return the ``iso_ms`` portion of the most recent event that set ``label``'s
-    ``statement_hash`` to its current value.
+_STATEMENT_CHANGING_TYPES = frozenset(
+    {"user.node_added", "user.node_revised", "generator.batch_committed"}
+)
 
-    A precise computation requires Merkle cascade replay; for Phase I
-    linter we approximate using the most recent event whose ``target ==
-    label`` and whose payload mentions a ``statement_hash``. This is the
-    common case (definition added/revised, generator commit). Cascade-
-    only updates on a node whose own statement bytes did not change are a
-    rarer source of drift; if needed they can be added in Phase II.
+
+def _statement_changing_iso_ms(events_dir: Path, label: str) -> str | None:
+    """Return the ``iso_ms`` portion of the most recent event that could
+    have set ``label``'s ``statement_hash`` to its current value.
+
+    Only event types that the projector treats as statement-mutating are
+    considered: ``user.node_added``, ``user.node_revised``, and
+    ``generator.batch_committed`` (where ``label`` appears in the batch).
+    ``verifier.run_completed`` and ``user.hint_attached`` share the
+    ``target`` field with ``label`` but never touch statement_hash, so
+    including them in the search would falsely advance the boundary past
+    real gap/critical events and surface spurious
+    ``D_repair_count_drift`` violations.
+
+    A precise computation requires Merkle cascade replay (a dependency
+    revision can change ``label``'s statement_hash without an event whose
+    ``target == label``); cascade-only updates remain a Phase II concern.
     """
     most_recent: str | None = None
     for f in _iter_event_files(events_dir):
         try:
             _raw, body = read_event(f)
         except (OSError, json.JSONDecodeError, ValueError):
+            continue
+        if body.get("type") not in _STATEMENT_CHANGING_TYPES:
             continue
         if body.get("target") != label and label not in (
             n.get("label")
