@@ -1789,7 +1789,15 @@ cross-batch) preserves the Kuzu-free worker invariant.
 **Prompt composition** (assembled by `role.py`):
 
 1. **Generation prompt** — task description for the target label
-2. **Initial guidance** (if mode=fresh **and** `repair_hint` is
+2. **Memory scope** — the deterministic `problem_id` value the agent
+   must pass to every MCP memory call this run. Derived from the
+   dispatched target via the same sanitisation rule as
+   `agents/generation/mcp/server.py:sanitize_problem_id`
+   (e.g. `lem:foo` → `lem_foo`), so two dispatches against the same
+   target share scratch memory while different targets stay isolated.
+   Sub-agents spawned via `recursive-proving` must receive this
+   value verbatim too (§6.2 sub-agent invariant).
+3. **Initial guidance** (if mode=fresh **and** `repair_hint` is
    non-empty) — the user-contributed sections of `repair_hint` as
    shipped by coordinator (§10.2.3). Fresh mode never has a
    verifier section (`repair_count = 0` ⇒ no gap/critical verdict
@@ -1797,13 +1805,13 @@ cross-batch) preserves the Kuzu-free worker invariant.
    attempt. Without this step the hint would be discarded unread
    when the first batch bumps `verification_hash` and §5.4 clears
    `repair_hint`.
-3. **Repair context** (if mode=repair) — the target's
+4. **Repair context** (if mode=repair) — the target's
    `verification_report` and `repair_hint` (which may carry both
    verifier and user sections) from the latest verdict
-4. **Latest batch rejection report** (if any) — runtime-only structural
+5. **Latest batch rejection report** (if any) — runtime-only structural
    rejection summary from the decoder/admission layer, such as cycle
    introduction or unresolved reference
-5. **Repair history summary** — the target's current `repair_count`
+6. **Repair history summary** — the target's current `repair_count`
    (number of gap/critical verdicts accumulated against the current
    `statement_hash`). If `repair_count` is small (0-2), generator is
    expected to try a local proof repair; if it is larger (≥ 3),
@@ -1811,7 +1819,7 @@ cross-batch) preserves the Kuzu-free worker invariant.
    wrong and pursue a revised statement or a counter-example.
    Coordinator imposes no hard threshold — `repair_count` is an
    advisory signal for the generator's own decision (§10.4).
-6. **Target's current state** — statement (if present) and previous
+7. **Target's current state** — statement (if present) and previous
    proof attempt (if any)
 
 Codex can **freely explore `nodes/` directory** via bash to see verified

@@ -767,12 +767,19 @@ lock behavior and with ARCHITECTURE §4.1's single-process model.
   coordinator populated these before spawn (ARCHITECTURE §5.5.2);
   the wrapper trusts and does not re-check against Kuzu
 - `integration`: **prompt assembly — fresh mode with user hint**
-  (ARCHITECTURE §6.2 step 2). Fixture: job file `mode=fresh`,
+  (ARCHITECTURE §6.2 step 3). Fixture: job file `mode=fresh`,
   `repair_hint` contains a single user section with a known body.
   After `role.py` assembles the Codex prompt, assert the prompt
   contains an "Initial guidance" section with the user-hint body
   verbatim and no "Repair context" section. Guards against the
   "hint dropped on fresh dispatch" regression.
+- `unit`: **prompt assembly — Memory scope is always present**
+  (ARCHITECTURE §6.2 step 2). For any dispatch target the assembled
+  prompt must include a `## Memory scope` section whose body names
+  the deterministic `problem_id` derived from the target via
+  `agents/generation/mcp/server.py:sanitize_problem_id` (e.g.
+  target `thm:foo` → `problem_id="thm_foo"`). Guards against the
+  parent/sub-agent memory-shard regression that motivated F9.
 - `static`: generator skill docs contain no old execution-path
   language: no `blueprint.md`, no `section_verification`, no
   `verify_proof_service`, no generator-side proof acceptance, no

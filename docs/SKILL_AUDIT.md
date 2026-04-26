@@ -371,6 +371,20 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
 - **Status**: resolved. Per-skill blocks now defer to AGENTS.md
   "Identifier conventions"; the table is the single source of truth.
 
+## Fourth-pass findings (2026-04-27, post H1-H19 fixes)
+
+### H20 — ARCH §6.2 "Prompt composition" missing the Memory scope step
+- F9 added a "Memory scope" section to `generator/prompt.py` and
+  `agents/generation/AGENTS.md`, but ARCH §6.2 still listed only
+  six prompt parts. A reader of ARCH alone could not know that
+  `## Memory scope` is part of the dispatch contract — the very
+  problem F9 was meant to close.
+- **Status**: resolved. ARCH §6.2 "Prompt composition" now lists
+  Memory scope as item 2 (renumbering subsequent items 3-7); the
+  derivation rule defers to `sanitize_problem_id` in
+  `agents/generation/mcp/server.py` so there is one canonical
+  source.
+
 ## Already-aligned design (sanity-check pass)
 
 These were verified against ARCH and pass — no action needed:
