@@ -1,57 +1,60 @@
 ---
 name: check-referenced-statements
-description: Validate externally referenced theorems by querying arXiv theorem search first and Codex's built-in web search second. Use when a markdown proof cites statements from external papers.
+description: Resolve explicit proof references against verified node files only. Use when a verifier run must check that cited dependencies exist in knowledge_base/nodes and are used no stronger than their statements.
 ---
 
 # Check Referenced Statements
 
-Validate every external-paper reference used in the proof.
+Validate dependencies and external-looking citations using only the target text
+and `knowledge_base/nodes/`.
 
 ## Input Contract
 
-For each cited external theorem/lemma/definition:
+Read:
 
-- location where it is used,
-- the full referenced statement text.
+- target statement
+- target proof
+- target kind
+- labels explicitly cited as `\ref{label}`
+- verified node files under `knowledge_base/nodes/`
+
+Do not use MCP tools, web search, arXiv search, events, runtime logs, or
+generator memory.
 
 ## Procedure
 
-1. Query `search_arxiv_theorems` using the full referenced statement as `query`.
-2. Inspect returned results and compare theorem text directly to the referenced statement in reasoning.
-3. Expand the definitions and terminology appearing in the cited statement using the cited paper's context before deciding whether the theorem applies.
-4. Check whether the same words in the current proof mean the same thing as they do in the cited paper. In mathematics, identical words can carry different definitions in different contexts.
-5. Accept as matched and applicable only when both are true:
-   - the result clearly corresponds to the cited statement,
-   - the contextual definitions and hypotheses align with the current problem.
-6. If the theorem exists but the current proof uses different definitions, hypotheses, or ambient objects, record a critical error for incorrect application.
-7. If no match is found, use Codex's built-in web search with the same statement text.
-8. If still not found, emit a critical error:
-   - location: where the citation is used,
-   - issue: referenced theorem appears non-existent or incorrectly cited.
-9. Persist each reference check in `reference_checks`.
+1. Extract every `\ref{label}` from the statement and proof.
+2. Convert each label to its node filename by replacing `:` with `_` and
+   appending `.md`.
+3. Read the corresponding file from `knowledge_base/nodes/`.
+4. If the file is missing, record a gap unless the proof materially depends on
+   the missing statement as a decisive step; then record a critical error.
+5. Inspect the dependency node's rendered kind/metadata. If it is an
+   `external_theorem`, record status `verified_external_theorem_node`; otherwise
+   use `verified_in_nodes`.
+6. Compare each use in the target proof with the dependency's rendered
+   statement. If the proof uses a stronger claim, extra hypothesis, unstated
+   corollary, or incompatible definition, record a gap or critical error.
+7. For citations to external papers that are not represented by a verified
+   `external_theorem` node, do not search externally. Record
+   `insufficient_information`; classify as a gap or critical error depending on
+   whether the proof materially relies on it.
+8. Use `not_applicable` only when an apparent external-reference slot is
+   structurally present but no actual external citation is being relied on at
+   that location.
 
-Do not rely on dedicated comparison utility code; perform comparison through careful reasoning.
+## Output Contribution
 
-## Output Contract
-
-Append records to `reference_checks` like:
+Prepare `external_reference_checks` entries like:
 
 ```json
 {
-  "location": "Lemma 2",
-  "referenced_statement": "Exact statement text",
-  "context_expansion": "In the cited paper, 'regular' means regular with respect to the valuation topology.",
-  "arxiv_match_found": false,
-  "web_match_found": false,
-  "critical_error": {
-    "location": "Lemma 2",
-    "issue": "Referenced external theorem was not found in arXiv search or Codex built-in web search."
-  }
+  "location": "proof paragraph 2",
+  "reference": "paper theorem or \\ref{ext:...}",
+  "status": "missing_from_nodes|not_applicable",
+  "notes": "The cited result is not available as a verified node."
 }
 ```
 
-## Tools
-
-- `search_arxiv_theorems`
-- `memory_append`
-- Codex's built-in web search
+Also contribute any dependency-related gaps or critical errors to the final
+report. Do not write files.

@@ -55,3 +55,74 @@ def test_generator_query_memory_skill_keeps_plan_and_attempt_channels() -> None:
     ).read_text(encoding="utf-8")
     assert "`subgoals`" in text
     assert "`proof_steps`" in text
+
+
+def test_generator_agent_contract_forbids_old_verification_workflow_terms() -> None:
+    text = (ROOT / "agents" / "generation" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    forbidden = [
+        "verify_proof_service",
+        "blueprint_verified.md",
+        "section_verification",
+    ]
+    for token in forbidden:
+        assert token not in text
+    assert "scratch_events" in text
+    assert "external_theorem" in text
+
+
+def test_generator_recursive_skill_is_explicitly_one_layer_bounded() -> None:
+    text = (
+        ROOT
+        / "agents"
+        / "generation"
+        / ".agents"
+        / "skills"
+        / "recursive-proving"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "at most one bounded layer" in text
+    assert "not to spawn further sub-agents" in text
+
+
+def test_generator_search_skill_forbids_pdf_downloads() -> None:
+    text = (
+        ROOT
+        / "agents"
+        / "generation"
+        / ".agents"
+        / "skills"
+        / "search-math-results"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    assert "Do not download PDFs or write files." in text
+
+
+def test_verifier_agent_contract_forbids_mcp_and_external_search() -> None:
+    text = (ROOT / "agents" / "verification" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
+    for token in ("- MCP tools", "- web search", "- arXiv / theorem search"):
+        assert token in text
+    assert "external_reference_checks" in text
+
+
+def test_verifier_skills_keep_phase1_status_vocabulary() -> None:
+    text = (
+        ROOT
+        / "agents"
+        / "verification"
+        / ".agents"
+        / "skills"
+        / "check-referenced-statements"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    for token in (
+        "verified_in_nodes",
+        "verified_external_theorem_node",
+        "missing_from_nodes",
+        "insufficient_information",
+        "not_applicable",
+    ):
+        assert token in text
