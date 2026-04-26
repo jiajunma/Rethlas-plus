@@ -23,6 +23,7 @@ from pathlib import Path
 from common.events.filenames import format_filename
 from common.events.ids import EventIdAllocator
 from common.events.io import atomic_write_event
+from common.runtime.jsonl import append_jsonl
 from common.runtime.codex_runner import run_codex
 from common.runtime.heartbeat import JobHeartbeat
 from common.runtime.jobs import (
@@ -169,10 +170,9 @@ def _record_rejection(
         "event_type_attempted": "generator.batch_committed",
         "target": target,
         "reason": reason,
-        "detail": (detail or "")[:1024],
+        "detail": detail or "",
     }
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, sort_keys=True, ensure_ascii=False) + "\n")
+    append_jsonl(path, entry)
 
 
 def _heartbeat_interval_s() -> float:

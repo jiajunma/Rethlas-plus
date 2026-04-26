@@ -33,6 +33,7 @@ from cli.workspace import WorkspacePaths
 from common.events.filenames import escape_label, format_filename
 from common.events.ids import EventIdAllocator
 from common.events.io import atomic_write_event
+from common.runtime.jsonl import append_jsonl
 from librarian.validator import AdmissionError, validate_admission
 
 
@@ -109,9 +110,7 @@ def _current_kind_lookup(ws: WorkspacePaths) -> Callable[[str], str | None]:
 
 def _rejected_writes_append(ws: WorkspacePaths, entry: dict[str, Any]) -> None:
     path = ws.rejected_writes_jsonl
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    append_jsonl(path, entry)
 
 
 def _compose_event(
