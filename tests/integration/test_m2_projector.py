@@ -381,6 +381,67 @@ def test_hint_attached_appends_user_section(
     assert "try induction on n" in node.repair_hint
 
 
+def test_hint_attached_uses_event_body_ts(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """The repair_hint section is timestamped from event body ``ts``,
+    not the literal placeholder ``"user"`` or any payload-internal ts."""
+    body1, raw1 = _node_added(
+        eid="20260425T120000.000-0001-abc0123456789abc",
+        target="lem:stuck",
+        kind="lemma",
+        statement="S",
+        proof="",
+    )
+    projector.apply(body1, raw1)
+
+    # _hint sets a payload.ts; we override the body's top-level ts to
+    # confirm the body wins. cli/attach_hint.py omits payload.ts entirely
+    # — that path is covered by the existing append test.
+    body2, raw2 = _event(
+        eid="20260425T120005.000-0001-abc0123456789abd",
+        etype="user.hint_attached",
+        actor="user:alice",
+        target="lem:stuck",
+        payload={"hint": "try induction on n", "remark": ""},
+        ts="2026-04-25T12:34:56.789+00:00",
+    )
+    r = projector.apply(body2, raw2)
+    assert r.status is ApplyOutcome.APPLIED
+    node = kb.node_by_label("lem:stuck")
+    assert node is not None
+    assert "[user @ 2026-04-25T12:34:56.789+00:00]" in node.repair_hint
+
+
+def test_hint_attached_falls_back_to_user_when_no_ts(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """Hand-rolled events that omit body.ts and payload.ts still get a
+    readable section header — the legacy ``"user"`` placeholder."""
+    body1, raw1 = _node_added(
+        eid="20260425T120000.000-0001-abc0123456789abc",
+        target="lem:stuck",
+        kind="lemma",
+        statement="S",
+        proof="",
+    )
+    projector.apply(body1, raw1)
+
+    body2, raw2 = _event(
+        eid="20260425T120005.000-0001-abc0123456789abd",
+        etype="user.hint_attached",
+        actor="user:alice",
+        target="lem:stuck",
+        payload={"hint": "h", "remark": ""},
+        ts="",
+    )
+    r = projector.apply(body2, raw2)
+    assert r.status is ApplyOutcome.APPLIED
+    node = kb.node_by_label("lem:stuck")
+    assert node is not None
+    assert "[user @ user]" in node.repair_hint
+
+
 def test_hint_target_missing(projector: Projector, kb: KuzuBackend) -> None:
     body, raw = _hint(
         eid="20260425T120005.000-0001-abc0123456789abd",

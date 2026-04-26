@@ -194,7 +194,7 @@ class Projector:
         if etype == "user.node_revised":
             return self._apply_node_revised(target, payload)
         if etype == "user.hint_attached":
-            return self._apply_hint_attached(target, payload)
+            return self._apply_hint_attached(target, payload, ts=event.get("ts", ""))
         if etype == "generator.batch_committed":
             return self._apply_generator_batch(payload)
         if etype == "verifier.run_completed":
@@ -352,7 +352,13 @@ class Projector:
         return target
 
     # -- user.hint_attached --
-    def _apply_hint_attached(self, target: str | None, payload: dict[str, Any]) -> str:
+    def _apply_hint_attached(
+        self,
+        target: str | None,
+        payload: dict[str, Any],
+        *,
+        ts: str = "",
+    ) -> str:
         if not isinstance(target, str):
             raise ProjectionRejection(
                 "schema", "user.hint_attached requires a target label"
@@ -372,9 +378,12 @@ class Projector:
                 f"target {target!r} pass_count={existing.pass_count}",
             )
 
-        # Append a user section to repair_hint (§5.4 L1246).
-        ts = payload.get("ts", "user")
-        new_section = f"---\n[user @ {ts}]\n{hint.rstrip()}\n"
+        # Append a user section to repair_hint (§5.4 L1246). The event's
+        # top-level ``ts`` is preferred; ``payload.ts`` is a legacy
+        # fallback, and a literal ``"user"`` keeps prior behaviour for
+        # hand-rolled events that omit both.
+        section_ts = ts or payload.get("ts", "") or "user"
+        new_section = f"---\n[user @ {section_ts}]\n{hint.rstrip()}\n"
         updated = (existing.repair_hint + "\n" + new_section) if existing.repair_hint else new_section
         self._kb.set_node_fields(target, repair_hint=updated)
         return target
