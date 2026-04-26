@@ -17,6 +17,8 @@ from pathlib import Path
 import fcntl
 import pytest
 
+from tests.fixtures.librarian_proc import librarian
+
 PYTHON = sys.executable
 
 
@@ -30,26 +32,6 @@ def _run(*args: str) -> subprocess.CompletedProcess[str]:
 def _init(ws: Path) -> None:
     r = _run("--workspace", str(ws), "init")
     assert r.returncode == 0, r.stderr
-
-
-def _force_applied(ws: Path, event_id: str, *, status: str, reason: str = "", detail: str = "") -> None:
-    """Write an AppliedEvent row directly; used as the librarian stand-in."""
-    import hashlib
-
-    from common.kb.kuzu_backend import KuzuBackend
-    from common.kb.types import ApplyOutcome
-
-    backend = KuzuBackend(ws / "knowledge_base" / "dag.kz")
-    try:
-        backend.record_applied_event(
-            event_id=event_id,
-            status=ApplyOutcome(status),
-            event_sha256=hashlib.sha256(b"dummy").hexdigest(),
-            reason=reason or None,
-            detail=detail or None,
-        )
-    finally:
-        backend.close()
 
 
 def _last_event_id(ws: Path) -> str:
@@ -89,43 +71,62 @@ def test_poll_reports_applied(tmp_path: Path) -> None:
         t.join(timeout=5)
         raise AssertionError("event file never appeared")
 
-    event_id = _last_event_id(tmp_path)
-    _force_applied(tmp_path, event_id, status="applied")
-    t.join(timeout=60)
-    r = result_holder["r"]
-    assert r.returncode == 0
-    assert "applied" in r.stdout.lower()
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase("ready", timeout=20.0)
+        t.join(timeout=60)
+        r = result_holder["r"]
+        assert r.returncode == 0
+        assert "applied" in r.stdout.lower()
 
 
 def test_poll_reports_apply_failed(tmp_path: Path) -> None:
     _init(tmp_path)
-
-    result_holder: dict = {}
-    def _go():
-        result_holder["r"] = subprocess.run(
-            [PYTHON, "-m", "cli.main",
-             "--workspace", str(tmp_path),
-             "add-node", "--label", "def:y", "--kind", "definition",
-             "--statement", "B", "--actor", "user:alice"],
-            capture_output=True, text=True, check=False,
-        )
-    t = threading.Thread(target=_go)
-    t.start()
-    for _ in range(60):
-        if list((tmp_path / "events").rglob("*.json")):
-            break
-        time.sleep(0.5)
-    event_id = _last_event_id(tmp_path)
-    _force_applied(
-        tmp_path, event_id,
-        status="apply_failed", reason="label_conflict",
-        detail="label def:y already exists",
+    # First event establishes the label in KB.
+    subprocess.run(
+        [PYTHON, "-m", "cli.main",
+         "--workspace", str(tmp_path),
+         "add-node", "--label", "def:y", "--kind", "definition",
+         "--statement", "B0", "--actor", "user:alice"],
+        capture_output=True, text=True, check=False,
     )
-    t.join(timeout=60)
-    r = result_holder["r"]
-    assert r.returncode == 0
-    assert "apply_failed" in r.stdout.lower()
-    assert "label_conflict" in r.stdout.lower()
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase("ready", timeout=20.0)
+
+        result_holder: dict = {}
+
+        def _go():
+            result_holder["r"] = subprocess.run(
+                [PYTHON, "-m", "cli.main",
+                 "--workspace", str(tmp_path),
+                 "add-node", "--label", "def:y", "--kind", "definition",
+                 "--statement", "B", "--actor", "user:alice"],
+                capture_output=True, text=True, check=False,
+            )
+
+        t = threading.Thread(target=_go)
+        t.start()
+        files_before = len(list((tmp_path / "events").rglob("*.json")))
+        for _ in range(60):
+            files = sorted((tmp_path / "events").rglob("*.json"))
+            if len(files) > files_before:
+                last = files[-1]
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("second event file never appeared")
+
+        body = json.loads(last.read_text(encoding="utf-8"))
+        lp.send({"cmd": "APPLY", "event_id": body["event_id"], "path": str(last)})
+        reply = lp.recv(timeout=15.0)
+        assert reply["reply"] == "APPLY_FAILED"
+        assert reply["reason"] == "label_conflict"
+
+        t.join(timeout=60)
+        r = result_holder["r"]
+        assert r.returncode == 0
+        assert "apply_failed" in r.stdout.lower()
+        assert "label_conflict" in r.stdout.lower()
 
 
 def test_poll_reports_supervise_not_running(tmp_path: Path) -> None:

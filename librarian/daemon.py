@@ -596,6 +596,24 @@ class LibrarianDaemon:
                 return self.backend.dashboard_node_rows()
             if op == "list_applied_failed":
                 return self.backend.applied_failed_rows()
+            if op == "current_kind_of":
+                label = args.get("label")
+                if not isinstance(label, str):
+                    raise QueryServerError("current_kind_of requires label")
+                row = self.backend.node_by_label(label)
+                return row.kind if row is not None else None
+            if op == "applied_event_status":
+                event_id = args.get("event_id")
+                if not isinstance(event_id, str):
+                    raise QueryServerError("applied_event_status requires event_id")
+                row = self.backend.applied_event(event_id)
+                if row is None:
+                    return None
+                return {
+                    "status": row.status.value,
+                    "reason": row.reason or "",
+                    "detail": row.detail or "",
+                }
             if op == "dependents_of":
                 label = args.get("label")
                 if not isinstance(label, str):

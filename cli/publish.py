@@ -9,12 +9,8 @@ The user CLI:
 4. On rejection — appends a line to ``runtime/state/rejected_writes.jsonl``
    and returns a non-zero exit code. No file enters ``events/``.
 5. On success — writes the event atomically under ``events/{YYYY-MM-DD}/``.
-6. Polls ``AppliedEvent`` for up to 30 s. Reports per the §9.1 D2 table.
-
-The poll uses a short-lived ``kuzu.Database(read_only=True)`` open —
-consistent with the revised §4.1: only librarian opens the DB for write;
-short-lived read-only opens are fine as long as no writer holds the lock
-at that instant.
+6. Polls librarian's read-only `QUERY(applied_event_status)` API for up
+   to 30 s. Reports per the §9.1 D2 table.
 """
 
 from __future__ import annotations
@@ -22,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import sys
 import time
 from dataclasses import dataclass
@@ -77,33 +74,17 @@ def _local_offset_iso() -> str:
 def _current_kind_lookup(ws: WorkspacePaths) -> Callable[[str], str | None]:
     """Factory returning a ``current_kind_of(label)`` the admission uses.
 
-    Under the revised §4.1, only librarian opens the DB. For user CLI
-    admission we do a short-lived read-only open; if the DB doesn't
-    exist yet (fresh workspace) or the write lock is held by librarian,
-    we return ``None`` (admission skips kind-immutability) — the
-    projector is the authoritative check anyway.
+    Under the revised §4.1, only librarian opens the DB. User CLI asks
+    librarian over its query socket when available; otherwise we return
+    ``None`` (admission skips kind-immutability) and rely on the
+    projector as the authoritative check.
     """
     def lookup(label: str) -> str | None:
-        db_path = ws.dag_kz
-        if not db_path.is_dir() and not db_path.exists():
-            return None
         try:
-            import kuzu
-            db = kuzu.Database(str(db_path), read_only=True)
-            conn = kuzu.Connection(db)
-        except Exception:
+            result = _query_librarian(ws, "current_kind_of", {"label": label})
+        except OSError:
             return None
-        try:
-            res = conn.execute(
-                "MATCH (n:Node {label: $lbl}) RETURN n.kind",
-                {"lbl": label},
-            )
-            if res.has_next():
-                return res.get_next()[0]
-            return None
-        finally:
-            del conn
-            del db
+        return result if isinstance(result, str) else None
 
     return lookup
 
@@ -149,34 +130,42 @@ def _poll_applied_event(
     if timeout_s is None:
         timeout_s = _poll_timeout_s()
     deadline = time.monotonic() + timeout_s
-    db_path = ws.dag_kz
     while time.monotonic() < deadline:
-        if db_path.exists() or db_path.is_dir():
-            try:
-                import kuzu
-                db = kuzu.Database(str(db_path), read_only=True)
-                conn = kuzu.Connection(db)
-                try:
-                    res = conn.execute(
-                        "MATCH (a:AppliedEvent {event_id: $eid}) "
-                        "RETURN a.status, a.reason, a.detail",
-                        {"eid": event_id},
-                    )
-                    if res.has_next():
-                        status, reason, detail = res.get_next()
-                        return {
-                            "status": status,
-                            "reason": reason,
-                            "detail": detail,
-                        }
-                finally:
-                    del conn
-                    del db
-            except Exception:
-                # Write lock held by librarian — retry after delay.
-                pass
+        try:
+            result = _query_librarian(ws, "applied_event_status", {"event_id": event_id})
+        except OSError:
+            result = None
+        if isinstance(result, dict):
+            return {
+                "status": result.get("status", ""),
+                "reason": result.get("reason", ""),
+                "detail": result.get("detail", ""),
+            }
         time.sleep(_POLL_INTERVAL_S)
     return None
+
+
+def _query_librarian(
+    ws: WorkspacePaths,
+    op: str,
+    args: dict[str, Any],
+) -> Any:
+    sock_path = ws.librarian_socket
+    if not sock_path.exists():
+        raise FileNotFoundError(sock_path)
+    payload = {"cmd": "QUERY", "op": op, "args": args}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(2.0)
+        sock.connect(str(sock_path))
+        sock.sendall((json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+        fh = sock.makefile("rb")
+        line = fh.readline()
+    if not line:
+        raise OSError("librarian query EOF")
+    reply = json.loads(line)
+    if not isinstance(reply, dict) or not reply.get("ok"):
+        raise OSError(str(reply))
+    return reply.get("result")
 
 
 def _supervise_lock_held(ws: WorkspacePaths) -> bool:
