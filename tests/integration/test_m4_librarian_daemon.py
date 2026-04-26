@@ -151,6 +151,39 @@ def test_apply_command_at_runtime_returns_applied(tmp_path: Path) -> None:
         assert reply["event_id"] == body["event_id"]
 
 
+def test_apply_missing_event_path_marks_corruption(tmp_path: Path) -> None:
+    _init_workspace(tmp_path)
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=15.0)
+
+        _publish_user_event(
+            tmp_path, "add-node", "--label", "def:vanish", "--kind", "definition",
+            "--statement", "Define vanish.", "--actor", "user:alice",
+        )
+        events = sorted((tmp_path / "events").rglob("*.json"))
+        assert events
+        body = json.loads(events[-1].read_text(encoding="utf-8"))
+        vanished = events[-1]
+        vanished.unlink()
+
+        lp.send({"cmd": "APPLY", "event_id": body["event_id"], "path": str(vanished)})
+        reply = lp.recv(timeout=15.0)
+        assert reply["ok"] is True
+        assert reply["reply"] == "CORRUPTION"
+        assert reply["reason"] == "missing_event_file"
+
+        hb = None
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            hb = read_heartbeat(tmp_path / "runtime" / "state" / "librarian.json")
+            if hb is not None and hb.get("status") == "degraded":
+                break
+            time.sleep(0.05)
+        assert hb is not None
+        assert hb["status"] == "degraded"
+        assert "vanished" in hb["last_error"].lower()
+
+
 def test_apply_command_renders_node_md(tmp_path: Path) -> None:
     _init_workspace(tmp_path)
     with librarian(tmp_path) as lp:

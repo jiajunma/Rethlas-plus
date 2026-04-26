@@ -391,8 +391,9 @@ class LibrarianDaemon:
         try:
             raw, body = read_event(path)
         except FileNotFoundError:
-            self.counters.last_error = f"event file vanished: {path}"
-            return ("apply_failed", "missing", str(path))
+            self.counters.last_error = f"corruption: canonical event vanished: {path}"
+            self.status = STATUS_DEGRADED
+            return ("corruption", "missing_event_file", str(path))
         except ValueError as exc:
             self.counters.last_error = f"malformed event {path}: {exc}"
             self.status = STATUS_DEGRADED
