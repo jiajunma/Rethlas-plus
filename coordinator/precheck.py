@@ -92,18 +92,18 @@ def precheck_generator(
     ``(None, failure)`` with a structured reason.
     """
     if cand.pass_count != -1:
-        return None, _fail(cand, "kind", "pool_mismatch", f"pass_count={cand.pass_count} (need -1)")
+        return None, _fail(cand, "generator", "pool_mismatch", f"pass_count={cand.pass_count} (need -1)")
     if cand.target in in_flight_targets:
-        return None, _fail(cand, "kind", "in_flight", "another job already targets this label")
+        return None, _fail(cand, "generator", "in_flight", "another job already targets this label")
     if not cand.deps_ready:
         missing = [k for k, v in cand.dep_statement_hashes.items() if not v]
-        return None, _fail(cand, "kind", "deps_not_ready", f"missing deps: {missing}")
+        return None, _fail(cand, "generator", "deps_not_ready", f"missing deps: {missing}")
     if (
         expected_hash_for_drift_check is not None
         and expected_hash_for_drift_check != cand.verification_hash
     ):
         return None, _fail(
-            cand, "kind", "hash_drift",
+            cand, "generator", "hash_drift",
             f"expected={expected_hash_for_drift_check[:12]} actual={cand.verification_hash[:12]}",
         )
 
@@ -111,12 +111,12 @@ def precheck_generator(
     h_rejected = cand.last_rejected_verification_hash if mode == "repair" else ""
     if mode == "repair" and not h_rejected:
         return None, _fail(
-            cand, "kind", "missing_h_rejected",
+            cand, "generator", "missing_h_rejected",
             "repair mode but no rejected verification_hash recorded",
         )
     if mode == "repair" and h_rejected != cand.verification_hash:
         return None, _fail(
-            cand, "kind", "h_rejected_stale",
+            cand, "generator", "h_rejected_stale",
             f"H_rejected={h_rejected[:12]} != current vh={cand.verification_hash[:12]}",
         )
     ctx = DispatchContext(
@@ -148,11 +148,11 @@ def precheck_verifier(
     that the candidate is in the verifier band and not already in flight.
     """
     if cand.pass_count < 0:
-        return None, _fail(cand, "kind", "pool_mismatch", f"pass_count={cand.pass_count} (need >= 0)")
+        return None, _fail(cand, "verifier", "pool_mismatch", f"pass_count={cand.pass_count} (need >= 0)")
     if cand.target in in_flight_targets:
-        return None, _fail(cand, "kind", "in_flight", "another job already targets this label")
+        return None, _fail(cand, "verifier", "in_flight", "another job already targets this label")
     if not cand.deps_ready:
-        return None, _fail(cand, "kind", "deps_not_ready", "deps not all at pass_count>=1")
+        return None, _fail(cand, "verifier", "deps_not_ready", "deps not all at pass_count>=1")
     if not cand.verifier_deps_strictly_ahead:
         lagging = [
             f"{dep}={cand.dep_pass_counts.get(dep, -1)}"
@@ -161,7 +161,7 @@ def precheck_verifier(
         ]
         return None, _fail(
             cand,
-            "kind",
+            "verifier",
             "deps_not_strictly_ahead",
             "deps not strictly ahead: " + ", ".join(lagging),
         )
@@ -181,8 +181,8 @@ def precheck_verifier(
     return ctx, None
 
 
-def _fail(cand: CandidateInput, kind_label: str, reason: str, detail: str) -> PrecheckFailure:
-    return PrecheckFailure(target=cand.target, kind=kind_label, reason=reason, detail=detail)
+def _fail(cand: CandidateInput, kind: str, reason: str, detail: str) -> PrecheckFailure:
+    return PrecheckFailure(target=cand.target, kind=kind, reason=reason, detail=detail)
 
 
 __all__ = [

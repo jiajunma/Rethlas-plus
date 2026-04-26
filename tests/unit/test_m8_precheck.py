@@ -126,3 +126,18 @@ def test_verifier_rejects_when_dep_not_strictly_ahead() -> None:
     assert ctx is None
     assert fail is not None
     assert fail.reason == "deps_not_strictly_ahead"
+
+
+def test_failure_kind_field_disambiguates_pool() -> None:
+    """``PrecheckFailure.kind`` must say which pool produced the failure
+    (``generator`` / ``verifier``), so log readers and operators can tell
+    them apart without reasoning about call-site context."""
+    gen_cand = _gen_cand(pass_count=0)  # wrong pool for generator
+    _, gen_fail = precheck_generator(gen_cand, in_flight_targets=())
+    assert gen_fail is not None
+    assert gen_fail.kind == "generator", f"got {gen_fail.kind!r}"
+
+    ver_cand = _gen_cand(pass_count=-1)  # wrong pool for verifier
+    _, ver_fail = precheck_verifier(ver_cand, in_flight_targets=())
+    assert ver_fail is not None
+    assert ver_fail.kind == "verifier", f"got {ver_fail.kind!r}"
