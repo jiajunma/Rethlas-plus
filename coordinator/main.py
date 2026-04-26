@@ -33,6 +33,7 @@ import kuzu
 
 from cli.workspace import WorkspacePaths, workspace_paths
 from common.config.loader import RethlasConfig, load_config
+from common.kb.types import PROOF_REQUIRING_KINDS
 from common.runtime.jobs import (
     JobRecord,
     STATUS_APPLIED,
@@ -586,7 +587,8 @@ def _decide_idle_reason(
     if not unfinished:
         return IDLE_ALL_DONE, ""
     # Why couldn't we dispatch? Prefer generator-blocked > verifier-blocked > user.
-    gen_candidates = [c for c in nodes if c.pass_count == -1 and c.target_kind in {"lemma", "theorem", "proposition"}]
+    proof_kinds = {k.value for k in PROOF_REQUIRING_KINDS}
+    gen_candidates = [c for c in nodes if c.pass_count == -1 and c.target_kind in proof_kinds]
     if gen_candidates:
         not_ready = [c for c in gen_candidates if not c.deps_ready]
         if not_ready:
