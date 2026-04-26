@@ -22,6 +22,7 @@ def test_generator_codex_config_caps_recursive_depth() -> None:
 
 def test_verifier_codex_config_has_no_mcp_server() -> None:
     cfg = _load_toml(ROOT / "agents" / "verification" / ".codex" / "config.toml")
+    assert cfg["features"]["multi_agent"] is True
     assert "mcp_servers" not in cfg
 
 

@@ -2,6 +2,9 @@ model = "gpt-5.4"
 model_reasoning_effort = "xhigh"
 personality = "pragmatic"
 
+[features]
+multi_agent = true
+
 [notice]
 hide_full_access_warning = true
 
@@ -9,11 +12,3 @@ hide_full_access_warning = true
 "gpt-5.2-codex" = "gpt-5.3-codex"
 "gpt-5.2" = "gpt-5.3-codex"
 "gpt-5.3-codex" = "gpt-5.4"
-
-
-# verification-agent-mcp
-[mcp_servers.verification_agent]
-command = "python3"
-args = ["./mcp/server.py"]
-cwd = "./"
-tool_timeout_sec = 3600
