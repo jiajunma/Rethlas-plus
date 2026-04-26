@@ -91,6 +91,37 @@ def test_overview_joins_runtime_and_kb(tmp_path: Path) -> None:
     assert overview["kb"]["theorem_count"] == 1
 
 
+def test_overview_ignores_terminal_jobs_in_inflight_count(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _seed_kb(tmp_path)
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+
+    rec = JobRecord(
+        job_id="ver-20260424T100420.111-deadbeefdeadbeef",
+        kind="verifier", target="thm:t", mode="single",
+        dispatch_hash="ab" * 32,
+        pid=12345, pgid=12345,
+        started_at="2026-04-24T10:04:20.111Z",
+        updated_at="2026-04-24T10:04:25.300Z",
+        status="applied",
+        log_path=str(tmp_path / "runtime" / "logs" / "x.codex.log"),
+    )
+    write_job_file(
+        tmp_path / "runtime" / "jobs" / f"{rec.job_id}.json", rec
+    )
+
+    hb = CoordinatorHeartbeat(
+        pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+        status=STATUS_RUNNING, loop_seq=1,
+    )
+    write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+
+    core = DashboardCore(tmp_path)
+    overview = core.overview()
+    assert overview["in_flight_target_count"] == 0
+
+
 def test_theorems_status_vocabulary(tmp_path: Path) -> None:
     """Every node-status keyword in the §M9 vocabulary is reachable."""
     _init_ws(tmp_path)
