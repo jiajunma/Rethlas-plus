@@ -39,7 +39,8 @@ from typing import Any, Iterable
 from common.events.filenames import FilenameError, parse_filename
 from common.runtime.jobs import TERMINAL_STATUSES, list_jobs
 from coordinator.heartbeat import read_heartbeat as read_coordinator_hb
-from dashboard.kuzu_reader import (
+from dashboard.kb_client import (
+    KBUnavailable,
     NodeRow,
     RebuildInProgress,
     dependents_of,
@@ -410,6 +411,8 @@ class DashboardCore:
             nodes = list_nodes(self.ws_root)
         except RebuildInProgress:
             nodes = []
+        except KBUnavailable:
+            nodes = []
         for n in nodes:
             if n.kind in {"definition", "external_theorem"} and n.pass_count == -1:
                 items.append(
@@ -443,6 +446,8 @@ class DashboardCore:
             apply_failed = list_applied_failed(self.ws_root)
         except RebuildInProgress:
             apply_failed = []
+        except KBUnavailable:
+            apply_failed = []
         for ev in apply_failed[:20]:
             reason = (ev.get("reason") or "").strip()
             if reason in _NORMAL_APPLY_FAILED_ATTENTION_REASONS:
@@ -464,7 +469,10 @@ class DashboardCore:
         drift = _read_jsonl_tail(
             self.state_dir / "drift_alerts.jsonl", limit=200
         )
-        apply_failed = list_applied_failed(self.ws_root)
+        try:
+            apply_failed = list_applied_failed(self.ws_root)
+        except KBUnavailable:
+            apply_failed = []
         return {
             "rejected_writes": rejected_writes,
             "apply_failed": apply_failed,
@@ -728,10 +736,10 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                         return self._send_json(200, core.overview())
                     if path == "/api/theorems":
                         return self._send_json(200, core.theorems())
-                    if path == "/api/rejected":
-                        return self._send_json(200, core.rejected())
                     if path == "/api/attention":
                         return self._send_json(200, core.attention())
+                    if path == "/api/rejected":
+                        return self._send_json(200, core.rejected())
                     if path.startswith("/api/node/"):
                         label = urllib.parse.unquote(path[len("/api/node/"):])
                         if not label:
@@ -742,6 +750,14 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                         return self._send_json(200, detail)
                 except RebuildInProgress:
                     return self._send_503_rebuild()
+                except KBUnavailable as exc:
+                    if path in ("/api/attention", "/api/rejected"):
+                        return self._send_json(200, core.attention() if path == "/api/attention" else core.rejected())
+                    return self._send_json(
+                        503,
+                        {"status": "librarian_unavailable", "error": str(exc)},
+                        extra_headers={"Retry-After": str(_RETRY_AFTER_S)},
+                    )
 
             return self._send_404()
 

@@ -59,6 +59,7 @@ from librarian.heartbeat import (
 )
 from librarian.ipc import JsonLineChannel, Message, ProtocolError
 from librarian.projector import Projector, ProjectionRejection
+from librarian.query_server import LibrarianQueryServer, QueryServerError
 from librarian.renderer import node_filename, write_node_file
 
 
@@ -142,6 +143,8 @@ class LibrarianDaemon:
 
         self.backend: KuzuBackend | None = None
         self.projector: Projector | None = None
+        self._query_server: LibrarianQueryServer | None = None
+        self._kb_lock = threading.RLock()
 
         self._lock_fd: int | None = None
 
@@ -157,8 +160,9 @@ class LibrarianDaemon:
         last_applied = self.counters.last_applied
         if self.backend is not None:
             try:
-                decided, applied_total, failed_total = self.backend.applied_event_counts()
-                last_applied = self.backend.last_applied_event_id() or last_applied
+                with self._kb_lock:
+                    decided, applied_total, failed_total = self.backend.applied_event_counts()
+                    last_applied = self.backend.last_applied_event_id() or last_applied
             except Exception:
                 pass
         backlog = max(0, len(files) - decided)
@@ -235,6 +239,10 @@ class LibrarianDaemon:
         try:
             self.backend = KuzuBackend(self.ws.dag_kz)
             self.projector = Projector(self.backend)
+            self._query_server = LibrarianQueryServer(
+                self.ws.librarian_socket, self._dispatch_query
+            )
+            self._query_server.start()
 
             # Detect interrupted rebuild and force a clean rebuild before
             # accepting any normal APPLY commands.
@@ -273,6 +281,8 @@ class LibrarianDaemon:
                 if self.backend is not None:
                     self.backend.close()
             finally:
+                if self._query_server is not None:
+                    self._query_server.stop()
                 self._release_runtime_lock()
         return 0
 
@@ -284,7 +294,8 @@ class LibrarianDaemon:
         ``rebuild_in_progress.flag`` is found (interrupted rebuild)."""
         assert self.backend is not None
         # Wipe Kuzu projection + nodes/ render.
-        self.backend.wipe()
+        with self._kb_lock:
+            self.backend.wipe()
         if self.ws.nodes_dir.is_dir():
             for child in self.ws.nodes_dir.iterdir():
                 try:
@@ -330,17 +341,18 @@ class LibrarianDaemon:
         self.ws.nodes_dir.mkdir(parents=True, exist_ok=True)
 
         active_files: set[str] = set()
-        for label in self.backend.node_labels():
-            row = self.backend.node_by_label(label)
-            if row is None or row.pass_count < 1:
-                continue
-            node = _row_to_node(row, deps=self.backend.dependencies_of(label))
-            try:
-                fname = node_filename(node)
-            except ValueError:
-                continue
-            written = write_node_file(self.ws.nodes_dir, node)
-            active_files.add(written.name)
+        with self._kb_lock:
+            for label in self.backend.node_labels():
+                row = self.backend.node_by_label(label)
+                if row is None or row.pass_count < 1:
+                    continue
+                node = _row_to_node(row, deps=self.backend.dependencies_of(label))
+                try:
+                    fname = node_filename(node)
+                except ValueError:
+                    continue
+                written = write_node_file(self.ws.nodes_dir, node)
+                active_files.add(written.name)
 
         for entry in self.ws.nodes_dir.iterdir():
             if not entry.is_file():
@@ -367,15 +379,16 @@ class LibrarianDaemon:
         """Re-render every ``pass_count >= 1`` node into ``nodes/``."""
         assert self.backend is not None
         self.ws.nodes_dir.mkdir(parents=True, exist_ok=True)
-        for label in self.backend.node_labels():
-            row = self.backend.node_by_label(label)
-            if row is None or row.pass_count < 1:
-                continue
-            node = _row_to_node(row, deps=self.backend.dependencies_of(label))
-            try:
-                write_node_file(self.ws.nodes_dir, node)
-            except ValueError:
-                continue
+        with self._kb_lock:
+            for label in self.backend.node_labels():
+                row = self.backend.node_by_label(label)
+                if row is None or row.pass_count < 1:
+                    continue
+                node = _row_to_node(row, deps=self.backend.dependencies_of(label))
+                try:
+                    write_node_file(self.ws.nodes_dir, node)
+                except ValueError:
+                    continue
 
     # ------------------------------------------------------------------
     # APPLY processing
@@ -401,27 +414,28 @@ class LibrarianDaemon:
 
         event_id = body.get("event_id", "")
         self.counters.last_seen = event_id
-        try:
-            outcome = self.projector.apply(body, raw)
-        except ProjectionRejection as rej:
-            # Only ``workspace_corruption`` bubbles out of projector — all
-            # routine rejection reasons are already converted to apply_failed
-            # rows inside ``Projector.apply``. Surface as degraded.
-            self.counters.last_error = f"corruption: {rej.detail}"
-            self.status = STATUS_DEGRADED
-            return ("corruption", rej.reason, rej.detail)
-        except Exception as exc:
-            self.counters.last_error = f"apply error: {exc}"
-            self.status = STATUS_DEGRADED
-            return ("corruption", "apply_exception", str(exc))
+        with self._kb_lock:
+            try:
+                outcome = self.projector.apply(body, raw)
+            except ProjectionRejection as rej:
+                # Only ``workspace_corruption`` bubbles out of projector — all
+                # routine rejection reasons are already converted to apply_failed
+                # rows inside ``Projector.apply``. Surface as degraded.
+                self.counters.last_error = f"corruption: {rej.detail}"
+                self.status = STATUS_DEGRADED
+                return ("corruption", rej.reason, rej.detail)
+            except Exception as exc:
+                self.counters.last_error = f"apply error: {exc}"
+                self.status = STATUS_DEGRADED
+                return ("corruption", "apply_exception", str(exc))
 
-        if outcome.status.value == "applied":
-            self.counters.applied += 1
-            self.counters.last_applied = event_id
-            if render_nodes:
-                self._render_for_event(body)
-        else:
-            self.counters.failed += 1
+            if outcome.status.value == "applied":
+                self.counters.applied += 1
+                self.counters.last_applied = event_id
+                if render_nodes:
+                    self._render_for_event(body)
+            else:
+                self.counters.failed += 1
 
         return (outcome.status.value, outcome.reason, outcome.detail)
 
@@ -561,6 +575,42 @@ class LibrarianDaemon:
             self.channel.send(
                 {"ok": True, "reply": "REBUILD_FAILED", "error": str(exc)}
             )
+
+    # ------------------------------------------------------------------
+    # Query server
+    # ------------------------------------------------------------------
+    def _dispatch_query(self, payload: dict[str, Any]) -> Any:
+        cmd = payload.get("cmd")
+        if cmd != "QUERY":
+            raise QueryServerError(f"unknown cmd {cmd!r}")
+        op = payload.get("op")
+        args = payload.get("args", {})
+        if not isinstance(op, str):
+            raise QueryServerError("QUERY requires string op")
+        if not isinstance(args, dict):
+            raise QueryServerError("QUERY args must be an object")
+        if self.backend is None:
+            raise QueryServerError("backend_unavailable")
+        with self._kb_lock:
+            if op == "list_nodes":
+                return self.backend.dashboard_node_rows()
+            if op == "list_applied_failed":
+                return self.backend.applied_failed_rows()
+            if op == "dependents_of":
+                label = args.get("label")
+                if not isinstance(label, str):
+                    raise QueryServerError("dependents_of requires label")
+                return self.backend.dependents_of(label)
+            if op == "list_applied_since":
+                watermark = args.get("watermark", ["", ""])
+                if (
+                    not isinstance(watermark, list)
+                    or len(watermark) != 2
+                    or not all(isinstance(x, str) for x in watermark)
+                ):
+                    raise QueryServerError("list_applied_since requires [applied_at, event_id] watermark")
+                return self.backend.applied_since_rows((watermark[0], watermark[1]))
+        raise QueryServerError(f"unknown query op {op!r}")
 
 
 # ---------------------------------------------------------------------------

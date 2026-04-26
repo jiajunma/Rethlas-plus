@@ -240,6 +240,90 @@ class KuzuBackend:
             return ""
         return res.get_next()[0] or ""
 
+    def dashboard_node_rows(self) -> list[dict[str, Any]]:
+        res = self._conn.execute(
+            """
+            MATCH (n:Node)
+            OPTIONAL MATCH (n)-[:DependsOn]->(d:Node)
+            RETURN n.label, n.kind, n.statement, n.proof,
+                   n.pass_count, n.repair_count,
+                   n.statement_hash, n.verification_hash,
+                   n.repair_hint, n.verification_report,
+                   collect(d.label)
+            """
+        )
+        out: list[dict[str, Any]] = []
+        while res.has_next():
+            r = res.get_next()
+            out.append(
+                {
+                    "label": r[0],
+                    "kind": r[1],
+                    "statement": r[2] or "",
+                    "proof": r[3] or "",
+                    "pass_count": int(r[4]) if r[4] is not None else -1,
+                    "repair_count": int(r[5]) if r[5] is not None else 0,
+                    "statement_hash": r[6] or "",
+                    "verification_hash": r[7] or "",
+                    "repair_hint": r[8] or "",
+                    "verification_report": r[9] or "",
+                    "deps": [d for d in (r[10] or []) if d is not None],
+                }
+            )
+        return out
+
+    def applied_failed_rows(self) -> list[dict[str, Any]]:
+        res = self._conn.execute(
+            "MATCH (a:AppliedEvent) WHERE a.status = 'apply_failed' "
+            "RETURN a.event_id, a.reason, a.detail, a.applied_at, a.target_label "
+            "ORDER BY a.applied_at DESC, a.event_id DESC"
+        )
+        out: list[dict[str, Any]] = []
+        while res.has_next():
+            r = res.get_next()
+            out.append(
+                {
+                    "event_id": r[0],
+                    "reason": r[1] or "",
+                    "detail": r[2] or "",
+                    "applied_at": r[3],
+                    "target": r[4] or "",
+                }
+            )
+        return out
+
+    def applied_since_rows(self, watermark: tuple[str, str]) -> list[dict[str, Any]]:
+        applied_at_wm, event_id_wm = watermark
+        if applied_at_wm:
+            res = self._conn.execute(
+                "MATCH (a:AppliedEvent) "
+                "WHERE a.applied_at > $ts "
+                "   OR (a.applied_at = $ts AND a.event_id > $eid) "
+                "RETURN a.event_id, a.status, a.reason, a.detail, a.applied_at, "
+                "a.target_label ORDER BY a.applied_at ASC, a.event_id ASC",
+                {"ts": applied_at_wm, "eid": event_id_wm},
+            )
+        else:
+            res = self._conn.execute(
+                "MATCH (a:AppliedEvent) "
+                "RETURN a.event_id, a.status, a.reason, a.detail, a.applied_at, "
+                "a.target_label ORDER BY a.applied_at ASC, a.event_id ASC"
+            )
+        out: list[dict[str, Any]] = []
+        while res.has_next():
+            r = res.get_next()
+            out.append(
+                {
+                    "event_id": r[0],
+                    "status": r[1],
+                    "reason": r[2] or "",
+                    "detail": r[3] or "",
+                    "applied_at": r[4],
+                    "target": r[5] or "",
+                }
+            )
+        return out
+
     # ---- Node helpers ---------------------------------------------
     def node_by_label(self, label: str) -> RawNodeRow | None:
         res = self._conn.execute(

@@ -176,6 +176,28 @@ def test_rebuild_in_progress_returns_503(tmp_path: Path) -> None:
         assert code == 200
 
 
+def test_overview_endpoint_works_while_librarian_alive(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    subprocess.run(
+        [PYTHON, "-m", "cli.main", "--workspace", str(tmp_path), "add-node",
+         "--label", "def:x", "--kind", "definition",
+         "--statement", "Define X.", "--actor", "user:alice"],
+        capture_output=True, text=True, check=False,
+    )
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        hb = CoordinatorHeartbeat(
+            pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+            status=STATUS_RUNNING, loop_seq=1,
+        )
+        write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+        with _ServerCtx(tmp_path) as ctx:
+            code, _hdrs, body = ctx.get("/api/overview")
+            assert code == 200
+            parsed = json.loads(body)
+            assert parsed["kb"]["node_count"] == 1
+
+
 def test_events_limit_validation(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     with _ServerCtx(tmp_path) as ctx:
@@ -335,12 +357,14 @@ def test_attention_endpoint_lists_user_blocked(tmp_path: Path) -> None:
         del conn
         del db
 
-    with _ServerCtx(tmp_path) as ctx:
-        code, _hdrs, body = ctx.get("/api/attention")
-        assert code == 200
-        parsed = json.loads(body)
-        kinds = [i["kind"] for i in parsed["items"]]
-        assert "user_blocked" in kinds
+    with _librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        with _ServerCtx(tmp_path) as ctx:
+            code, _hdrs, body = ctx.get("/api/attention")
+            assert code == 200
+            parsed = json.loads(body)
+            kinds = [i["kind"] for i in parsed["items"]]
+            assert "user_blocked" in kinds
 
 
 def test_malformed_runtime_json_does_not_crash(tmp_path: Path) -> None:

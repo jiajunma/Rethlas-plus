@@ -30,10 +30,6 @@ from librarian.heartbeat import (
     LibrarianHeartbeat,
     write_heartbeat as write_librarian_hb,
 )
-from common.kb.kuzu_backend import KuzuBackend
-from common.kb.types import ApplyOutcome
-
-
 PYTHON = sys.executable
 _ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 
@@ -144,11 +140,10 @@ def test_applied_event_envelope_polls_kuzu(tmp_path: Path) -> None:
     from librarian.heartbeat import PHASE_READY
     with _librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-
-    envs = watcher.tick()
-    applied = [e for e in envs if e["type"] == "applied_event"]
-    assert applied, [e["type"] for e in envs]
-    assert applied[0]["payload"]["status"] == "applied"
+        envs = watcher.tick()
+        applied = [e for e in envs if e["type"] == "applied_event"]
+        assert applied, [e["type"] for e in envs]
+        assert applied[0]["payload"]["status"] == "applied"
 
 
 def test_applied_event_watermark_uses_event_id_tiebreak(tmp_path: Path) -> None:
@@ -160,28 +155,39 @@ def test_applied_event_watermark_uses_event_id_tiebreak(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     broker = SseBroker()
     watcher = StateWatcher(tmp_path, broker, poll_interval_s=10.0)
-    backend = KuzuBackend(tmp_path / "knowledge_base" / "dag.kz")
-    try:
-        ts = "2026-04-24T12:00:00.000Z"
-        backend.record_applied_event(
-            event_id="20260424T120000.000-0001-aaaaaaaaaaaaaaaa",
-            status=ApplyOutcome.APPLIED,
-            event_sha256="aa" * 32,
-            applied_at=ts,
-        )
-        watcher.tick(prime=True)
-        backend.record_applied_event(
-            event_id="20260424T120000.000-0002-bbbbbbbbbbbbbbbb",
-            status=ApplyOutcome.APPLY_FAILED,
-            event_sha256="bb" * 32,
-            reason="label_conflict",
-            detail="dup",
-            applied_at=ts,
-        )
-    finally:
-        backend.close()
+    rows = {
+        ("", ""): [
+            {
+                "event_id": "20260424T120000.000-0001-aaaaaaaaaaaaaaaa",
+                "status": "applied",
+                "reason": "",
+                "detail": "",
+                "applied_at": "2026-04-24T12:00:00.000Z",
+                "target": "def:x",
+            }
+        ],
+        ("2026-04-24T12:00:00.000Z", "20260424T120000.000-0001-aaaaaaaaaaaaaaaa"): [
+            {
+                "event_id": "20260424T120000.000-0002-bbbbbbbbbbbbbbbb",
+                "status": "apply_failed",
+                "reason": "label_conflict",
+                "detail": "dup",
+                "applied_at": "2026-04-24T12:00:00.000Z",
+                "target": "def:x",
+            }
+        ],
+    }
 
-    envs = watcher.tick()
+    def _fake_list_applied_since(_ws, watermark):
+        return rows.get(tuple(watermark), [])
+
+    import dashboard.state_watcher as sw
+    from unittest.mock import patch
+
+    with patch.object(sw, "list_applied_since", side_effect=_fake_list_applied_since):
+        watcher.tick(prime=True)
+        envs = watcher.tick()
+
     applied = [e for e in envs if e["type"] == "applied_event"]
     assert len(applied) == 1
     assert applied[0]["payload"]["event_id"] == "20260424T120000.000-0002-bbbbbbbbbbbbbbbb"

@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dashboard.kuzu_reader import RebuildInProgress, list_applied_since
+from dashboard.kb_client import KBUnavailable, RebuildInProgress, list_applied_since
 from dashboard.server import SseBroker
 
 
@@ -323,6 +323,8 @@ class StateWatcher:
         try:
             rows = list_applied_since(self.ws_root, self._applied_watermark)
         except RebuildInProgress:
+            return out
+        except KBUnavailable:
             return out
         except Exception as exc:
             log.debug("applied tail failed: %s", exc)

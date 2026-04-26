@@ -74,29 +74,41 @@ def test_overview_joins_runtime_and_kb(tmp_path: Path) -> None:
     _seed_kb(tmp_path)
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        # Coordinator heartbeat — fresh ts.
+        hb = CoordinatorHeartbeat(
+            pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+            status=STATUS_RUNNING, loop_seq=42,
+        )
+        write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
 
-    # Coordinator heartbeat — fresh ts.
-    hb = CoordinatorHeartbeat(
-        pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
-        status=STATUS_RUNNING, loop_seq=42,
-    )
-    write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+        core = DashboardCore(tmp_path)
+        overview = core.overview()
+        assert overview["coordinator"]["liveness"] == "healthy"
+        assert overview["coordinator"]["data"]["loop_seq"] == 42
+        assert overview["librarian"]["data"]["startup_phase"] == PHASE_READY
+        assert overview["kb"]["node_count"] == 2
+        assert overview["kb"]["theorem_count"] == 1
 
-    core = DashboardCore(tmp_path)
-    overview = core.overview()
-    assert overview["coordinator"]["liveness"] == "healthy"
-    assert overview["coordinator"]["data"]["loop_seq"] == 42
-    assert overview["librarian"]["data"]["startup_phase"] == PHASE_READY
-    assert overview["kb"]["node_count"] == 2
-    assert overview["kb"]["theorem_count"] == 1
+
+def test_overview_works_while_librarian_process_is_alive(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _seed_kb(tmp_path)
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        hb = CoordinatorHeartbeat(
+            pid=1, started_at=utc_now_iso(), updated_at=utc_now_iso(),
+            status=STATUS_RUNNING, loop_seq=1,
+        )
+        write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+        core = DashboardCore(tmp_path)
+        overview = core.overview()
+        assert overview["kb"]["node_count"] == 2
+        assert overview["librarian"]["data"]["startup_phase"] == PHASE_READY
 
 
 def test_overview_ignores_terminal_jobs_in_inflight_count(tmp_path: Path) -> None:
     _init_ws(tmp_path)
     _seed_kb(tmp_path)
-    with librarian(tmp_path) as lp:
-        lp.wait_for_phase(PHASE_READY, timeout=20.0)
-
     rec = JobRecord(
         job_id="ver-20260424T100420.111-deadbeefdeadbeef",
         kind="verifier", target="thm:t", mode="single",
@@ -116,10 +128,11 @@ def test_overview_ignores_terminal_jobs_in_inflight_count(tmp_path: Path) -> Non
         status=STATUS_RUNNING, loop_seq=1,
     )
     write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
-
-    core = DashboardCore(tmp_path)
-    overview = core.overview()
-    assert overview["in_flight_target_count"] == 0
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        core = DashboardCore(tmp_path)
+        overview = core.overview()
+        assert overview["in_flight_target_count"] == 0
 
 
 def test_theorems_status_vocabulary(tmp_path: Path) -> None:
@@ -158,11 +171,13 @@ def test_theorems_status_vocabulary(tmp_path: Path) -> None:
         del conn
         del db
 
-    core = DashboardCore(tmp_path, desired_pass_count=3)
-    theorems = core.theorems()
-    by_label = {t["label"]: t for t in theorems["theorems"]}
-    assert by_label["thm:t1"]["status"] == STATUS_NEEDS_VERIFICATION
-    assert by_label["thm:t2"]["status"] == STATUS_DONE
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        core = DashboardCore(tmp_path, desired_pass_count=3)
+        theorems = core.theorems()
+        by_label = {t["label"]: t for t in theorems["theorems"]}
+        assert by_label["thm:t1"]["status"] == STATUS_NEEDS_VERIFICATION
+        assert by_label["thm:t2"]["status"] == STATUS_DONE
 
 
 def test_node_detail_returns_full_record(tmp_path: Path) -> None:
@@ -170,12 +185,12 @@ def test_node_detail_returns_full_record(tmp_path: Path) -> None:
     _seed_kb(tmp_path)
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    core = DashboardCore(tmp_path)
-    detail = core.node_detail("def:x")
-    assert detail is not None
-    assert detail["label"] == "def:x"
-    assert detail["kind"] == "definition"
-    assert detail["status"] in {STATUS_NEEDS_VERIFICATION}
+        core = DashboardCore(tmp_path)
+        detail = core.node_detail("def:x")
+        assert detail is not None
+        assert detail["label"] == "def:x"
+        assert detail["kind"] == "definition"
+        assert detail["status"] in {STATUS_NEEDS_VERIFICATION}
 
 
 def test_node_detail_includes_dependents(tmp_path: Path) -> None:
@@ -184,14 +199,14 @@ def test_node_detail_includes_dependents(tmp_path: Path) -> None:
     _seed_kb(tmp_path)
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    core = DashboardCore(tmp_path)
-    detail = core.node_detail("def:x")
-    assert detail is not None
-    # thm:t depends on def:x, so def:x must list thm:t as a dependent.
-    assert "thm:t" in detail["dependents"]
-    # And recent_events must surface the user.node_added events.
-    types = {ev["type"] for ev in detail["recent_events"]}
-    assert "user.node_added" in types
+        core = DashboardCore(tmp_path)
+        detail = core.node_detail("def:x")
+        assert detail is not None
+        # thm:t depends on def:x, so def:x must list thm:t as a dependent.
+        assert "thm:t" in detail["dependents"]
+        # And recent_events must surface the user.node_added events.
+        types = {ev["type"] for ev in detail["recent_events"]}
+        assert "user.node_added" in types
 
 
 def test_node_detail_active_job_includes_log_age_color(tmp_path: Path) -> None:
@@ -221,18 +236,18 @@ def test_node_detail_active_job_includes_log_age_color(tmp_path: Path) -> None:
     )
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    core = DashboardCore(tmp_path)
-    detail = core.node_detail("thm:t")
-    assert detail is not None
-    aj = detail["active_job"]
-    assert aj is not None
-    assert "codex_log_age_color" in aj
-    # Log was just written → green band.
-    assert aj["codex_log_age_color"] == "green"
-    assert aj["codex_log_age_seconds"] is not None
-    # §7.4 F4 wrapper-heartbeat freshness must surface here too.
-    assert "wrapper_heartbeat_age_seconds" in aj
-    assert aj["wrapper_heartbeat_age_seconds"] is not None
+        core = DashboardCore(tmp_path)
+        detail = core.node_detail("thm:t")
+        assert detail is not None
+        aj = detail["active_job"]
+        assert aj is not None
+        assert "codex_log_age_color" in aj
+        # Log was just written → green band.
+        assert aj["codex_log_age_color"] == "green"
+        assert aj["codex_log_age_seconds"] is not None
+        # §7.4 F4 wrapper-heartbeat freshness must surface here too.
+        assert "wrapper_heartbeat_age_seconds" in aj
+        assert aj["wrapper_heartbeat_age_seconds"] is not None
 
 
 def test_node_detail_unknown_returns_none(tmp_path: Path) -> None:
@@ -240,8 +255,8 @@ def test_node_detail_unknown_returns_none(tmp_path: Path) -> None:
     _seed_kb(tmp_path)
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    core = DashboardCore(tmp_path)
-    assert core.node_detail("thm:nope") is None
+        core = DashboardCore(tmp_path)
+        assert core.node_detail("thm:nope") is None
 
 
 def test_active_lists_runtime_jobs(tmp_path: Path) -> None:
@@ -304,10 +319,10 @@ def test_node_detail_ignores_terminal_job_files(tmp_path: Path) -> None:
     )
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    core = DashboardCore(tmp_path)
-    detail = core.node_detail("thm:t")
-    assert detail is not None
-    assert detail["active_job"] is None
+        core = DashboardCore(tmp_path)
+        detail = core.node_detail("thm:t")
+        assert detail is not None
+        assert detail["active_job"] is None
 
 
 def test_rejected_merges_three_sources(tmp_path: Path) -> None:
@@ -324,12 +339,12 @@ def test_rejected_merges_three_sources(tmp_path: Path) -> None:
     # No KB: librarian still required for AppliedEvent (apply_failed) source.
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    core = DashboardCore(tmp_path)
-    rej = core.rejected()
-    assert rej["rejected_writes"][0]["reason"] == "schema_invalid"
-    assert rej["drift_alerts"][0]["kind"] == "hash_drift"
-    # apply_failed source comes back as a list (possibly empty).
-    assert isinstance(rej["apply_failed"], list)
+        core = DashboardCore(tmp_path)
+        rej = core.rejected()
+        assert rej["rejected_writes"][0]["reason"] == "schema_invalid"
+        assert rej["drift_alerts"][0]["kind"] == "hash_drift"
+        # apply_failed source comes back as a list (possibly empty).
+        assert isinstance(rej["apply_failed"], list)
 
 
 def test_rebuild_in_progress_raises(tmp_path: Path) -> None:

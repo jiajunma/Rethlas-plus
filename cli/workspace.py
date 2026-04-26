@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,6 +108,11 @@ class WorkspacePaths:
     @property
     def rejected_writes_jsonl(self) -> Path:
         return self.runtime_state / "rejected_writes.jsonl"
+
+    @property
+    def librarian_socket(self) -> Path:
+        digest = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()[:16]
+        return Path("/tmp") / f"rethlas-lib-{digest}.sock"
 
 
 def resolve_workspace_root(explicit: str | None) -> Path:
