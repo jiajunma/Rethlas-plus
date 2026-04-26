@@ -64,7 +64,7 @@ Append one record per plan to `subgoals`:
     "key_failures": ["..."],
     "search_results": ["..."]
   },
-  "status": "proposed|screening|screened|selected|failed|solved",
+  "status": "proposed|screening|screened|solved|failed",
   "branch_id": "optional"
 }
 ```

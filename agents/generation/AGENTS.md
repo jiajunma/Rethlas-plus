@@ -85,6 +85,53 @@ not acceptance criteria.
   `$recursive-proving`, and `$identify-key-failures` to build or repair the
   proposed node batch.
 
+### Typical run
+
+The skills compose into this loop. Skip steps that aren't useful for the
+current target; the loop is a default, not a contract.
+
+1. `$obtain-immediate-conclusions` on the target — cheap consequences + a
+   first sense of fragility.
+2. `$construct-toy-examples` if the conclusion structure is unclear, or
+   `$construct-counterexamples` for any conclusion flagged fragile.
+3. `$search-math-results` when a known result, construction, or proof
+   technique might help.
+4. `$propose-subgoal-decomposition-plans` once enough context is in
+   scratch memory to motivate at least two materially different plans.
+   Read recent `big_decisions` first to avoid re-pursuing an
+   already-abandoned strategy.
+5. `$direct-proving` on each plan in turn. If a plan solves the target
+   directly, jump to the batch-emit step.
+6. If every plan was screened-without-solving, `$recursive-proving`.
+7. If every recursive sub-agent also fails,
+   `$identify-key-failures` — synthesize the common obstructions,
+   optionally append a `big_decisions` record describing the strategic
+   pivot, and loop back to step 4.
+8. When a plan succeeds, assemble the candidate `<node>` blocks per
+   the "Batch Output Contract" below and exit.
+
+### Branches
+
+A *branch* is a bookkeeping unit for a distinct line of attack on the
+target — typically one decomposition plan, but may also be a recursive
+sub-agent's local reformulation or a counter-example angle being tested
+in parallel. `branch_id` is opaque; the agent allocates it the first
+time it wants to track parallel state for an alternative.
+
+- Allocate a `branch_id` (e.g. `"branch-{N}"`, derive `N` via the same
+  rule used for `plan_id` / `decision_id`) when starting a materially
+  different attack. A single round with one plan does not need a
+  branch_id.
+- Update branch state only via `branch_update(problem_id, branch_id,
+  state)`. The MCP server appends a fresh state record per call;
+  `memory_search` returns newest-first so the latest `branch_states`
+  hit per `branch_id` wins on recall.
+- A branch goes to `state.status = "invalid"` when refuted by a
+  counter-example or when every plan inside it has failed; to
+  `"completed"` when its plan produced the emitted batch.
+- Verified nodes under `knowledge_base/nodes/` are not branch state;
+  they are owned by the verifier verdict pipeline, not by skills.
+
 There is no generator-run proof acceptance workflow in Phase I. A proof is only
 accepted after the coordinator later dispatches verifier workers and the
 librarian applies their `verifier.run_completed` events.
@@ -154,6 +201,19 @@ In repair mode, use the supplied verification report and repair hint. The
 repair count is advisory: small values suggest local proof repair; larger values
 should make the agent seriously consider revising the statement or producing a
 counterexample proof. There is no hard repair budget.
+
+Concrete heuristic for the typical-run loop in repair mode:
+
+- `repair_count <= 2`: stay close to the original statement and
+  repair-hint guidance. `$direct-proving` on a focused plan derived
+  from the verifier's `gaps` is usually enough.
+- `repair_count >= 3`, OR the same critical_error keeps recurring
+  across attempts, OR the verifier emits `critical` (not `gap`):
+  prefer `$identify-key-failures` to extract the recurring obstruction
+  and append a `big_decisions` record, then re-plan from
+  `$propose-subgoal-decomposition-plans` with at least one plan that
+  reformulates the statement (counter-example form, weaker hypothesis,
+  or restated under a different invariant).
 
 Repair output may:
 

@@ -42,7 +42,9 @@ Read:
 
 ## Output Contract
 
-Append one record per attempted subgoal to `proof_steps`:
+Append one record per attempted subgoal to `proof_steps`. Note the
+field is named `subgoal_status` (per-subgoal outcome), distinct from
+the per-plan `status` field that lives on `subgoals` records:
 
 ```json
 {
@@ -50,7 +52,7 @@ Append one record per attempted subgoal to `proof_steps`:
   "attempt_type": "direct",
   "subgoal": "...",
   "attempt_summary": "...",
-  "status": "solved|partial|stuck",
+  "subgoal_status": "solved|partial|stuck",
   "used_examples": ["..."],
   "used_counterexamples": ["..."],
   "key_stuck_points": ["..."],
@@ -61,11 +63,11 @@ Append one record per attempted subgoal to `proof_steps`:
 }
 ```
 
-Update the status of the corresponding decomposition-plan in `subgoals`
-by appending a fresh record with the same `plan_id` and the new
-`status` (one of `screening`, `screened`, `solved`). The MCP channel
-is append-only; `memory_search` ranks ties newest-first so the latest
-status wins on recall.
+Update the per-plan `status` of the corresponding decomposition-plan
+in `subgoals` by appending a fresh record with the same `plan_id` and
+the new `status` (one of `screening`, `screened`, `solved`). The MCP
+channel is append-only; `memory_search` ranks ties newest-first so the
+latest status wins on recall.
 
 ## MCP Tools
 
@@ -77,3 +79,14 @@ status wins on recall.
 ## Failure Logging
 
 If a decomposition plan does not solve the problem directly after attempting all of its subgoals, append a `failed_paths` record that summarizes the plan-local stuck points and any important proof-migration failures.
+
+## Next Skill
+
+- A plan that fully solves the target → assemble the `<node>` batch
+  per the §6.2 contract (step 8 above) and exit; the parent generator
+  emits.
+- A plan that only partly advances → screen the next plan in the
+  current round.
+- All plans in this round screened-without-solving → invoke
+  `$recursive-proving`. Do not loop back into `$direct-proving` on
+  the same plan set; that is the trigger condition for recursive work.

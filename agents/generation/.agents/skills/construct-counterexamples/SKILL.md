@@ -26,7 +26,16 @@ Read:
    - `not_refuted`: no counterexample found yet
    - `inconclusive`: search space unclear or partially explored
 4. If the search produces a concrete example that is informative but is not actually a counterexample, save that example as well in `toy_examples`.
-5. If refuted, store the counterexample for reuse against future claims and mark impacted branches/lemmas as invalid.
+5. If refuted, store the counterexample for reuse against future claims
+   and mark impacted branches as invalid by calling
+   `branch_update(problem_id, branch_id, {"status": "invalid", "reason":
+   "refuted by counterexample", "refuted_by": <target_claim>})` for each
+   affected `branch_id`. Candidate scratch-memory lemmas inside the
+   refuted branch should also get a fresh `proof_steps` record with
+   `subgoal_status: "stuck"` and `key_stuck_points` referencing this
+   counterexample so future plans see the obstruction. Verified
+   `knowledge_base/nodes/` lemmas cannot be invalidated by this skill —
+   their state is owned by the verifier verdict pipeline.
 6. If no counterexample is found, treat that only as evidence that the claim may be correct, not as a proof.
 
 ## Output Contract
@@ -70,11 +79,23 @@ Do this whenever the constructed example is useful enough to test future claims 
 - `memory_append`
 - `memory_search`
 - `branch_update`
-- Codex built-in web search and `search_arxiv_theorems` to find standard counterexample patterns
+- `search_arxiv_theorems` to find standard counterexample patterns
 - reuse stored counterexamples to test future conjectures/claims
 
 ## Failure Logging
 
 If no meaningful counterexample space is identified, append:
 
-- `events.event_type="counterexample_space_unclear"`
+- `scratch_events.event_type="counterexample_space_unclear"`
+
+## Next Skill
+
+- `status="refuted"` and a branch was killed → return control; the
+  next planning round picks up via `$propose-subgoal-decomposition-plans`,
+  which reads `branch_states` and avoids the invalidated angle.
+- `status="not_refuted"` → return control to the caller; the absence of
+  a counter-example is evidence the claim may be correct, not a proof
+  (per step 6 above), so do not declare success here.
+- `status="inconclusive"` → if the search space is still navigable,
+  loop with a refined target_claim; otherwise hand off to
+  `$construct-toy-examples` for a complementary read of the assumptions.

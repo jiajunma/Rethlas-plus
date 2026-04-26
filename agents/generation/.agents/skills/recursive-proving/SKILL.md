@@ -26,6 +26,13 @@ Read:
    - the key stuck points for its own plan
    - the key stuck points found in the other plans
    - the instruction to follow `AGENTS.md`
+   - the literal `problem_id` value the parent received from the
+     prompt's `## Memory scope` section, with the explicit instruction
+     to use that exact value for every `memory_search` /
+     `memory_append` / `memory_init` / `branch_update` call inside the
+     sub-agent. Sub-agents do not see the parent's prompt by default;
+     skipping this step shards scratch memory between parent and
+     sub-agent and breaks `query-memory` recall.
    - an inline reminder of the §6.2 batch contract that any candidate
      `<node>` blocks must satisfy: `kind` ∈ {lemma, proposition,
      theorem, definition} (no `external_theorem`); non-empty
@@ -39,10 +46,18 @@ Read:
      batch-internal references must form a DAG.
 4. Tell each sub-agent to tackle the assigned plan under the instructions in `AGENTS.md`, treating that plan as its starting point rather than restarting the search from zero. If new evidence or discoveries justify it, the sub-agent may refine, extend, or locally revise the plan, but it should preserve continuity with the assigned plan instead of discarding it outright.
 5. Tell each sub-agent not to spawn further sub-agents. Phase I keeps recursive exploration as a bounded internal search pattern, not an unbounded process tree.
-6. Require each sub-agent to return progress, failures, and any successful candidate node text to the parent generator, which records useful artifacts in scratch memory using the same `problem_id` as the MCP `problem_id`.
+6. Require each sub-agent to return progress, failures, and any
+   successful candidate node text to the parent generator. The parent
+   records useful artifacts in scratch memory using the prompt-supplied
+   `problem_id` (the one forwarded to the sub-agent in step 3), keeping
+   parent and sub-agent on a single shared memory namespace.
 7. Wait for all sub-agents to finish, then gather their reports.
 8. If any plan succeeds, assemble candidate `<node>` blocks from that plan. The parent generator emits the only final batch.
-9. If all plans fail, hand the collected reports to `$identify-key-failures`.
+9. If all plans fail, append a fresh `subgoals` record per failed
+   plan_id with `status: "failed"` so the next planning round sees
+   which plans were tried-and-failed (the channel is append-only;
+   newest-first ranking makes the new status win on recall). Then
+   hand the collected reports to `$identify-key-failures`.
 
 ## Output Contract
 

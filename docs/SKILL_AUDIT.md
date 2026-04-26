@@ -188,6 +188,90 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   (timestamp) descending first, then primary key (score) descending.
   Underwrites the F7 "latest wins" convention.
 
+## Second-pass findings (2026-04-27, post F-fixes)
+
+### G1 — `subgoals.status` enum had values without producers
+- Original enum: `proposed|screening|screened|selected|failed|solved`.
+- Producers existed only for `proposed` (propose-...),
+  `screening`/`screened`/`solved` (direct-proving). `selected` and
+  `failed` were dead.
+- **Status**: resolved. Dropped `selected` (no natural transition).
+  Added `failed` producer in `recursive-proving` step 9: when all plans
+  fail, append a fresh subgoals record per failed plan_id with
+  `status: "failed"`.
+
+### G2 — Skill orchestration was implicit
+- `direct-proving` exit on screened-without-solving had no
+  next-skill hook; `construct-counterexamples` post-refute had no
+  hook either. Other handoffs (e.g. identify-key-failures →
+  propose-...) were already covered.
+- **Status**: resolved. AGENTS.md now has a "Typical run" subsection
+  under Skill Selection laying out the 8-step default loop.
+  `direct-proving` and `construct-counterexamples` each grew a
+  "## Next Skill" section spelling out exit conditions.
+
+### G3 — `branch_id` lifecycle undocumented
+- 7 skills referenced `branch_id: optional`, `branch_states` channel
+  existed, `branch_update` was the writer — but no skill or AGENTS.md
+  defined what a branch was, when one was opened, or who owned it.
+- **Status**: resolved. AGENTS.md "Branches" subsection introduces
+  `branch_id` allocation rule, the `state.status` vocabulary
+  (`invalid` / `completed`), and the "verified nodes are not branch
+  state" boundary.
+
+### G4 — Sub-agents shard memory because they don't see `## Memory scope`
+- Parent's prompt has the F9 "## Memory scope" section, but
+  `spawn_agent(input=...)` only forwards `input` — sub-agents don't
+  see the parent prompt by default. F9 fix re-opened for sub-agents.
+- **Status**: resolved. `recursive-proving` step 3 now requires the
+  parent to forward the literal `problem_id` value plus an explicit
+  instruction to use it for every memory call.
+  `agents/generation/.codex/agents/subgoal-prover.toml`'s
+  `developer_instructions` carries the same rule as a backstop.
+
+### G5 — `decision_type` enum values were unexplained
+- The 4 values (`strategy_pivot|abandonment|reformulation|elevation`)
+  appeared in the schema with no semantic guidance, inviting
+  miscategorisation.
+- **Status**: resolved. `identify-key-failures` now defines each
+  value with concrete trigger conditions and notes about which fields
+  matter for that type.
+
+### G6 — "mark impacted branches/lemmas as invalid" was unactionable
+- `construct-counterexamples` step 5 used the phrase but pointed at
+  no MCP tool. There is no `mark_invalid` action.
+- **Status**: resolved. Step 5 now spells out the
+  `branch_update(problem_id, branch_id, {status: "invalid", reason,
+  refuted_by})` call. Candidate scratch-memory lemmas inside the
+  branch get a fresh `proof_steps` record with
+  `subgoal_status: "stuck"`. Verified `knowledge_base/nodes/` lemmas
+  are explicitly out of scope (verifier verdict pipeline owns them).
+
+### G7 — `repair_count` advisory but no skill operationalised it
+- AGENTS.md said "small/large repair_count" without thresholds; no
+  skill described how to act on the value.
+- **Status**: resolved. AGENTS.md "Repair Mode" now has a concrete
+  heuristic: `repair_count <= 2` → local repair via direct-proving;
+  `>= 3` OR recurring critical_error OR `critical` verdict →
+  identify-key-failures + reformulating plan.
+
+### G8 — Two unrelated `status` fields on direct-proving records
+- `proof_steps.status` (per-subgoal: `solved|partial|stuck`) and
+  `subgoals.status` (per-plan: `screening|screened|solved|failed`)
+  shared a name despite being different concepts.
+- **Status**: resolved. Renamed `proof_steps.status` →
+  `proof_steps.subgoal_status`. Per-plan `status` on `subgoals`
+  records keeps its name. Skill text now flags the distinction
+  explicitly.
+
+### G9 — Empty-proof rule duplicated between AGENTS.md and skill
+- F5 added the rule to `verify-sequential-statements` step 2; verifier
+  AGENTS.md line 72-74 already had a near-identical sentence. Two
+  sources of truth, drift risk.
+- **Status**: resolved. Verifier AGENTS.md now defers the procedural
+  detail to the skill (single source of truth) and keeps only a
+  one-sentence summary plus the cross-reference.
+
 ## Already-aligned design (sanity-check pass)
 
 These were verified against ARCH and pass — no action needed:

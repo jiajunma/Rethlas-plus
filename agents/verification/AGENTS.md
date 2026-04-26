@@ -69,9 +69,12 @@ The skills are reasoning procedures. They do not rely on MCP persistence.
    observation in the final JSON.
 7. Return the final JSON as the last output, with no markdown fence.
 
-If a proof is empty for `lemma`, `proposition`, or `theorem`, verdict is at
-least `gap`. For definitions or external theorem nodes, an empty proof is not
-itself a gap; check statement coherence and referenced concepts.
+Empty-proof handling depends on `kind`. The procedural rule lives in
+`$verify-sequential-statements` step 2 — keep that skill as the single
+source of truth so the operational text and the high-level boundary
+do not drift apart. Summary: `lemma` / `proposition` / `theorem` with
+empty proof yields at least `gap`; `definition` / `external_theorem`
+with empty proof is expected and not itself a gap.
 
 ## Verdict Rule
 

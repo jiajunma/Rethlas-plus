@@ -75,6 +75,25 @@ When step 6 applies, also append to `big_decisions`:
 }
 ```
 
+Pick `decision_type` per these definitions:
+
+- `strategy_pivot`: switch the proof technique while keeping the
+  target statement (e.g. induction on rank → compactness argument).
+  `previous_approach` and `new_approach` are both proof techniques.
+- `abandonment`: stop pursuing this target/sub-target entirely
+  because available evidence says the claim is wrong, the resources
+  required exceed Phase I scope, or every viable angle has been
+  exhausted. `new_approach` may be empty; the implication is that
+  the next round should not re-propose this target.
+- `reformulation`: rewrite the target statement itself — e.g. as a
+  counter-example/negation form, under a weaker hypothesis, or
+  under a different invariant. `previous_approach` is the old
+  statement; `new_approach` is the new one.
+- `elevation`: promote a per-plan assumption or observation up to a
+  top-level invariant the next planning round must respect (e.g.
+  "every plan from now on must keep $|G| < n$ as a global
+  constraint"). `new_approach` describes the elevated invariant.
+
 Derive `decision_id` as `"decision-{N}"` where `N` is one greater
 than the largest numeric suffix seen via
 `memory_search(problem_id, "decision-", channels=["big_decisions"])`,
