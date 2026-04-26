@@ -44,12 +44,18 @@ Read:
 
 Append one record per attempted subgoal to `proof_steps`. Note the
 field is named `subgoal_status` (per-subgoal outcome), distinct from
-the per-plan `status` field that lives on `subgoals` records:
+the per-plan `status` field that lives on `subgoals` records.
+
+Set `attempt_type="direct"` when written by this skill. Sister skills
+also write `proof_steps`: `recursive-proving` sub-agents use
+`attempt_type="recursive"`; `construct-counterexamples` writes a
+`counterexample_refutation` record when a refutation lands on a
+candidate scratch-memory lemma.
 
 ```json
 {
   "plan_id": "...",
-  "attempt_type": "direct",
+  "attempt_type": "direct|recursive|counterexample_refutation",
   "subgoal": "...",
   "attempt_summary": "...",
   "subgoal_status": "solved|partial|stuck",

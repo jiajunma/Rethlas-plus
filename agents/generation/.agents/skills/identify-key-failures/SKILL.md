@@ -11,11 +11,15 @@ Use this skill to turn many failed attempts into reusable guidance for the next 
 
 Read:
 
-- the failed decomposition plans
-- direct-proving stuck points
-- recursive sub-agent reports
+- the failed decomposition plans (from `subgoals`)
+- per-subgoal direct-proving stuck points (from `proof_steps`)
+- recursive sub-agent reports (from `proof_steps` with
+  `attempt_type: "recursive"`, plus relevant `scratch_events`
+  recursive_proving_round records)
 - existing `failed_paths`
 - relevant `counterexamples` and `toy_examples`
+- recent `big_decisions` so a strategic pivot recorded earlier still
+  informs the synthesis
 
 ## Procedure
 
@@ -110,3 +114,10 @@ Also append a `scratch_events` record indicating that a new planning round is ne
 ## Failure Logging
 
 If the reports are too weak to identify meaningful common failures, append a `scratch_events` record with `event_type="key_failures_inconclusive"` and state what information is still missing.
+
+## Next Skill
+
+Always return control to `$propose-subgoal-decomposition-plans` for the
+next planning round. If a `big_decisions` record was appended in step
+6, the next round must read it (its Input Contract already requires
+this) and produce plans consistent with the strategic pivot.

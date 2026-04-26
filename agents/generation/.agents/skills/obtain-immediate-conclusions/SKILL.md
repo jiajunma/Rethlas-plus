@@ -53,11 +53,20 @@ Rules:
 - `memory_append`
 - `memory_search`
 - `search_arxiv_theorems` for nontrivial consequences
-- Codex built-in web search for background definitions/terminology
 
 ## Failure Logging
 
-If no meaningful consequence is found, append an `events` entry with:
+If no meaningful consequence is found, append a `scratch_events` entry with:
 
 - `event_type="immediate_conclusions_stalled"`
 - missing assumptions and suspected blockers
+
+## Next Skill
+
+- Any conclusion flagged `is_fragile=true` → `$construct-counterexamples`
+  on that conclusion to falsify it before building further on it.
+- Otherwise, if the assumption structure is still unclear →
+  `$construct-toy-examples` to gain intuition.
+- Otherwise, if a known result might apply → `$search-math-results`.
+- Once enough scratch-memory context exists →
+  `$propose-subgoal-decomposition-plans`.

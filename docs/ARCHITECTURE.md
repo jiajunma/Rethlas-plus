@@ -3455,10 +3455,19 @@ server pointing at `./mcp/server.py`.
 Generator scratch memory is explicitly non-truth. The MCP server may expose
 channels for original-Rethlas-style reasoning artifacts
 (`immediate_conclusions`, `toy_examples`, `counterexamples`, `subgoals`,
-`proof_steps`, `failed_paths`, `branch_states`, `scratch_events`), but these
-files are not workspace `events/`, are not replayed, and may be deleted without
-changing KB truth. Skills must call the channel `scratch_events` rather than
-plain `events` to avoid confusion with truth events.
+`proof_steps`, `failed_paths`, `branch_states`, `big_decisions`,
+`scratch_events`), but these files are not workspace `events/`, are not
+replayed, and may be deleted without changing KB truth. Skills must call the
+channel `scratch_events` rather than plain `events` to avoid confusion with
+truth events.
+
+`big_decisions` carries cross-round strategic pivots (technique switches,
+target reformulations, abandonments, elevated invariants) — see
+`agents/generation/.agents/skills/identify-key-failures/SKILL.md` for the
+schema and the `decision_type` semantics. Producers:
+`identify-key-failures` and `propose-subgoal-decomposition-plans`. Consumer:
+`propose-subgoal-decomposition-plans` reads recent decisions to avoid
+re-pursuing an abandoned strategy.
 
 Codex built-in web browsing is **not** part of the Phase I generator contract.
 The only external-search tool promised by Rethlas is `search_arxiv_theorems`.

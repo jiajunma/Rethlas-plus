@@ -47,12 +47,21 @@ Append to `toy_examples`:
 - `memory_append`
 - `memory_search`
 - `search_arxiv_theorems` for matching examples/known motifs
-- Codex built-in web search for known example families and standard constructions
 - use `$search-math-results` when broader retrieval is needed
 
 ## Failure Logging
 
-If generated examples are inconclusive, append an `events` record:
+If generated examples are inconclusive, append a `scratch_events` record:
 
 - `event_type="toy_examples_inconclusive"`
 - include attempted example families
+
+## Next Skill
+
+- A toy example exposes a fragile-looking claim →
+  `$construct-counterexamples` to test whether the claim survives.
+- The toy example confirms a pattern but the broader proof picture
+  is still unclear → `$search-math-results` for related theorems
+  matching the observed pattern.
+- Enough intuition collected →
+  `$propose-subgoal-decomposition-plans`.

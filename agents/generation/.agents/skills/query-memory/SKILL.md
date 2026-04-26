@@ -71,3 +71,14 @@ If the retrieval is not useful, append a `scratch_events` record with:
 - the attempted query
 - the channels searched
 - the reason the retrieved items were not useful
+
+## Next Skill
+
+`query-memory` is a recall skill — it does not advance proof state
+itself. After running it, return to the skill that triggered the
+recall and let the retrieved evidence (or its absence) inform that
+skill's next decision.
+
+If the recall surfaced a counterexample relevant to the current claim,
+prefer feeding it into `$construct-counterexamples` over re-deriving
+the obstruction.

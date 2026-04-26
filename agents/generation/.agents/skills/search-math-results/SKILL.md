@@ -25,17 +25,13 @@ Read:
 1. Start with `search_arxiv_theorems`.
 2. When using `search_arxiv_theorems`, phrase the query as a complete mathematical statement whenever possible.
 3. Inspect the returned items and decide whether they are useful for the current need.
-4. If a useful theorem/example/counterexample is found and it comes from a paper, download that paper into the workspace, extract its text, and read the extracted text before relying on the result.
-5. If a useful theorem is found, do not stop at the statement alone. Read the proof of that theorem as well and extract any techniques, constructions, reductions, or proof patterns that may help with the current target statement.
+4. If a useful theorem/example/counterexample is found and it comes from a paper, use only information returned by the available search tool and any already-available verified nodes. Do not download PDFs or write files.
+5. If a useful theorem is found, do not stop at the statement alone. Extract any available proof ideas, constructions, reductions, or proof patterns that may help with the current target statement.
 6. Expand the definitions and concepts appearing in that theorem using the surrounding context of the paper, and check carefully whether the theorem is actually applicable to the current situation. Be explicit about terminology that may shift across contexts.
-7. Keep all downloaded PDFs and extracted text files inside `downloads/` in the current working directory.
-8. Record not only what the theorem says, but also what its proof suggests for the current problem.
-9. If the theorem search returns no useful information, switch to Codex's built-in web search.
-10. Use the built-in web search either to look for specific math results or to gather background information, terminology, standard references, and canonical constructions/examples/counterexamples.
-11. If the built-in web search reveals a useful paper, again download it, extract its text, and read the relevant extracted text before using it in reasoning.
-12. If the built-in web search reveals a useful theorem, also read its proof, expand its local definitions from the paper context, and extract the techniques that look adaptable to the current statement.
-13. Summarize the most useful findings and explain why they matter for the current proof state.
-14. If a result may later be used in a proof, preserve its full statement and source identifiers so downstream proof steps can cite it explicitly.
+7. Record not only what the theorem says, but also what its proof suggests for the current problem when that information is available.
+8. If the theorem search returns no useful information, report that clearly and continue with non-search reasoning skills.
+9. Summarize the most useful findings and explain why they matter for the current proof state.
+10. If a result may later be used in a proof, preserve its full statement and source identifiers so downstream proof steps can cite it explicitly.
 
 ## Usefulness Test
 
@@ -45,11 +41,11 @@ Treat theorem-search results as useful only if they do at least one of the follo
 - provide a construction/example/counterexample that can be adapted
 - suggest a standard technique or reformulation relevant to the current branch
 
-If the results are vague, off-topic, or too weak to guide the next step, fall back to the built-in web search.
+If the results are vague, off-topic, or too weak to guide the next step, stop retrieval for now and switch back to examples, counterexamples, decomposition, or direct proof search.
 
 ## Output Contract
 
-Append a summary record to `events`:
+Append a summary record to `scratch_events`:
 
 ```json
 {
@@ -67,8 +63,6 @@ Append a summary record to `events`:
       "paper_id": "...",
       "arxiv_id": "...",
       "theorem_id": "...",
-      "local_pdf_path": "optional",
-      "local_text_path": "optional",
       "expanded_definitions": ["paper-context expansions of terms/concepts used in the statement"],
       "applicability_check": ["why the statement does or does not apply in the current setting"],
       "proof_insights": ["optional extracted techniques or ideas from the proof"],
@@ -88,8 +82,21 @@ Append a summary record to `events`:
 
 ## Failure Logging
 
-If neither theorem search nor web search yields useful information, append an `events` record with:
+If theorem search yields no useful information, append a `scratch_events` record with:
 
 - `event_type="search_math_results_stalled"`
 - the attempted queries
 - the reason the results were not useful
+
+## Next Skill
+
+- A close theorem found whose proof technique might transfer →
+  return to whichever skill triggered this search; the technique
+  feeds back into `$direct-proving` (during plan screening) or
+  `$propose-subgoal-decomposition-plans` (during planning).
+- A counter-example pattern surfaced → `$construct-counterexamples`
+  with the surfaced pattern as the candidate.
+- A construction or example surfaced → `$construct-toy-examples` to
+  adapt it locally.
+- Search stalled → return to `$construct-toy-examples` /
+  `$construct-counterexamples` for non-search reasoning.

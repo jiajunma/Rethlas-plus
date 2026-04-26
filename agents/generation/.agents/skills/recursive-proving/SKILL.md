@@ -11,9 +11,10 @@ Use this skill when direct proving has failed on the current decomposition plans
 
 Read:
 
-- the current set of decomposition plans
+- the current set of decomposition plans (from `subgoals`)
 - the direct-proving reports and key stuck points for each plan
-- the known stuck points from other plans
+  (from `proof_steps` with `attempt_type: "direct"`)
+- the known stuck points from other plans (same channel)
 - relevant `failed_paths`, `branch_states`, and search results
 
 ## Procedure
@@ -108,3 +109,10 @@ sub-agents.
 ## Failure Logging
 
 If every plan fails in the recursive round, append a summary record to `failed_paths` and immediately invoke `$identify-key-failures`.
+
+## Next Skill
+
+- Any sub-agent succeeds → assemble the `<node>` batch from that
+  plan (step 8) and exit; the parent generator emits the final batch.
+- Every sub-agent fails → `$identify-key-failures` per the Failure
+  Logging line above.

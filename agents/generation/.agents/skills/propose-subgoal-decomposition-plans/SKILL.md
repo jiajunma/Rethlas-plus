@@ -13,6 +13,9 @@ Read:
 
 - the current target theorem or branch goal
 - relevant `immediate_conclusions`, `toy_examples`, and `counterexamples`
+- prior plans from `subgoals` — especially records with
+  `status: "failed"` from earlier rounds, so the new plan set does not
+  resurrect an angle that has already been tried-and-failed
 - relevant `failed_paths` and `branch_states`
 - recent strategic pivots from `big_decisions` so the new plan set does
   not re-pursue an approach that earlier rounds already abandoned
@@ -85,3 +88,11 @@ If the agent cannot yet propose meaningful decomposition plans, append a `scratc
 - `event_type="decomposition_plans_not_ready"`
 - the missing information
 - the blockers that prevent proposing plans
+
+## Next Skill
+
+- Plans proposed → `$direct-proving` on each plan in the round.
+- Cannot propose meaningful plans yet → loop back to whichever
+  reasoning skill the missing context comes from
+  (`$obtain-immediate-conclusions`, `$construct-toy-examples`,
+  `$construct-counterexamples`, or `$search-math-results`).

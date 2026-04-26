@@ -32,7 +32,8 @@ Read:
    "refuted by counterexample", "refuted_by": <target_claim>})` for each
    affected `branch_id`. Candidate scratch-memory lemmas inside the
    refuted branch should also get a fresh `proof_steps` record with
-   `subgoal_status: "stuck"` and `key_stuck_points` referencing this
+   `attempt_type: "counterexample_refutation"`,
+   `subgoal_status: "stuck"`, and `key_stuck_points` referencing this
    counterexample so future plans see the obstruction. Verified
    `knowledge_base/nodes/` lemmas cannot be invalidated by this skill —
    their state is owned by the verifier verdict pipeline.
