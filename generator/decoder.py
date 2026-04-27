@@ -338,6 +338,39 @@ def _extract_node_blocks(text: str) -> list[str]:
     return [m.group(1).strip() for m in _NODE_BLOCK_RE.finditer(text)]
 
 
+_FRONTMATTER_LINE_RE = re.compile(r"^(\s*)([A-Za-z_][\w\-]*)\s*:\s*(.*)$")
+_TYPED_VALUE_PREFIXES = ("|", ">", '"', "'", "[", "{", "*", "&", "!")
+
+
+def _quote_inline_yaml_values(head: str) -> str:
+    """Pre-quote single-line plain scalars so colons inside values don't trip
+    PyYAML's "mapping values are not allowed here" error.
+
+    Why: agents frequently emit ``remark: Repair: makes ...`` or
+    ``source_note: see Lemma 3.4: ...``. PyYAML treats the second
+    ``: `` as a nested mapping marker and rejects the whole batch.
+    Wrapping every plain scalar in double quotes (and escaping its
+    inner ``"``/``\\``) is transparent to the agent and to downstream
+    callers — they still receive the same ``str`` after parse — and
+    leaves block scalars (``|``/``>``), already-quoted values,
+    flow collections, anchors, aliases, and tags untouched.
+    """
+    out: list[str] = []
+    for line in head.splitlines():
+        m = _FRONTMATTER_LINE_RE.match(line)
+        if m is None:
+            out.append(line)
+            continue
+        indent, key, val = m.groups()
+        val = val.rstrip()
+        if not val or val.startswith("#") or val.startswith(_TYPED_VALUE_PREFIXES):
+            out.append(line)
+            continue
+        escaped = val.replace("\\", "\\\\").replace('"', '\\"')
+        out.append(f'{indent}{key}: "{escaped}"')
+    return "\n".join(out)
+
+
 def _parse_block(block: str) -> dict[str, str]:
     """Split a block into YAML frontmatter + markdown body, return dict.
 
@@ -366,6 +399,7 @@ def _parse_block(block: str) -> dict[str, str]:
                 "missing '---' divider between frontmatter and body",
             )
     head, body = parts[0].strip(), parts[1].strip()
+    head = _quote_inline_yaml_values(head)
     try:
         meta = yaml.safe_load(head)
     except yaml.YAMLError as exc:

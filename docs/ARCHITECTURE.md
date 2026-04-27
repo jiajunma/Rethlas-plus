@@ -1288,10 +1288,64 @@ verifier.
 | `user.node_revised` | Replace the node's full authored state (same label, same kind); hashes recompute; `pass_count = initial_count(kind, proof)`; if `statement_hash` changed, `repair_count = 0`; if `verification_hash` changed, clear `repair_hint` and `verification_report`; Merkle propagates to dependents when statement changes (dependents' `statement_hash` changes → their `repair_count` resets to 0 too) |
 | `generator.batch_committed` | Apply the committed node batch atomically; for each included node: create or replace current statement/proof/metadata, recompute hashes, and set `pass_count = initial_count(kind, proof)`; if the node's `statement_hash` changed, `repair_count = 0`; if the node's `verification_hash` changed, clear `repair_hint` and `verification_report`; cascaded dependents reset `repair_count` when their `statement_hash` changes via Merkle propagation |
 | `verifier.run_completed(accepted, hash matches)` | `pass_count += 1`; set `verification_report`; `repair_count` unchanged |
-| `verifier.run_completed(gap, hash matches)` | `pass_count = -1`; `repair_count += 1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (local fix suggestions); user sections untouched |
-| `verifier.run_completed(critical, hash matches)` | `pass_count = -1`; `repair_count += 1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (may need statement rewrite); user sections untouched |
+| `verifier.run_completed(gap, hash matches)` | `pass_count = initial_count(kind, proof)` (`0` for axioms, `-1` for proof-requiring); `repair_count += 1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (local fix suggestions); user sections untouched |
+| `verifier.run_completed(critical, hash matches)` | `pass_count = initial_count(kind, proof)`; `repair_count += 1`; set `verification_report`; **overwrite the verifier section of `repair_hint`** (may need statement rewrite); user sections untouched |
 | `verifier.run_completed(hash mismatch)` | Record `AppliedEvent(status=apply_failed, reason=hash_mismatch)`; no KB change (stale verdict) |
 | `user.hint_attached(target=X)` | **Admission** rejects if `X.pass_count >= 1` (hint has no reachable effect). Otherwise at apply time: if `X` exists, **append** a new user section `---\n[user @ <iso_ms>]\n<hint body>` to `X.repair_hint`. If `X` does not exist, record `apply_failed(reason=hint_target_missing)` |
+
+#### 5.4.1 Bugfix log: definition reject must not collapse to `-1`
+
+**Symptom (observed 2026-04-27 on `inducedorbittoy/run`):** generator
+decomposed a theorem and introduced a new `definition`
+(`def:induced_orbits_from_x0_slice_closure`). Verifier returned
+`verdict=gap` with a trivial repair hint ("add a citation for
+\(\mathcal O_0\)"). Coordinator stopped scheduling work entirely:
+`active_generator_jobs=0`, `active_verifier_jobs=0`,
+`idle_reason_code=verification_dep_blocked`. The dependent theorem
+`thm:induced_orbit_toy_problem` showed `blocked_on_dependency`. No
+human intervention had been requested, yet both worker pools were
+quiescent.
+
+**Root cause (two interacting rules):**
+
+1. *Projector rule (`librarian/projector.py:_apply_verifier_run`)* set
+   `pass_count = -1` unconditionally on `gap` / `critical`, regardless
+   of `kind`. This contradicts the rationale of §5.4 ("`-1` is reserved
+   for `needs generator`; definitions ... go to `0` and wait for the
+   verifier"). A rejected definition therefore landed at `-1`, the same
+   sentinel used for `lemma`s that need a generator.
+2. *Classifier rule (`dashboard/state.py:classify_theorem`)* mapped the
+   composite (`pass_count == -1` ∧ `kind ∈ {definition, external_theorem}`)
+   to `STATUS_USER_BLOCKED`. This in itself is correct *given* that the
+   only way for a definition to reach `-1` would be a malformed projector
+   write — but combined with rule 1 it fires on every gap verdict.
+
+The two rules together convert any verifier complaint about a
+definition into "user must intervene", even when the complaint is a
+trivial citation fix the generator could repair on the next dispatch.
+
+**Fix (this revision):**
+
+- §5.4 now states the rejection effect as
+  `pass_count = initial_count(kind, proof)` instead of literal `-1`.
+  For axioms this is `0` (rejected definitions go back to "awaiting
+  verifier" without escalating); for proof-requiring kinds this is
+  unchanged (`-1`, "needs generator").
+- `librarian/projector.py:_apply_verifier_run` is updated to call
+  `initial_count(kind, proof)` rather than hard-coding `-1`.
+- `dashboard/state.py:classify_theorem` updates its `user_blocked`
+  trigger: a node is `user_blocked` when it is an axiom that has been
+  rejected at least once *for the same statement_hash* (i.e.
+  `kind ∈ {definition, external_theorem}` ∧ `pass_count == 0` ∧
+  `repair_count > 0`). The user is the one who can fix the definition,
+  but only after the verifier has seen it; brand-new (`repair_count == 0`)
+  axioms are simply `needs_verification`.
+
+**Migration:** existing nodes already at `pass_count == -1` with kind
+∈ {definition, external_theorem} are stuck in the old representation.
+The librarian rebuild (`rethlas rebuild`) re-projects from `events/`
+using the corrected rule, so a one-shot rebuild migrates them in
+place. No event format changes; only the projection function changed.
 
 ### 5.5 Auditability and safety checks
 

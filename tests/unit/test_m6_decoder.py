@@ -424,3 +424,34 @@ def test_h29_no_nodes_has_empty_parsed_blocks() -> None:
         )
     assert ei.value.reason == REASON_NO_NODES
     assert ei.value.parsed_blocks == ()
+
+
+def test_frontmatter_value_with_inner_colon_is_tolerated() -> None:
+    """Regression: agents wrote ``remark: Repair: makes ...`` and PyYAML
+    raised ``mapping values are not allowed here`` because the second
+    ``: `` looked like a nested key. The decoder should auto-quote
+    plain scalar values so any prose passes through verbatim.
+    """
+    raw = (
+        "<node>\n"
+        "label: lem:helper\n"
+        "kind: lemma\n"
+        "remark: Repair: makes the induced-orbit and mu definitions explicit\n"
+        "source_note: see Lemma 3.4: corollary of x\n"
+        "---\n"
+        "**Statement.**\n\nany content\n"
+        "</node>"
+    )
+    label_present, dep_hash = _kb_view({})
+    batch = decode_codex_stdout(
+        raw,
+        target="lem:helper",
+        mode="fresh",
+        existing_label_present=label_present,
+        existing_dep_hash=dep_hash,
+    )
+    assert len(batch.nodes) == 1
+    n = batch.nodes[0]
+    assert n.label == "lem:helper"
+    assert n.remark == "Repair: makes the induced-orbit and mu definitions explicit"
+    assert n.source_note == "see Lemma 3.4: corollary of x"

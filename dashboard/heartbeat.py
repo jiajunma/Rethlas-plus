@@ -14,6 +14,7 @@ Schema mirrors §6.7.1; rewritten atomically with ``.tmp`` + rename.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from dataclasses import asdict, dataclass
@@ -22,6 +23,8 @@ from pathlib import Path
 from typing import Final
 
 DASHBOARD_JSON_SCHEMA: Final[str] = "rethlas-dashboard-v1"
+
+log = logging.getLogger("rethlas.dashboard.heartbeat")
 
 
 def _utc_now_iso() -> str:
@@ -112,8 +115,18 @@ class HeartbeatPublisher:
             pass
 
     def _run(self) -> None:  # pragma: no cover - thread loop
+        # Why: a transient OSError from os.replace (EBUSY race, brief
+        # permission flip on macOS Time Machine snapshots, etc.) used to
+        # kill this daemon thread silently. The dashboard kept serving
+        # HTTP, but the heartbeat froze; 5 minutes later the coordinator
+        # supervisor saw stale heartbeat and tore down the dashboard
+        # process. Catching here keeps the loop alive across hiccups —
+        # repeated failures still surface in dashboard.log.
         while not self._stop.is_set():
-            self._write("running")
+            try:
+                self._write("running")
+            except Exception as exc:
+                log.warning("dashboard heartbeat write failed: %s", exc)
             self._stop.wait(self.interval_s)
 
     def _write(self, status: str) -> None:

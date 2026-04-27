@@ -589,6 +589,45 @@ def test_verifier_gap_resets_to_minus_one(
     assert "the step is unjustified" in n1.repair_hint
 
 
+def test_verifier_gap_on_definition_keeps_pass_count_at_zero(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """§5.4.1 bugfix regression: rejecting a definition must reset
+    pass_count to its initial_count (= 0 for axioms), not to -1.
+
+    Pre-fix, the projector unconditionally set pass_count=-1 on gap
+    verdicts; that combined with the dashboard classifier rule made
+    every rejected definition look user_blocked, deadlocking the
+    coordinator (no further worker dispatch on a chain of
+    blocked_on_dependency targets).
+    """
+    body1, raw1 = _node_added(
+        eid="20260427T120000.000-0001-def0123456789abc",
+        target="def:x",
+        kind="definition",
+        statement="A definition statement.",
+        proof="",
+    )
+    projector.apply(body1, raw1)
+    n0 = kb.node_by_label("def:x")
+    assert n0 is not None and n0.pass_count == 0  # initial_count for axioms
+
+    body2, raw2 = _verdict(
+        eid="20260427T120001.000-0001-def0123456789abd",
+        target="def:x",
+        verdict="gap",
+        verification_hash=n0.verification_hash,
+        repair_hint="please cite the source definition",
+    )
+    projector.apply(body2, raw2)
+    n1 = kb.node_by_label("def:x")
+    assert n1.pass_count == 0, (
+        "definition gap must keep pass_count at initial_count=0, not -1"
+    )
+    assert n1.repair_count == 1
+    assert "please cite the source definition" in n1.repair_hint
+
+
 def test_verifier_hash_mismatch_rejected(
     projector: Projector, kb: KuzuBackend
 ) -> None:

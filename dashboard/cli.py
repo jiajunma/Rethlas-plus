@@ -143,6 +143,14 @@ def run_dashboard(workspace: str | None, args: argparse.Namespace) -> int:
 
     try:
         serve_forever(core, host=host, port=port, broker=broker)
+    except Exception:
+        # Why: stderr goes to a forensic log file under coordinator
+        # supervision, but the structured dashboard.log is what the
+        # operator actually reads. Surfacing the traceback here ensures
+        # crashes appear next to the "listening on …" startup line
+        # instead of vanishing.
+        logging.getLogger("rethlas.dashboard").exception("dashboard crashed in serve_forever")
+        raise
     finally:
         heartbeat.stop()
         watcher.stop()

@@ -59,6 +59,7 @@ def classify_theorem(
     deps_pass_counts: dict[str, int],
     in_flight: bool,
     repair_hint: str = "",
+    repair_count: int = 0,
 ) -> str:
     """Return the §M9 status keyword for a node."""
     if in_flight:
@@ -76,10 +77,19 @@ def classify_theorem(
             return STATUS_BLOCKED_ON_DEPENDENCY
         return STATUS_VERIFIED
     if pass_count == 0:
+        # §5.4.1 bugfix: axioms (definition / external_theorem) that the
+        # verifier has already rejected (repair_count > 0) require user
+        # action — generator is not allowed to revise pre-existing
+        # definitions per §6.2 write-scope. Brand-new axioms (repair=0)
+        # just need a verifier dispatch.
+        if kind in {"definition", "external_theorem"} and repair_count > 0:
+            return STATUS_USER_BLOCKED
         if not deps_ready:
             return STATUS_BLOCKED_ON_DEPENDENCY
         return STATUS_NEEDS_VERIFICATION
-    # pass_count == -1
+    # pass_count == -1: only proof-requiring kinds reach this state under
+    # the §5.4.1 fix; if a legacy projection still has an axiom at -1,
+    # treat it as user_blocked for back-compat.
     if kind in {"definition", "external_theorem"}:
         return STATUS_USER_BLOCKED
     if not deps_ready:

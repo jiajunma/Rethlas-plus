@@ -79,12 +79,25 @@ def _iso_to_epoch(s: str) -> Optional[float]:
 
 
 def default_spawn_dashboard(workspace: Path, bind: str) -> subprocess.Popen:
-    """Launch ``python -m cli.main --workspace <ws> dashboard --bind <bind>``."""
+    """Launch ``python -m cli.main --workspace <ws> dashboard --bind <bind>``.
+
+    Stderr is appended to ``runtime/logs/dashboard-stderr.log`` so any
+    Python traceback (uncaught exception, ImportError, signal-induced
+    SystemExit) is preserved across a supervisor-driven restart. The
+    structured FileHandler in dashboard/cli.py captures normal logs;
+    this stream is a backstop for crashes that bypass logging entirely.
+    """
     env = os.environ.copy()
     # Tell the dashboard CLI it's the coordinator's child so it does not
     # bail out on the "supervise.lock held" early-exit path (the
     # coordinator parent holds that lock).
     env["RETHLAS_COORDINATOR_DASHBOARD_CHILD"] = "1"
+    logs_dir = workspace / "runtime" / "logs"
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        stderr_log = open(logs_dir / "dashboard-stderr.log", "ab")
+    except OSError:
+        stderr_log = subprocess.DEVNULL  # type: ignore[assignment]
     return subprocess.Popen(
         [
             sys.executable,
@@ -97,7 +110,7 @@ def default_spawn_dashboard(workspace: Path, bind: str) -> subprocess.Popen:
             bind,
         ],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_log,
         env=env,
     )
 

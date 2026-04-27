@@ -596,12 +596,18 @@ class Projector:
                 verification_report=report,
             )
         else:
-            # gap / critical: pass_count -> -1, repair_count += 1,
-            # overwrite verifier section of repair_hint, preserve user sections.
+            # §5.4.1 bugfix: axioms (definition / external_theorem) reset
+            # to 0 on rejection (their initial_count) — generator may not
+            # revise pre-existing definitions, so -1 ("needs generator")
+            # would mis-route to a worker that legally cannot fix it.
+            # Proof-requiring kinds still reset to -1 because the
+            # coordinator's generator pool keys off pass_count == -1.
+            existing_kind = NodeKind(existing.kind)
+            new_pc = -1 if existing_kind in PROOF_REQUIRING_KINDS else 0
             new_hint = _merge_verifier_section(existing.repair_hint, hint)
             self._kb.set_node_fields(
                 target,
-                pass_count=-1,
+                pass_count=new_pc,
                 repair_count=existing.repair_count + 1,
                 verification_report=report,
                 repair_hint=new_hint,

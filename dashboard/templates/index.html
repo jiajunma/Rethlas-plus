@@ -291,6 +291,15 @@ function shortHash(h) {
   if (!h || typeof h !== "string") return "—";
   return h.length > 14 ? h.slice(0, 14) + "…" : h;
 }
+function elapsed(iso) {
+  if (!iso) return "—";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const sec = Math.max(0, (Date.now() - t) / 1000);
+  if (sec < 60) return `${Math.floor(sec)}s`;
+  if (sec < 3600) return `${Math.floor(sec/60)}m ${Math.floor(sec%60)}s`;
+  return `${Math.floor(sec/3600)}h ${Math.floor((sec%3600)/60)}m`;
+}
 function ellipsize(s, n) {
   if (!s) return "";
   s = String(s).replace(/\s+/g, " ");
@@ -300,6 +309,38 @@ function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+// Why: agents write internal references as `\ref{lem:foo}` (LaTeX style)
+// and sometimes as bare `lem:foo` (verifier external_reference_checks).
+// Both should open the corresponding node detail panel — the existing
+// data-node click handler at the bottom of this file already routes any
+// link with that attribute to showNode().
+const _REF_PREFIXES = "(?:lem|prop|def|thm|cor|axiom)";
+function linkifyRefs(s) {
+  let out = escapeHtml(String(s == null ? "" : s).replace(/\x01/g, ""));
+  // Stash matched labels so a second-pass bare-label regex doesn't
+  // re-process the link text we just produced.
+  const stash = [];
+  const place = (label) => {
+    const i = stash.length;
+    stash.push(label);
+    return "\x01" + i + "\x01";
+  };
+  out = out.replace(
+    new RegExp("\\\\ref\\{(" + _REF_PREFIXES + ":[a-zA-Z0-9_]+)\\}", "g"),
+    function (_m, label) { return place(label); },
+  );
+  out = out.replace(
+    new RegExp("(^|[^a-zA-Z0-9_])(" + _REF_PREFIXES + ":[a-zA-Z0-9_]+)", "g"),
+    function (_m, pre, label) { return pre + place(label); },
+  );
+  return out.replace(
+    /\x01(\d+)\x01/g,
+    function (_m, i) {
+      var label = stash[+i];
+      return '<a href="#" data-node="' + label + '">' + label + '</a>';
+    },
+  );
 }
 async function showNode(label) {
   const sec = document.getElementById("node_detail_section");
@@ -323,10 +364,10 @@ async function showNode(label) {
       ${stat("status", node.status ?? "—")}
     </div>
     <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Statement</h3>
-    <div class="math-body">${escapeHtml(node.statement ?? "")}</div>
+    <div class="math-body">${linkifyRefs(node.statement)}</div>
     ${node.proof ? `
       <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Proof</h3>
-      <div class="math-body">${escapeHtml(node.proof)}</div>` : ``}
+      <div class="math-body">${linkifyRefs(node.proof)}</div>` : ``}
     ${renderVerifierSection(node)}
     ${renderRepairHint(node)}
     ${renderVerificationReport(node)}
@@ -367,7 +408,7 @@ function renderVerifierSection(node) {
         <span class="footnote">${escapeHtml(lve.ts || "")} · ${escapeHtml(lve.actor || "")}</span>
         ${counts.length ? `<span class="verifier-counts">${escapeHtml(counts.join(" · "))}</span>` : ``}
       </div>
-      ${s.report_summary ? `<div class="math-body">${escapeHtml(s.report_summary)}</div>` : ``}
+      ${s.report_summary ? `<div class="math-body">${linkifyRefs(s.report_summary)}</div>` : ``}
     </div>`;
 }
 
@@ -376,7 +417,7 @@ function renderRepairHint(node) {
   if (!hint) return ``;
   return `
     <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Repair hint</h3>
-    <div class="math-body repair-hint">${escapeHtml(hint)}</div>`;
+    <div class="math-body repair-hint">${linkifyRefs(hint)}</div>`;
 }
 
 function renderVerificationReport(node) {
@@ -388,16 +429,16 @@ function renderVerificationReport(node) {
         ${verdictPill(it.status || "—")}
         <span class="footnote">${escapeHtml(it.location || "")}</span>
       </div>
-      <div class="math-body">${escapeHtml(it.notes || "")}</div>
+      <div class="math-body">${linkifyRefs(it.notes || "")}</div>
     </li>`).join("");
   const refs = (r.external_reference_checks || []).map(it => `
     <li class="report-item">
       <div class="report-item-head">
         ${verdictPill(it.status || "—")}
-        <code>${escapeHtml(it.reference || "")}</code>
+        <code>${linkifyRefs(it.reference || "")}</code>
         <span class="footnote">${escapeHtml(it.location || "")}</span>
       </div>
-      <div class="math-body">${escapeHtml(it.notes || "")}</div>
+      <div class="math-body">${linkifyRefs(it.notes || "")}</div>
     </li>`).join("");
   const gaps = (r.gaps || []).map(it => `
     <li class="report-item">
@@ -443,6 +484,73 @@ document.addEventListener("click", (e) => {
   }
 });
 
+async function renderActiveSection(active, overview, nodes) {
+  const jobs = active.jobs ?? [];
+  const co = (overview && overview.coordinator && overview.coordinator.data) || {};
+  // Header summary so the user always sees worker pool state at a glance.
+  const summary = `<div class="grid">
+    ${stat("generator", `${co.active_generator_jobs ?? 0} active`)}
+    ${stat("verifier",  `${co.active_verifier_jobs  ?? 0} active`)}
+    ${stat("dispatchable", `gen ${co.dispatchable_generator_count ?? 0} · ver ${co.dispatchable_verifier_count ?? 0}`)}
+    ${stat("idle reason", `<code>${escapeHtml(co.idle_reason_code || "—")}</code>`)}
+    ${stat("detail", escapeHtml(co.idle_reason_detail || ""))}
+  </div>`;
+
+  const root = document.getElementById("active");
+
+  if (jobs.length === 0) {
+    const unfinished = (nodes.nodes ?? [])
+      .filter(n => n.status !== "done")
+      .slice(0, 5);
+    const queued = unfinished.length
+      ? `<div class="empty">no active workers · ${unfinished.length} unfinished node${unfinished.length===1?"":"s"} waiting:
+          <ul style="margin:.25rem 0 0 1rem;">
+          ${unfinished.map(n => `
+            <li><a href="#" data-node="${escapeHtml(n.label)}">${escapeHtml(n.label)}</a>
+                <span class="footnote">${escapeHtml(n.status)} · pass=${n.pass_count}</span></li>
+          `).join("")}</ul></div>`
+      : `<div class="empty">no active jobs · all nodes done</div>`;
+    root.innerHTML = summary + queued;
+    return;
+  }
+
+  // Fetch node detail (statement, repair_count) for each unique target so
+  // the card can show what the worker is actually proving — not just a label.
+  const targets = [...new Set(jobs.map(j => j.target).filter(Boolean))];
+  const details = await Promise.all(
+    targets.map(t => fetchJson("/api/node/" + encodeURIComponent(t)).catch(() => null))
+  );
+  const byLabel = {};
+  targets.forEach((t, i) => { byLabel[t] = details[i] || {}; });
+
+  const STMT_PREVIEW_CHARS = 800;
+  const cards = jobs.map(j => {
+    const node = byLabel[j.target] || {};
+    const stmt = node.statement || "";
+    const stmtPreview = stmt.length > STMT_PREVIEW_CHARS
+      ? stmt.slice(0, STMT_PREVIEW_CHARS) + " …"
+      : stmt;
+    const modeLabel = j.mode === "repair"
+      ? `${j.mode} #${node.repair_count ?? "?"}`
+      : (j.mode || "");
+    const targetLink = j.target
+      ? `<a href="#" data-node="${escapeHtml(j.target)}" style="font-weight:600;">${escapeHtml(j.target)}</a>`
+      : "—";
+    return `<div class="active-job" style="border:1px solid var(--surface-border,#888);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;">
+      <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline;">
+        <span class="pill">${escapeHtml(j.kind || "?")}</span>
+        ${modeLabel ? `<span class="pill">${escapeHtml(modeLabel)}</span>` : ""}
+        ${targetLink}
+        <span class="footnote" style="margin-left:auto;">${escapeHtml(j.status || "")} · ${elapsed(j.started_at)}</span>
+      </div>
+      ${stmt ? `<div class="math-body" style="margin-top:.4rem;font-size:.9em;">${linkifyRefs(stmtPreview)}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  root.innerHTML = summary + cards;
+  renderMath(root);
+}
+
 async function refresh() {
   const overview = await fetchJson("/api/overview");
   const active = await fetchJson("/api/active");
@@ -480,13 +588,7 @@ async function refresh() {
       stat("in-flight targets", overview.in_flight_target_count ?? 0),
     ].join("");
   }
-  document.getElementById("active").innerHTML = rowsToTable(
-    ["job_id", "kind", "target", "mode", "status", "started_at"],
-    (active.jobs ?? []).map(j => ({
-      job_id: `<code>${j.job_id}</code>`, kind: j.kind, target: j.target,
-      mode: j.mode, status: j.status, started_at: j.started_at,
-    }))
-  );
+  await renderActiveSection(active, overview, nodes);
   document.getElementById("attention").innerHTML = rowsToTable(
     ["kind", "message"],
     (attention.items ?? []).map(i => ({ kind: i.kind, message: i.message }))

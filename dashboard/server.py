@@ -328,6 +328,7 @@ class DashboardCore:
                 deps_pass_counts={d: passes_by_label.get(d, -1) for d in n.deps},
                 in_flight=n.label in in_flight_targets,
                 repair_hint=n.repair_hint,
+                repair_count=n.repair_count,
             )
             out.append(
                 {
@@ -365,6 +366,7 @@ class DashboardCore:
                 deps_pass_counts={d: passes_by_label.get(d, -1) for d in n.deps},
                 in_flight=n.label in in_flight_targets,
                 repair_hint=n.repair_hint,
+                repair_count=n.repair_count,
             )
             # ARCHITECTURE §6.7 per-node detail surface.
             active_job: dict[str, Any] | None = None

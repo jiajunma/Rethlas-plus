@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from pathlib import Path
+from unittest.mock import patch
 
 from dashboard.heartbeat import (
     DASHBOARD_JSON_SCHEMA,
     DashboardHeartbeat,
+    HeartbeatPublisher,
     read_heartbeat,
     write_heartbeat,
 )
@@ -61,3 +65,37 @@ def test_read_returns_none_on_malformed(tmp_path: Path) -> None:
     p = tmp_path / "dashboard.json"
     p.write_text("not-json{", encoding="utf-8")
     assert read_heartbeat(p) is None
+
+
+def test_publisher_loop_survives_transient_write_failure(tmp_path: Path) -> None:
+    """A transient OSError from _write must not kill the heartbeat thread.
+
+    Regression: prior to the fix, an OSError (e.g. EBUSY race in
+    os.replace, brief permission flip) silently terminated the daemon
+    thread. The dashboard process kept serving HTTP, but the heartbeat
+    froze and the coordinator supervisor tore it down 5 minutes later.
+    """
+    pub = HeartbeatPublisher(tmp_path, bind="127.0.0.1:0", interval_s=0.05)
+    call_count = {"n": 0}
+    real_write = pub._write
+
+    def flaky(status: str) -> None:
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise OSError("simulated EBUSY")
+        real_write(status)
+
+    pub._write = flaky  # type: ignore[assignment]
+    pub.start()
+    try:
+        # Wait long enough for at least 4 ticks (one of which raises).
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline and call_count["n"] < 4:
+            time.sleep(0.05)
+    finally:
+        pub.stop()
+    assert call_count["n"] >= 4, f"thread died after error; only {call_count['n']} writes"
+    # And the file from the first successful write must exist.
+    parsed = read_heartbeat(tmp_path / "runtime" / "state" / "dashboard.json")
+    assert parsed is not None
+    assert parsed["status"] in ("running", "stopping")

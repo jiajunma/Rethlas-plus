@@ -151,6 +151,38 @@ def test_classify_user_blocked_definition() -> None:
     assert _node(kind="external_theorem", pass_count=-1) == STATUS_USER_BLOCKED
 
 
+def test_classify_axiom_pass0_with_repair_is_user_blocked() -> None:
+    """§5.4.1 bugfix: under the corrected projector an axiom rejected
+    by the verifier sits at pass_count==0 (not -1) with repair_count
+    incremented. Classifier must escalate that to user_blocked since
+    generator may not revise pre-existing definitions (§6.2).
+    """
+    assert (
+        _node(kind="definition", pass_count=0, repair_count=1)
+        == STATUS_USER_BLOCKED
+    )
+    assert (
+        _node(kind="external_theorem", pass_count=0, repair_count=2)
+        == STATUS_USER_BLOCKED
+    )
+
+
+def test_classify_brand_new_axiom_needs_verification() -> None:
+    """A brand-new axiom (pass_count=0, repair_count=0) is just awaiting
+    its first verifier dispatch — not user_blocked, not in error.
+    Regression: the previous classifier never reached this branch
+    because rejected axioms were stuck at pass_count=-1 forever.
+    """
+    assert (
+        _node(kind="definition", pass_count=0, repair_count=0)
+        == STATUS_NEEDS_VERIFICATION
+    )
+    assert (
+        _node(kind="external_theorem", pass_count=0, repair_count=0)
+        == STATUS_NEEDS_VERIFICATION
+    )
+
+
 def test_classify_in_flight_overrides() -> None:
     assert _node(pass_count=3, in_flight=True) == STATUS_IN_FLIGHT
     assert _node(pass_count=-1, in_flight=True) == STATUS_IN_FLIGHT

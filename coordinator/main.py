@@ -812,6 +812,17 @@ def _tick(state: CoordinatorState) -> None:
         if 0 <= c.pass_count < state.config.scheduling.desired_pass_count
         and c.deps_ready
         and c.verifier_deps_strictly_ahead
+        # §5.4.1 bugfix: an axiom that the verifier has already rejected
+        # (repair_count > 0) cannot be advanced by re-running the
+        # verifier — the content is unchanged and the verdict will be
+        # identical. Generator may not revise pre-existing definitions
+        # (§6.2 write-scope), so this candidate is user_blocked and
+        # must drop out of the dispatch pool. Prevents a spin-loop on
+        # rejected axioms.
+        and not (
+            c.target_kind in {"definition", "external_theorem"}
+            and c.repair_count > 0
+        )
     ]
 
     gen_capacity = max(
@@ -834,10 +845,21 @@ def _tick(state: CoordinatorState) -> None:
     by_label = {c.target: c for c in snapshot.candidates}
     dispatched_gen = 0
     dispatched_ver = 0
+    # §5.4.1 bugfix: an axiom is user_blocked once the verifier has
+    # rejected it at least once (repair_count > 0) and no further worker
+    # can advance it — generator is not allowed to revise pre-existing
+    # definitions. Brand-new axioms (pass_count==0, repair_count==0) are
+    # awaiting their first verifier dispatch and not blocked.
+    # The legacy `pass_count == -1` arm is preserved for nodes still in
+    # the old representation (pre-rebuild migration).
     user_blocked = sum(
         1
         for c in snapshot.candidates
-        if c.pass_count == -1 and c.target_kind in {"definition", "external_theorem"}
+        if c.target_kind in {"definition", "external_theorem"}
+        and (
+            c.pass_count == -1
+            or (c.pass_count == 0 and c.repair_count > 0)
+        )
     )
     gen_blocked = sum(
         1
