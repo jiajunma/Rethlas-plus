@@ -17,10 +17,15 @@ This module wires together:
    reader loop; the daemon flushes its final heartbeat and exits 0.
 
 Threading model:
-- Main thread = startup + heartbeat ticker + APPLY processing.
+- Main thread = startup + APPLY processing.
 - A reader thread parses stdin into a :class:`queue.Queue` so the main
   thread can dequeue APPLY commands during reconciliation without
   blocking the channel.
+- A heartbeat-pulse thread writes ``runtime/state/librarian.json`` on
+  a fixed cadence independent of dispatch, using a non-blocking
+  :class:`threading.RLock` acquire on ``_kb_lock`` so a long-running
+  apply cannot make the dashboard report "down" while the daemon is
+  still healthy and making progress.
 
 The daemon does NOT watch ``events/`` itself (§6.5 paragraph 1) — the
 coordinator owns that watchdog and forwards each new event via APPLY.
@@ -132,6 +137,7 @@ class LibrarianDaemon:
         )
         self._cmd_queue: "queue.Queue[Message | None]" = queue.Queue()
         self._reader: threading.Thread | None = None
+        self._heartbeat_thread: threading.Thread | None = None
         self._shutdown = threading.Event()
 
         self.started_at = utc_now_iso()
@@ -158,13 +164,19 @@ class LibrarianDaemon:
         applied_total = self.counters.applied
         failed_total = self.counters.failed
         last_applied = self.counters.last_applied
-        if self.backend is not None:
+        # Try to refresh from KB, but never block — a heavy apply
+        # holding ``_kb_lock`` must not stall heartbeat (otherwise the
+        # dashboard reports "down" even though the librarian is busy
+        # making progress). Fall back to the in-memory counters when the
+        # lock is contended.
+        if self.backend is not None and self._kb_lock.acquire(blocking=False):
             try:
-                with self._kb_lock:
-                    decided, applied_total, failed_total = self.backend.applied_event_counts()
-                    last_applied = self.backend.last_applied_event_id() or last_applied
+                decided, applied_total, failed_total = self.backend.applied_event_counts()
+                last_applied = self.backend.last_applied_event_id() or last_applied
             except Exception:
                 pass
+            finally:
+                self._kb_lock.release()
         backlog = max(0, len(files) - decided)
         hb = LibrarianHeartbeat(
             pid=os.getpid(),
@@ -182,6 +194,24 @@ class LibrarianDaemon:
             last_error=self.counters.last_error,
         )
         write_heartbeat(self.ws.runtime_state / "librarian.json", hb)
+
+    def _heartbeat_pulse(self) -> None:
+        """Tick a fresh heartbeat every ``heartbeat_interval`` seconds.
+
+        Runs in its own thread so a long-running apply holding
+        ``_kb_lock`` cannot stall liveness reporting. Heartbeat itself
+        uses a non-blocking lock acquire (see ``_heartbeat``), so the
+        pulse never waits on the dispatcher.
+        """
+        while not self._shutdown.is_set():
+            if self._shutdown.wait(self.heartbeat_interval):
+                return
+            try:
+                self._heartbeat()
+            except Exception:
+                # Heartbeat must never kill the daemon. Lose this tick
+                # and try again on the next interval.
+                pass
 
     # ------------------------------------------------------------------
     # Lock
@@ -235,6 +265,18 @@ class LibrarianDaemon:
             target=_reader_thread, args=(self.channel, self._cmd_queue), daemon=True
         )
         self._reader.start()
+
+        # Background heartbeat pulse. Dispatching a single APPLY can hold
+        # the loop thread for many seconds (Merkle cascade, BFS cycle
+        # check on a large graph), and the dashboard's 60s healthy / 300s
+        # down thresholds make a long apply look like a crashed daemon.
+        # The pulse thread writes a fresh ``librarian.json`` independently
+        # of dispatch so liveness reflects "the process is alive" rather
+        # than "the process is also currently idle".
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_pulse, daemon=True, name="librarian-hb"
+        )
+        self._heartbeat_thread.start()
 
         try:
             self.backend = KuzuBackend(self.ws.dag_kz)
