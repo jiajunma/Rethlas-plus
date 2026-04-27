@@ -285,7 +285,7 @@ def test_category_c_ignores_pre_revision_verdicts(tmp_path: Path) -> None:
     revert pattern).
     """
     from common.events.filenames import format_filename
-    from common.events.io import atomic_write_event
+    from common.events.io import atomic_write_event, event_sha256
     from common.events.ids import allocate_event_id
 
     _init(tmp_path)
@@ -333,16 +333,23 @@ def test_category_c_ignores_pre_revision_verdicts(tmp_path: Path) -> None:
         seq=early_eid.seq,
         uid=early_eid.uid,
     )
-    atomic_write_event(shard / early_fname, json.dumps(early_body).encode("utf-8"))
+    early_path = shard / early_fname
+    early_bytes = json.dumps(early_body).encode("utf-8")
+    atomic_write_event(early_path, early_bytes)
+    # The next replay re-hashes the file and compares against
+    # ``AppliedEvent.event_sha256`` — a mismatch is treated as
+    # tampering and crashes the daemon, so the marker we plant must
+    # carry the *real* sha of the bytes we just wrote.
+    early_sha = event_sha256(early_path.read_bytes())
 
     # Mark it applied in Kuzu so it would otherwise count toward the audit.
     backend = KuzuBackend(str(tmp_path / "knowledge_base" / "dag.kz"))
     try:
         backend._conn.execute(
             "CREATE (a:AppliedEvent {event_id: $eid, status: 'applied', "
-            "reason: '', detail: '', event_sha256: 'deadbeef', "
+            "reason: '', detail: '', event_sha256: $sha, "
             "applied_at: '2026-04-26T00:00:00.000Z', target_label: 'lem:x'})",
-            {"eid": early_eid.event_id},
+            {"eid": early_eid.event_id, "sha": early_sha},
         )
     finally:
         backend.close()

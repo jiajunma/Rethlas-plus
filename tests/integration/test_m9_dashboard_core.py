@@ -228,6 +228,120 @@ def test_nodes_endpoint_returns_every_kind(tmp_path: Path) -> None:
         assert labels == ["def:x", "lem:base_step", "thm:t"]
 
 
+def test_node_detail_surfaces_latest_verifier_verdict_and_report(
+    tmp_path: Path,
+) -> None:
+    """``/api/node/{label}`` must surface the latest verifier verdict
+    and a parsed ``verification_report`` so the dashboard's per-node
+    panel can render verdict status + the structured report (gap /
+    critical / accepted) without each operator opening raw event JSON.
+    """
+    from common.events.filenames import format_filename
+    from common.events.ids import allocate_event_id
+    from common.events.io import atomic_write_event
+    from dashboard.kb_client import list_nodes
+
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "lem:x", "--kind", "lemma",
+        "--statement", "Stmt of x.", "--proof", "p.",
+        "--actor", "user:alice",
+    )
+    # Read verification_hash via the live librarian's QUERY socket so we
+    # don't have to spawn a parallel KuzuBackend (Kuzu's file lock isn't
+    # always released in time when both processes share dag.kz).
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        rows = list_nodes(tmp_path)
+        lem_x = next(r for r in rows if r.label == "lem:x")
+        vh = lem_x.verification_hash
+
+    eid = allocate_event_id()
+    report = {
+        "checked_items": [
+            {"location": "p1", "status": "gap", "notes": "missing dep"},
+        ],
+        "gaps": [
+            {"location": "p1", "issue": "step relies on uncited fact"},
+        ],
+        "critical_errors": [],
+        "external_reference_checks": [
+            {"reference": "\\ref{lem:bar}", "status": "missing_from_nodes",
+             "location": "p1", "notes": "no node found"},
+        ],
+        "summary": "proof has 1 gap and 1 unresolved reference",
+    }
+    body = {
+        "event_id": eid.event_id,
+        "type": "verifier.run_completed",
+        "actor": "verifier:codex-test",
+        "ts": "2026-04-27T12:00:00.000+00:00",
+        "target": "lem:x",
+        "payload": {
+            "verdict": "gap",
+            "verification_hash": vh,
+            "verification_report": report,
+            "repair_hint": "Cite the missing dependency before this step.",
+        },
+    }
+    shard = tmp_path / "events" / "2026-04-27"
+    shard.mkdir(parents=True, exist_ok=True)
+    fname = format_filename(
+        iso_ms=eid.iso_ms,
+        event_type="verifier.run_completed",
+        target="lem:x",
+        actor="verifier:codex-test",
+        seq=eid.seq,
+        uid=eid.uid,
+    )
+    atomic_write_event(shard / fname, json.dumps(body).encode("utf-8"))
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        core = DashboardCore(tmp_path)
+        detail = core.node_detail("lem:x")
+        assert detail is not None
+
+        # Latest verdict promoted to a top-level field for fast read.
+        lve = detail["latest_verifier_event"]
+        assert lve is not None
+        assert lve["type"] == "verifier.run_completed"
+        s = lve["summary"]
+        assert s["verdict"] == "gap"
+        assert s["gap_count"] == 1
+        assert s["critical_count"] == 0
+        assert s["ext_ref_issue_count"] == 1
+        assert "1 gap" in s["report_summary"]
+
+        # Node-level verification_report is also parsed for the
+        # collapsible "Full report" rendering on the frontend.
+        parsed = detail["verification_report_parsed"]
+        assert parsed is not None
+        assert len(parsed["checked_items"]) == 1
+        assert parsed["checked_items"][0]["status"] == "gap"
+        assert len(parsed["gaps"]) == 1
+        assert (
+            parsed["external_reference_checks"][0]["status"]
+            == "missing_from_nodes"
+        )
+
+        # Repair hint flows through to the detail panel for ops to
+        # see what the verifier wants the next attempt to fix.
+        assert detail["repair_hint"].rstrip() == (
+            "Cite the missing dependency before this step."
+        )
+
+        # Recent events carry the same enriched per-event summary so
+        # the events table can show "verdict=gap, 1 gap" inline.
+        recent_verifier = next(
+            (e for e in detail["recent_events"]
+             if e["type"] == "verifier.run_completed"),
+            None,
+        )
+        assert recent_verifier is not None
+        assert recent_verifier["summary"]["verdict"] == "gap"
+
+
 def test_overview_kind_counts_breakdown(tmp_path: Path) -> None:
     """``/api/overview`` exposes a per-kind breakdown so the dashboard
     summary row can show '2 lemmas, 1 theorem' instead of just a flat

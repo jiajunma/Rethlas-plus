@@ -74,6 +74,77 @@ def _utc_now_iso() -> str:
     )
 
 
+def _safe_parse_verification_report(raw: str) -> dict[str, Any] | None:
+    """Parse a node row's ``verification_report`` JSON column.
+
+    The report is stored as a serialized JSON string (the verifier
+    emits a structured object with ``checked_items``, ``gaps``,
+    ``critical_errors``, ``external_reference_checks``, ``summary``).
+    Empty strings, non-string values, or parse failures all return
+    ``None`` — the caller falls back to displaying the raw column.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _summarize_event(body: dict[str, Any]) -> dict[str, Any]:
+    """Build the per-event entry for ``recent_events``.
+
+    Carries the bare metadata plus a type-specific ``summary`` field so
+    the dashboard can show "verdict=gap, 2 gaps, 0 critical" inline
+    instead of forcing the operator to open the raw event file. New
+    event types fall through to an empty summary; the metadata fields
+    are always present.
+    """
+    etype = body.get("type", "")
+    payload = body.get("payload", {}) or {}
+    summary: dict[str, Any] = {}
+    if etype == "verifier.run_completed":
+        summary["verdict"] = payload.get("verdict", "")
+        # Event payloads may carry verification_report as either a
+        # serialized JSON string (older runs) or as an object (current
+        # writers); handle both shapes.
+        report_raw = payload.get("verification_report", "")
+        if isinstance(report_raw, dict):
+            report: dict[str, Any] | None = report_raw
+        elif isinstance(report_raw, str):
+            report = _safe_parse_verification_report(report_raw)
+        else:
+            report = None
+        if report is not None:
+            summary["gap_count"] = len(report.get("gaps", []) or [])
+            summary["critical_count"] = len(
+                report.get("critical_errors", []) or []
+            )
+            summary["report_summary"] = report.get("summary", "")
+            ext = report.get("external_reference_checks", []) or []
+            summary["ext_ref_issue_count"] = sum(
+                1
+                for e in ext
+                if isinstance(e, dict)
+                and e.get("status") in ("missing_from_nodes", "insufficient_information")
+            )
+    elif etype == "generator.batch_committed":
+        nodes = payload.get("nodes", []) or []
+        summary["node_count"] = len(nodes)
+        summary["target"] = payload.get("target", "")
+    elif etype == "user.hint_attached":
+        hint = payload.get("hint", "") or ""
+        summary["hint_excerpt"] = hint[:200]
+    return {
+        "event_id": body.get("event_id", ""),
+        "type": etype,
+        "actor": body.get("actor", ""),
+        "ts": body.get("ts", ""),
+        "summary": summary,
+    }
+
+
 def _safe_read_json(path: Path) -> dict[str, Any] | None:
     """Read a JSON file. ``None`` on any failure (missing / parse error).
 
@@ -327,18 +398,22 @@ class DashboardCore:
                             for node in nested
                         ):
                             continue
-                    recent_events.append(
-                        {
-                            "event_id": body.get("event_id", ""),
-                            "type": body.get("type", ""),
-                            "actor": body.get("actor", ""),
-                            "ts": body.get("ts", ""),
-                        }
-                    )
+                    recent_events.append(_summarize_event(body))
                     if len(recent_events) >= 20:
                         break
                 if len(recent_events) >= 20:
                     break
+
+            # Promote the latest verifier verdict + parse the node-level
+            # verification_report so the dashboard can render verdict
+            # state without each operator having to open raw event files.
+            latest_verifier_event = next(
+                (e for e in recent_events if e.get("type") == "verifier.run_completed"),
+                None,
+            )
+            verification_report_parsed = _safe_parse_verification_report(
+                n.verification_report
+            )
             return {
                 "label": n.label,
                 "kind": n.kind,
@@ -350,6 +425,8 @@ class DashboardCore:
                 "verification_hash": n.verification_hash,
                 "repair_hint": n.repair_hint,
                 "verification_report": n.verification_report,
+                "verification_report_parsed": verification_report_parsed,
+                "latest_verifier_event": latest_verifier_event,
                 "deps": list(n.deps),
                 "dependents": dependents_of(self.ws_root, label),
                 "status": status,

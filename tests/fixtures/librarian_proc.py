@@ -101,16 +101,30 @@ class LibrarianProc:
 
     # ---- helpers ---------------------------------------------------
     def wait_for_phase(self, phase: str, timeout: float = 15.0) -> dict[str, Any]:
-        """Poll ``librarian.json`` until ``startup_phase == phase``."""
+        """Poll ``librarian.json`` until *this* process reports ``phase``.
+
+        Matching on ``pid`` is mandatory: when a previous fixture session
+        in the same workspace just shut down, ``librarian.json`` still
+        carries that session's last heartbeat (often ``startup_phase ==
+        ready``). Without the pid check, ``wait_for_phase`` would return
+        immediately on the *stale* heartbeat — before the new librarian
+        has bound its query socket — causing dashboard tests that hit the
+        socket right after to fail with ``ENOENT``.
+        """
         deadline = time.monotonic() + timeout
         path = self.workspace / "runtime" / "state" / "librarian.json"
+        target_pid = self.proc.pid
         while time.monotonic() < deadline:
             data = read_heartbeat(path)
-            if data is not None and data.get("startup_phase") == phase:
+            if (
+                data is not None
+                and data.get("pid") == target_pid
+                and data.get("startup_phase") == phase
+            ):
                 return data
             time.sleep(0.05)
         raise AssertionError(
-            f"librarian never reached phase {phase!r} "
+            f"librarian (pid={target_pid}) never reached phase {phase!r} "
             f"(last heartbeat: {read_heartbeat(path)})"
         )
 
