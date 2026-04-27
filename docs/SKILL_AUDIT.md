@@ -385,6 +385,24 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H26 — Decoder section regex required statement body on a new line
+- After H25 the agent emitted two clean ``<node>`` blocks (auxiliary
+  lemma + target theorem). Decoder still rejected with
+  ``reason="malformed_node"``: ``node 'lem:xst_minus_x0_lies_in_u'
+  missing Statement``. Cause: ``_SECTION_RE_TPL`` was
+  ``\*\*Statement\.\*\*\s*\n+(.*)`` — the ``\n+`` after the heading
+  insisted the body start on a *new* line. Real codex output puts
+  the first sentence on the same line as the heading (e.g.
+  ``**Statement.** Assume the ambient setup...``), so the section
+  regex failed to capture anything and ``_extract_section`` returned
+  ``""``. Both the same-line and newline forms are equally readable
+  in markdown, so the regex was simply too strict.
+- **Status**: resolved. ``_SECTION_RE_TPL`` now uses
+  ``[ \t]*\n*`` between the heading and the body, accepting both
+  ``**Statement.**\nBody`` and ``**Statement.** Body``. Existing
+  decoder tests still pass; the live dispatch that surfaced this
+  bug now decodes cleanly.
+
 ### H25 — Decoder regex matched inline ``<node>`` text in skill prose
 - After H22+H23+H24 codex began emitting real ``<node>`` blocks, but
   the decoder regex ``<node>\s*(.*?)\s*</node>`` (no anchors) also

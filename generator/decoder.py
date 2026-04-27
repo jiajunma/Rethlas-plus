@@ -339,7 +339,12 @@ def _parse_block(block: str) -> dict[str, str]:
     }
 
 
-_SECTION_RE_TPL = r"\*\*{name}\*\*\s*\n+(.*?)(?=\n\*\*[A-Z][^*]*\*\*|\Z)"
+# H26: accept ``**Statement.** Body...`` on the same line as well as
+# ``**Statement.**\nBody...``. The original ``\s*\n+`` after the
+# heading required the body to start on a *new* line, but real codex
+# output frequently puts the first sentence on the same line as the
+# heading. Both forms are equally readable in markdown.
+_SECTION_RE_TPL = r"\*\*{name}\*\*[ \t]*\n*(.*?)(?=\n\*\*[A-Z][^*]*\*\*|\Z)"
 
 
 def _extract_section(body: str, name: str) -> str:
