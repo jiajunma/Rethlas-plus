@@ -264,11 +264,16 @@ def main(argv: list[str] | None = None) -> int:
                 detail="generator agent dir missing in workspace",
             )
             return 2
+        # H23: do NOT pass ``-m auto`` here. ``codex exec -m auto``
+        # is rejected by the ChatGPT-account login flow with
+        # ``The 'auto' model is not supported when using Codex with
+        # a ChatGPT account``. Letting the per-agent ``.codex/config.toml``
+        # carry the ``model = "..."`` setting works for both API-key
+        # and ChatGPT-account login modes. Operators who want a
+        # different model can override via ``--codex-argv``.
         codex_argv = [
             "codex",
             "exec",
-            "-m",
-            "auto",
             "--sandbox",
             "read-only",
             "-C",

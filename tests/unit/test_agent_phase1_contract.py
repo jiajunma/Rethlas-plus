@@ -178,8 +178,9 @@ def test_role_codex_invocation_is_workspace_bounded() -> None:
     """H22: generator/role.py and verifier/role.py must invoke codex with
     cwd inside the workspace agent dir (so .. cannot escape into the
     user's home dir) and ``-C agent_dir --add-dir workspace`` to limit
-    the writable scope. Pure source-string assertion so we don't have to
-    spin up a real subprocess to verify the contract."""
+    the writable scope. H23: must not pass ``-m auto`` (rejected by
+    ChatGPT-account login). Pure source-string assertion so we don't
+    have to spin up a real subprocess to verify the contract."""
     for path_str in ("generator/role.py", "verifier/role.py"):
         text = (ROOT / path_str).read_text(encoding="utf-8")
         assert "agent_kind_dir" in text, (
@@ -191,6 +192,14 @@ def test_role_codex_invocation_is_workspace_bounded() -> None:
         )
         assert "cwd=codex_cwd" in text, (
             f"{path_str} must pass cwd to run_codex"
+        )
+        # H23: -m auto is incompatible with ChatGPT-account login. The
+        # default codex argv must rely on the agent .codex/config.toml's
+        # ``model = "..."`` field instead.
+        assert '"auto"' not in text, (
+            f"{path_str} must not pass `-m auto` (H23 — ChatGPT-account "
+            "login rejects it). Let the agent .codex/config.toml drive "
+            "model selection instead."
         )
 
 

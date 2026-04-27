@@ -385,6 +385,21 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H23 — Default ``-m auto`` flag fails on ChatGPT-account login
+- After H22 the workers correctly loaded the Phase I agent dir, but
+  every dispatch still failed with ``ERROR: {"detail":"The 'auto'
+  model is not supported when using Codex with a ChatGPT account."}``.
+  The default codex argv hard-coded ``-m auto``; the CLI flag
+  overrides ``model = "..."`` from ``.codex/config.toml`` and the
+  ChatGPT-login server rejects ``auto`` as a model name.
+- **Status**: resolved. ``generator/role.py`` and ``verifier/role.py``
+  no longer pass ``-m auto``. The per-agent ``.codex/config.toml``
+  carries ``model = "gpt-5.4"`` (etc.) and codex picks it up via the
+  ``-C <agent_dir>`` flag. Operators with a different account or
+  model preference can still override via ``--codex-argv``. Static
+  guard in ``tests/unit/test_agent_phase1_contract.py`` blocks the
+  flag from sneaking back in.
+
 ### H22 — Worker codex invocation read-escapes the workspace
 - `generator/role.py` and `verifier/role.py` invoked
   ``codex exec -m auto --sandbox read-only <prompt>`` with no ``cwd``,

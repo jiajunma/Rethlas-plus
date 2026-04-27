@@ -192,11 +192,13 @@ def main(argv: list[str] | None = None) -> int:
                 detail="verifier agent dir missing in workspace",
             )
             return 2
+        # H23: do NOT pass ``-m auto``. See generator/role.py for the
+        # full rationale; in short, ChatGPT-account login rejects
+        # ``-m auto``, so we let the agent ``.codex/config.toml``
+        # supply the model name instead.
         codex_argv = [
             "codex",
             "exec",
-            "-m",
-            "auto",
             "--sandbox",
             "read-only",
             "-C",
