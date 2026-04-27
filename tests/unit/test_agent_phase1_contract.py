@@ -203,25 +203,74 @@ def test_role_codex_invocation_is_workspace_bounded() -> None:
         )
 
 
+def test_workers_pass_dangerously_bypass_flag_for_mcp() -> None:
+    """H28: under codex 0.125, ``codex exec`` running with any combination
+    of ``--ask-for-approval ...`` + ``--sandbox workspace-write|read-only``
+    auto-cancels MCP tool calls (``user cancelled MCP tool call``). A
+    direct stdio probe of the Phase I MCP server returns valid JSON, and
+    switching the worker invocation to
+    ``--dangerously-bypass-approvals-and-sandbox`` makes the same call
+    succeed and write the memory tree. The Phase I safety boundary is
+    the three-layer validation surface (decoder structural ``REASON_*``
+    constants + librarian projector physical-integrity checks +
+    verifier content schema, per H29), not codex's sandbox, so the
+    bypass is acceptable
+    here. Both worker roles MUST pass the flag so MCP scratch memory
+    and the verifier's tool calls keep flowing through exec dispatch."""
+    for path_str in ("generator/role.py", "verifier/role.py"):
+        text = (ROOT / path_str).read_text(encoding="utf-8")
+        assert '"--dangerously-bypass-approvals-and-sandbox"' in text, (
+            f"{path_str} must pass "
+            "--dangerously-bypass-approvals-and-sandbox to codex exec (H28)"
+        )
+
+
+def test_materialize_pins_mcp_python_to_sys_executable() -> None:
+    """H28: codex spawns the MCP server with the literal command from
+    ``.codex/config.toml``. Upstream ships ``command = "python3"`` which
+    resolves through PATH at codex-launch time — usually to a system
+    Python without ``fastmcp``/``requests`` installed, producing
+    ``user cancelled MCP tool call`` on every MCP call.
+    ``materialize_agents`` must rewrite the command to the rethlas CLI's
+    ``sys.executable`` so the MCP server runs in the same venv that
+    imports ``fastmcp`` during the init-time preflight."""
+    text = (ROOT / "common" / "runtime" / "agents_install.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_patch_mcp_python_command" in text, (
+        "agents_install.py must patch the MCP command to sys.executable "
+        "after copying the agent tree (H28)."
+    )
+    assert "sys.executable" in text, (
+        "agents_install.py must reference sys.executable when patching "
+        "the MCP command (H28)."
+    )
+
+
 def test_decoder_reason_constants_match_documented_count() -> None:
-    """H21: ARCH §6.2 promises "twelve `reason` values" as the complete
-    decoder rejection surface, and PHASE1 M6 promises 12 failure modes.
-    This test pins the count so any new constant must update both
-    documents and add a dedicated unit test."""
+    """H21 (post-H29): after the three-layer validation revision the
+    decoder is structural-only and exports exactly five ``REASON_*``
+    constants. ARCH §6.2 calls them "five `reason` values" and PHASE1
+    M6 lists "5 structural failure modes". This test pins the count so
+    any new constant must update both documents and add a dedicated
+    unit test, AND any new content judgment must instead land at the
+    librarian projector (`apply_failed`) or the verifier (`gap` /
+    `critical` verdict) per ARCH §3.1.6."""
     decoder_text = (ROOT / "generator" / "decoder.py").read_text(
         encoding="utf-8"
     )
     constants = re.findall(r"^REASON_[A-Z_]+ = \"[^\"]+\"", decoder_text, re.M)
-    assert len(constants) == 12, (
-        f"expected 12 REASON_* constants, found {len(constants)}; "
-        "update ARCH §6.2 + PHASE1 M6 if this changes"
+    assert len(constants) == 5, (
+        f"expected 5 REASON_* constants (post-H29), found {len(constants)}; "
+        "either update ARCH §6.2 + PHASE1 M6, or move the new check to "
+        "the projector / verifier per the H29 boundary"
     )
 
     arch_text = (ROOT / "docs" / "ARCHITECTURE.md").read_text(encoding="utf-8")
-    assert "twelve `reason` values" in arch_text
+    assert "five `reason` values" in arch_text
 
     phase1_text = (ROOT / "docs" / "PHASE1.md").read_text(encoding="utf-8")
-    assert "12 failure modes" in phase1_text
+    assert "5 structural failure" in phase1_text
 
 
 def test_verifier_skills_keep_phase1_status_vocabulary() -> None:

@@ -18,7 +18,6 @@ from librarian.projector import (
     REASON_KIND_MUTATION,
     REASON_LABEL_CONFLICT,
     REASON_REF_MISSING,
-    REASON_SELF_REFERENCE,
     Projector,
 )
 
@@ -615,9 +614,14 @@ def test_verifier_hash_mismatch_rejected(
 
 
 # ---------------------------------------------------------------------------
-# self-reference and ref_missing.
+# H29: self-loops are caught as REASON_CYCLE (length-1 cycle); dangling
+# `\ref{}` to non-existent labels are ADMITTED, with the missing edge
+# silently skipped by Cypher MATCH-CREATE. The verifier later flags the
+# unresolved reference via ``external_reference_checks[]``.
 # ---------------------------------------------------------------------------
-def test_self_reference_rejected(projector: Projector, kb: KuzuBackend) -> None:
+def test_self_reference_rejected_as_cycle(
+    projector: Projector, kb: KuzuBackend
+) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="lem:self",
@@ -627,10 +631,18 @@ def test_self_reference_rejected(projector: Projector, kb: KuzuBackend) -> None:
     )
     r = projector.apply(body, raw)
     assert r.status is ApplyOutcome.APPLY_FAILED
-    assert r.reason == REASON_SELF_REFERENCE
+    assert r.reason == REASON_CYCLE
 
 
-def test_ref_missing_rejected(projector: Projector, kb: KuzuBackend) -> None:
+def test_ref_missing_admitted_with_dangling_dep(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """H29: post-boundary the projector no longer rejects ``node_added``
+    events whose body references labels that aren't in KB yet. The Node
+    row lands committed with the dangling label still in ``depends_on``;
+    the actual ``DependsOn`` edge is silently skipped at write time
+    (Cypher MATCH-CREATE pattern). Verifier later flags this via
+    ``external_reference_checks[].status="missing_from_nodes"``."""
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="lem:x",
@@ -639,8 +651,13 @@ def test_ref_missing_rejected(projector: Projector, kb: KuzuBackend) -> None:
         proof="p",
     )
     r = projector.apply(body, raw)
-    assert r.status is ApplyOutcome.APPLY_FAILED
-    assert r.reason == REASON_REF_MISSING
+    assert r.status is ApplyOutcome.APPLIED
+    row = kb.node_by_label("lem:x")
+    assert row is not None
+    # Cypher's MATCH-CREATE pattern in `_set_dependencies` silently
+    # skips the dangling edge — no `DependsOn` lands in the graph.
+    # The verifier flags the unresolved reference content-side.
+    assert kb.dependencies_of("lem:x") == []
 
 
 # ---------------------------------------------------------------------------

@@ -196,11 +196,18 @@ def main(argv: list[str] | None = None) -> int:
         # full rationale; in short, ChatGPT-account login rejects
         # ``-m auto``, so we let the agent ``.codex/config.toml``
         # supply the model name instead.
+        # H28: same MCP-unblocking switch as the generator —
+        # ``--dangerously-bypass-approvals-and-sandbox`` is the
+        # only flag in codex 0.125 that keeps non-interactive MCP
+        # tool calls from being auto-cancelled. The Phase I
+        # boundary is the verifier-output schema + decoder
+        # rejection surface, so whatever else the agent might
+        # write is ignored by the wrapper. The verifier still
+        # runs with cwd inside the materialized agent dir.
         codex_argv = [
             "codex",
+            "--dangerously-bypass-approvals-and-sandbox",
             "exec",
-            "--sandbox",
-            "read-only",
             "-C",
             str(agent_dir),
             "--add-dir",

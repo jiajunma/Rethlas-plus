@@ -22,7 +22,9 @@ small and free of operator-specific state.
 
 from __future__ import annotations
 
+import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Iterable
 
@@ -85,8 +87,13 @@ def _ignore(directory: str, names: Iterable[str]) -> set[str]:
         if name in _SKIP_FILES:
             skipped.add(name)
             continue
-        if full.is_dir() and name in _SKIP_DIRS:
-            skipped.add(name)
+        if full.is_dir():
+            if name in _SKIP_DIRS:
+                skipped.add(name)
+            elif name.startswith(".venv") or name.startswith(".pytest"):
+                # Catch hand-named virtualenvs (.venv, .venv-verifier,
+                # .venv_verify) and pytest caches anywhere in the tree.
+                skipped.add(name)
     return skipped
 
 
@@ -127,8 +134,33 @@ def materialize_agents(
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(src, dst, ignore=_ignore, symlinks=False)
+        _patch_mcp_python_command(dst)
         materialized.append(dst)
     return materialized
+
+
+# H28: Codex spawns the MCP server with the literal command from .codex/
+# config.toml. The upstream config ships ``command = "python3"`` which
+# resolves through PATH at codex-launch time — usually to a system Python
+# that does NOT have fastmcp/requests installed, so every MCP call comes
+# back as ``user cancelled MCP tool call``. Pin the command to the
+# interpreter that runs the rethlas CLI (sys.executable), which is the
+# venv that imports fastmcp during the init-time preflight.
+_MCP_COMMAND_RE = re.compile(
+    r'^(\s*command\s*=\s*)"python3?"',
+    re.MULTILINE,
+)
+
+
+def _patch_mcp_python_command(agent_dir: Path) -> None:
+    cfg = agent_dir / ".codex" / "config.toml"
+    if not cfg.is_file():
+        return
+    text = cfg.read_text(encoding="utf-8")
+    pinned = sys.executable.replace("\\", "\\\\").replace('"', '\\"')
+    new_text, n = _MCP_COMMAND_RE.subn(rf'\1"{pinned}"', text)
+    if n and new_text != text:
+        cfg.write_text(new_text, encoding="utf-8")
 
 
 __all__ = [

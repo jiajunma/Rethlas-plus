@@ -241,30 +241,45 @@ the truth event stream alone.
    means whole-batch atomic publish. No partial truth is visible.
 5. **Only knowledge actors write truth events.** In Phase I, only
    `user`, `generator`, and `verifier` write to `events/`.
-6. **Two-layer validation.** Admission and projection check different
-   things; neither replaces the other.
+6. **Three-layer validation (H29 revision).** Admission, projection,
+   and verification each guard a strictly different concern. Earlier
+   drafts conflated content judgments with admission and projection;
+   the current boundary is:
    - **Admission** (pre-publish, inside each producer's role layer):
-      checks **structural** correctness that can be decided from the
-      event alone plus the producer's local KB view at admission time —
-      schema completeness, actor/type registration, label syntax,
-      self-reference, batch-internal acyclicity, repair-must-change-hash
-      (§6.2), kind immutability on `user.node_revised` (the revised
-      payload's `kind` must match the current KB node's `kind`), and
-      *semantically-unreachable* proposals (e.g.
-      `user.hint_attached(target=X)` where `X.pass_count >= 1` — the
-      hint could never be consumed, see §5.2). Structural failures
-      never enter `events/`; they are recorded in
-      `runtime/state/rejected_writes.jsonl`.
-   - **Projection** (librarian, at apply time): checks **semantic
-     cross-event** consistency that only the canonical event sequence
-     can decide — label uniqueness against already-applied nodes, cycle
-     introduction against the projected graph, `\ref{}` target exists,
-     `user.hint_attached` target exists, verifier-verdict hash match.
-     When these checks fail, librarian records the event in
-     `AppliedEvent` with `status = apply_failed` and a `reason`. The
-     event file stays in `events/` (append-only); it simply does not
-     alter KB state. This is a **routine outcome**, not corruption
-     (§6.5).
+      **structural** correctness only — schema completeness, actor /
+      type registration, the parsed batch can be assembled into a
+      writable event payload (every `<node>` block parses, the
+      dispatch target appears in `nodes[]`, no two non-identical
+      blocks share a label, repair-must-change-hash is honored).
+      *Content* questions — forbidden kinds, prefix-kind mismatch,
+      placeholder labels, existing non-target labels, self-reference,
+      unresolved `\ref{}`, batch-internal cycles — are NOT decoder
+      concerns; the librarian projector and the verifier handle them.
+      Structural failures never enter `events/`; they are recorded in
+      `runtime/state/rejected_writes.jsonl` along with the parsed
+      batch content so the next repair attempt can rebuild from the
+      rejected draft.
+   - **Projection** (librarian, at apply time): **physical KB
+     integrity** only — label uniqueness against already-applied
+     nodes (`label_conflict`), kind immutability on `user.node_revised`
+     (`kind_mutation`), real DAG-cycle introduction against the
+     projected graph (`cycle`), verifier-verdict hash match
+     (`hash_mismatch`), `user.hint_attached` target exists
+     (`hint_target_missing`), schema envelope (`schema`), and event
+     tampering (`workspace_corruption`). Notably **NOT** at the
+     projector: `\ref{X}` resolution, self-reference detection — those
+     are content questions for the verifier. When the projector
+     records `apply_failed`, the event file stays in `events/`
+     (append-only); it simply does not alter KB state. This is a
+     **routine outcome**, not corruption (§6.5).
+   - **Verification** (verifier, at run time): **content correctness** —
+     proof validity, `\ref{X}` actually resolves to a non-empty
+     verified node (emits `external_reference_checks[].status =
+     "missing_from_nodes"` otherwise), suspicious self / cyclic
+     citation patterns, claim-vs-statement consistency, etc. The
+     verifier emits `verdict ∈ {accepted, gap, critical}` plus a
+     `verification_report` and `repair_hint` that the generator's
+     next dispatch consumes (§5.4 / §6.3).
    - **Workspace corruption**: an event in canonical `events/` that
      violates an invariant admission should have caught (for example a
      hand-dropped file with wrong schema). Librarian halts projection
@@ -1660,84 +1675,60 @@ theorem typically produces:
   labels** (multiple `<node>` blocks for supporting results)
 - New definitions introduced under brand-new labels (optional)
 
-**Decoder pipeline** (inside generator role.py):
+**Decoder pipeline** (inside generator role.py, post-H29 —
+structural only per §3.1.6):
 
 ```
 Codex stdout
   ↓
 decoder:
   1. scan for <node>...</node> blocks
-  2. for each block: parse YAML frontmatter + markdown body
-  3. validate: full node-schema fields present, non-empty statement, no
-     duplicate labels in batch, label format, prefix matches kind
-     (§3.5.2), kind is allowed, explicit `\ref{label}` references
-     resolve (or will resolve by end of attempt)
-  4. assemble the full node batch for this run
-  5. validate the staged batch against the decoder's local view
-     (nodes/*.md frontmatter + job file — no Kuzu access):
-     - write-scope invariant: every batch label is either the batch's
-       target or absent from `nodes/*.md` (best-effort; count<1
-       KB labels are invisible to the decoder — librarian's apply
-       is authoritative via `apply_failed(label_conflict)`, §6.5)
-     - kind immutability (for the target, which may already exist
-       in `nodes/*.md`)
-     - **batch-internal acyclicity** — the batch's own labels plus
-       their `\ref{}` edges form a DAG (see algorithm below). Note:
-       cycle introduction **across** the existing KB graph is the
-       librarian's responsibility per §3.1 (projection layer);
-       decoder does not attempt that check because it has no Kuzu
-       access.
-     - repair-must-change-hash (mode=repair only), see below
-  6. stage the admitted batch
+  2. for each block: parse YAML frontmatter + markdown body; the
+     parser must succeed (valid YAML, required fields present,
+     non-empty statement, label slug matches `LABEL_SLUG_RE`, kind
+     is a recognised `NodeKind`). Anything else → `malformed_node`.
+  3. check no two non-identical blocks share a label
+     (byte-identical duplicates auto-collapsed; H27).
+  4. confirm the dispatch target appears in the parsed labels.
+  5. assemble the full node batch (cycle-tolerant topological
+     order — self-loops and unresolved refs are *admitted*; the
+     projector and verifier judge them).
+  6. mode=repair only: compute the staged batch's post-application
+     `verification_hash` for the target and compare to `H_rejected`
+     from the dispatch context — equal hashes → `repair_no_change`.
   7. atomically publish one `generator.batch_committed`
   ↓
 events/ directory
   ↓
 librarian watches, applies → dag.kz + nodes/*.md
+     (label uniqueness, kind immutability, hash chain, and full
+     graph cycle detection happen **here**; failures surface as
+     `apply_failed`, never as decoder rejection.)
 ```
 
 After one attempt completes, the KB may have several new / revised
 nodes, each entering its own verify-or-regenerate cycle.
 
-**Decoder failure modes:** (canonical reason strings written to
-`runtime/state/rejected_writes.jsonl`; the `reason` column matches
-the `REASON_*` constants exported by `generator/decoder.py`)
+**Decoder failure modes (post-H29 — structural only):** the decoder
+records canonical reason strings to `runtime/state/rejected_writes.jsonl`
+and exports them as `REASON_*` constants in `generator/decoder.py`.
+Per the §3.1.6 H29 boundary the decoder no longer judges *content*
+(forbidden kinds, prefix-kind mismatch, placeholder labels, existing
+non-target labels, self-reference, unresolved `\ref{}`, batch-internal
+cycles) — those land at the projector (physical-integrity violations)
+or the verifier (content gaps). Five reasons survive:
 - `no_nodes_in_batch` → stdout parses with zero `<node>` blocks
-  (e.g. Codex emitted only prose / a verdict with no batch). Reject
-  attempt; no truth event emitted.
+  (e.g. Codex emitted only prose with no batch). Reject attempt; no
+  truth event emitted.
 - `malformed_node` — `<node>` block parses but is missing required
-  frontmatter, has invalid YAML, lacks a `Statement` body, etc.
-- `forbidden_kind` — `kind: external_theorem` appears (user-only kind)
-- `prefix_kind_mismatch` — label prefix does not match `kind`
-  (§3.5.2 mapping, e.g. `thm:foo` with `kind: lemma`)
-- `placeholder_label` — placeholder / local label name
-  (`thm:main`, `lem:helper`, etc.)
-- `duplicate_label_in_batch` — same label appears twice within one
-  batch's `nodes[]`
-- `target_mismatch` — batch `target` field is absent from `nodes[]`,
-  or differs from the dispatch parameter the wrapper read from the
-  job file
-- `existing_non_target_label` — non-target existing label in `nodes[]`
-  → reject (violates the write-scope invariant — generator can touch
-  only the batch's target or brand-new labels). **Best-effort only**:
-  decoder sees existing labels via `nodes/*.md` (count ≥ 1), so this
-  check misses any KB label currently at `pass_count < 1` (e.g. a
-  `user.node_added` def still awaiting verifier). Those are caught at
-  apply time by librarian's Kuzu-authoritative label-uniqueness check
-  (`apply_failed(reason=label_conflict)`, §6.5). One wasted batch
-  per missed collision; no truth corruption.
-- `self_reference` — a batch node's own `statement` or `proof`
-  `\ref{}`s the node itself (also enforced as an `apply_failed`
-  reason at librarian apply time for defense-in-depth, §3.1.6)
-- `ref_unresolved` — unresolved `\ref{}` — every `\ref{label}` must resolve in
-  **(batch labels ∪ labels present in `nodes/*.md`)**. This is
-  Kuzu-free by construction: generator's dep-readiness filter
-  (§10.2.2) requires existing deps to be at `pass_count ≥ 1`, so
-  every legitimate dep is rendered in `nodes/`; a `\ref{}` pointing
-  at a count<1 KB label would be a write-scope violation anyway
-  (generator must not reference unverified nodes). Failure →
-  reject the batch with `reason=ref_unresolved` and detail naming
-  the unresolved label.
+  frontmatter, has invalid YAML, lacks a `Statement` body, has an
+  unknown `kind` value (the NodeKind enum cannot be constructed),
+  or the label slug regex fails. Recorded with the parsed (partial)
+  fields so repair can see what the agent intended.
+- `duplicate_label_in_batch` — two non-identical `<node>` blocks
+  share a label (byte-identical duplicates are auto-collapsed; H27).
+- `target_mismatch` — the dispatch target is absent from `nodes[]`;
+  the wrapper has no way to fill `payload.target` correctly.
 - `repair_no_change` (**Repair-must-change-hash**, mode=repair only):
   decoder must verify that the repair target's **post-batch**
   `verification_hash` differs from the `verification_hash` carried
@@ -1767,51 +1758,34 @@ the `REASON_*` constants exported by `generator/decoder.py`)
   batch's post-application view captures this correctly; it also
   still blocks genuine no-ops (generator re-emits identical content
   with no new helpers).
-- `cycle` — batch's own labels form a directed cycle among
-  themselves. Algorithm and `detail` format documented under
-  "Batch-internal cycle detection (decoder)" below; cross-batch
-  cycles are not decoder's responsibility (caught at apply time as
-  `apply_failed(reason=cycle)`, see "Cross-batch cycle detection
-  (librarian)" below and §6.5).
 
-The above twelve `reason` values are the complete decoder rejection
-surface; any new rejection mode must add a `REASON_*` constant to
-`generator/decoder.py`, an entry to this list, and a dedicated test
-in `tests/unit/test_m6_decoder.py` (PHASE1 M6 acceptance criteria).
+The above five `reason` values are the complete decoder rejection
+surface (post-H29 — structural only); any new rejection mode must
+add a `REASON_*` constant to `generator/decoder.py`, an entry to
+this list, and a dedicated test in `tests/unit/test_m6_decoder.py`
+(PHASE1 M6 acceptance criteria). Content-shaped failures (forbidden
+kind, prefix-kind mismatch, placeholder labels, existing non-target
+labels, self-reference, unresolved `\ref{}`, batch-internal cycles)
+are admitted and surface either as `apply_failed` from the projector
+(physical-integrity violations such as cross-batch cycles) or as
+verifier verdicts (`gap` / `critical`) carrying `repair_hint` for
+the next attempt.
 
 **Intra-batch ordering.** Within one generator batch, the wrapper
 topologically orders the included node states by their explicit `\ref{}`
 dependency edges before handing the batch to librarian. Librarian applies the
 batch in that order inside one batch transaction.
 
-**Batch-internal cycle detection (decoder).** Decoder rejects a
-batch whose own labels form a cycle among themselves. Phase I
-algorithm (Kuzu-free — decoder has no Kuzu access per §4.1):
-
-1. Build an in-memory directed graph whose vertex set is exactly
-   the set of labels appearing in the batch's `nodes[]`.
-2. For each batch node, add an out-edge to every `\ref{label}`
-   appearing in its `statement` + `proof` **whose target is also a
-   batch label**. `\ref{}` targets that are not in the batch are
-   irrelevant here (they would either resolve in `nodes/` — an
-   existing dep — or fail the "unresolved `\ref{}`" check).
-3. Run DFS / Tarjan on this in-memory graph; if any back-edge is
-   found → batch rejected at decode time with reason `cycle` and
-   detail naming the cycle path (e.g. `"cycle: thm:a → lem:b → thm:a"`).
-
-This catches the common case of a generator self-tangling its own
-batch (typically a repair attempt inventing a helper lemma that
-ends up circularly referencing the target).
-
-**Cross-batch cycle detection (librarian).** Cycles introduced
-across the KB graph — a batch `\ref{}` into existing nodes that,
-combined with the batch's new edges, closes a cycle through
-already-applied edges — are caught at **apply time** by
+**Cycle detection (librarian, post-H29).** All `\ref{}`-induced
+cycles — whether the batch tangles within itself or closes a cycle
+through already-applied edges — are caught at **apply time** by
 librarian's Kuzu-native cycle check (§3.1 projection layer, §6.5).
 The result is `apply_failed(reason=cycle)` per §3.1.6; the
-generator wastes one batch but no cycle enters truth. This split
-of responsibilities (decoder: batch-internal; librarian:
-cross-batch) preserves the Kuzu-free worker invariant.
+generator wastes one batch but no cycle enters truth. The decoder
+no longer attempts batch-internal cycle detection: that was a
+content judgment (the batch is well-formed bytes either way), and
+the H29 boundary moves it to the projector where Kuzu can answer
+the cycle question authoritatively. Workers stay Kuzu-free.
 
 **Prompt composition** (assembled by `role.py`):
 
@@ -1835,9 +1809,12 @@ cross-batch) preserves the Kuzu-free worker invariant.
 4. **Repair context** (if mode=repair) — the target's
    `verification_report` and `repair_hint` (which may carry both
    verifier and user sections) from the latest verdict
-5. **Latest batch rejection report** (if any) — runtime-only structural
-   rejection summary from the decoder/admission layer, such as cycle
-   introduction or unresolved reference
+5. **Latest batch rejection report** (if any) — runtime-only summary
+   of the most recent decoder structural rejection (one of the five
+   `REASON_*` codes) or projector `apply_failed` reason (cross-batch
+   cycle, label collision, kind change, hash chain). Verifier-driven
+   content gaps arrive via `verification_report` + `repair_hint`
+   instead (item 4 above)
 6. **Repair history summary** — the target's current `repair_count`
    (number of gap/critical verdicts accumulated against the current
    `statement_hash`). If `repair_count` is small (0-2), generator is
@@ -2637,14 +2614,18 @@ begin Kuzu transaction:
 Key points:
 
 1. **Structural check**: schema completeness, actor/type registered,
-   label format, self-reference, batch-internal acyclicity. If this
-   fails on a canonical event, admission was bypassed → **workspace
-   corruption**, projection halts.
-2. **Semantic check**: label uniqueness against KB, cycle introduction
-   against projected graph, `\ref{}` targets exist, hint target exists,
-   verifier `verification_hash` matches current node hash. Failures
-   here are **routine** — recorded as `apply_failed` with a `reason`
-   code from §5.2.
+   label format. If this fails on a canonical event, admission was
+   bypassed → **workspace corruption**, projection halts.
+2. **Semantic check** (post-H29): label uniqueness against KB, kind
+   immutability, hash chain, full-graph cycle introduction (decoder
+   no longer screens batch-internal cycles per §3.1.6 — projector
+   sees them along with cross-batch cycles), hint target exists,
+   verifier `verification_hash` matches current node hash. `\ref{}`
+   targets that don't exist are **admitted** (the corresponding
+   `MATCH-CREATE` silently skips the dangling edge); the verifier
+   later flags them via `external_reference_checks[].status =
+   "missing_from_nodes"`. Genuine integrity failures here are
+   recorded as `apply_failed` with a `reason` code from §5.2.
 3. **Apply and AppliedEvent are one Kuzu transaction.** Crash
    mid-apply → rollback → event not marked decided → retried on next
    startup (same deterministic outcome).

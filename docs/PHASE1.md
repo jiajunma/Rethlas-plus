@@ -728,35 +728,43 @@ lock behavior and with ARCHITECTURE §4.1's single-process model.
   - optional `cost` field: either absent, or has all four
     subfields (`input_tokens`, `output_tokens`, `reasoning_tokens`,
     `cost_usd`) plus `duration_seconds`
-- `integration`: decoder rejects each of the 12 failure modes per
-  ARCHITECTURE §3.5.1 + §6.2. Each has a dedicated bad-fixture
-  test and produces exactly one line in
+- `integration`: decoder rejects each of the 5 structural failure
+  modes per ARCHITECTURE §3.1.6 (H29 boundary) + §6.2. Each has a
+  dedicated bad-fixture test and produces exactly one line in
   `runtime/state/rejected_writes.jsonl` with the right `reason`
   + `detail`; no truth event is published:
   - empty batch — stdout parses with zero `<node>` blocks
     (`reason=no_nodes_in_batch`); see
     `generator/decoder.py:REASON_NO_NODES`
-  - malformed `<node>` block
-  - `kind: external_theorem` in batch (user-only kind)
-  - wrong label prefix / kind pairing (e.g. `thm:foo, kind=lemma`)
-  - placeholder label (`thm:main`, `lem:helper`, etc.)
-  - duplicate label within the same batch
+  - malformed `<node>` block — YAML parse failure, missing required
+    fields, empty statement, invalid label slug, or unknown `kind`
+  - duplicate label within the same batch (byte-identical
+    duplicates auto-collapse; H27)
   - batch `target` field not present in `nodes[]`, or `target`
     mismatches the dispatch parameter
-  - existing non-target label in `nodes[]` (write-scope invariant,
-    H7)
-  - self-reference (node `\ref{}`s itself)
-  - unresolved `\ref{}` to a label that neither exists in KB nor
-    appears in the same batch
-  - batch introduces a **batch-internal** dependency cycle —
-    i.e. the cycle lies entirely among labels in the batch's own
-    `nodes[]` (ARCHITECTURE §6.2 batch-internal cycle detection).
-    Cross-batch cycles (batch edges that close a cycle through
-    existing KB edges) are **not** decoder's responsibility —
-    those are caught at apply time by librarian and surface as
-    `apply_failed(reason=cycle)`; see M4 cross-batch cycle test.
   - repair-must-change-hash — post-batch `verification_hash`
     equals the rejected `H_rejected` from the triggering verdict
+- `integration`: post-H29 *content* concerns are **admitted** by the
+  decoder and routed elsewhere. Each has a dedicated test asserting
+  the batch lands in `events/` (no `rejected_writes.jsonl` line):
+  - `kind: external_theorem` in batch (user-only kind) — projector
+    emits `apply_failed(reason=forbidden_kind)`
+  - wrong label prefix / kind pairing (e.g. `thm:foo, kind=lemma`)
+    — verifier flags via `external_reference_checks`
+  - placeholder label (`thm:main`, `lem:helper`, etc.) — verifier
+    flags as content gap
+  - existing non-target label in `nodes[]` (write-scope invariant,
+    H7) — projector emits `apply_failed(reason=label_conflict)`
+  - self-reference (node `\ref{}`s itself) — admitted as a no-op
+    edge; verifier flags if the self-ref is load-bearing
+  - unresolved `\ref{}` to a label that neither exists in KB nor
+    appears in the same batch — projector silently skips the
+    dangling edge; verifier flags via
+    `external_reference_checks[].status = "missing_from_nodes"`
+  - any dependency cycle (batch-internal **or** cross-batch) — all
+    `\ref{}`-induced cycles are caught at apply time by librarian's
+    Kuzu-native cycle check and surface as
+    `apply_failed(reason=cycle)`; see M4 cycle test
 - `integration`: batch-internal topological hashing works; decoder
   resolves existing deps' `statement_hash` from **`nodes/*.md`
   frontmatter** (ARCHITECTURE §4.2) and batch-new deps from the

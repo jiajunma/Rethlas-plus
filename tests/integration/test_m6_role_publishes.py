@@ -128,20 +128,23 @@ def test_role_publishes_valid_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_role_rejection_writes_to_jsonl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """H29: decoder rejections are now structural-only. Trigger the
+    ``target_mismatch`` reason by having codex emit a node with a label
+    that doesn't match the dispatch target — the wrapper has no way to
+    publish a sane batch_committed payload, so it rejects."""
     ws_root = tmp_path
     make_workspace(ws_root, seed_config=True)
     monkeypatch.setenv("RETHLAS_WORKSPACE", str(ws_root))
-    # Force a rejection: codex emits a node with kind=external_theorem.
     monkeypatch.setenv(
         "FAKE_CODEX_SCRIPT",
-        quick_success(_block("ext:bad", "external_theorem", "S", "")),
+        quick_success(_block("thm:other", "theorem", "S", "P")),
     )
 
     job_id = _seed_job(
         ws_root,
-        target="ext:bad",
+        target="thm:goal",
         mode="fresh",
-        target_kind="external_theorem",
+        target_kind="theorem",
         statement="S",
     )
 
@@ -160,8 +163,15 @@ def test_role_rejection_writes_to_jsonl(tmp_path: Path, monkeypatch: pytest.Monk
     assert rejects.is_file()
     line = rejects.read_text(encoding="utf-8").splitlines()[-1]
     entry = json.loads(line)
-    assert entry["reason"] == "forbidden_kind"
-    assert entry["target"] == "ext:bad"
+    assert entry["reason"] == "target_mismatch"
+    assert entry["target"] == "thm:goal"
+    # H29 phase A-2: the parsed (but rejected) draft is preserved so
+    # the next attempt's prompt can repair against it.
+    assert "parsed_blocks" in entry
+    assert [b["label"] for b in entry["parsed_blocks"]] == ["thm:other"]
+    assert entry["parsed_blocks"][0]["kind"] == "theorem"
+    assert entry["parsed_blocks"][0]["statement"] == "S"
+    assert entry["parsed_blocks"][0]["proof"] == "P"
 
 
 def test_fresh_mode_user_hint_reaches_prompt_via_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

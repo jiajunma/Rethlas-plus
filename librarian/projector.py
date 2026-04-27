@@ -59,7 +59,6 @@ REASON_HINT_TARGET_MISSING = "hint_target_missing"
 REASON_HINT_TARGET_UNREACHABLE = "hint_target_unreachable"
 REASON_HASH_MISMATCH = "hash_mismatch"
 REASON_KIND_MUTATION = "kind_mutation"
-REASON_SELF_REFERENCE = "self_reference"
 # §6.5 "workspace corruption": an event got past admission with a
 # producer-registration or structural shape that should never have been
 # allowed. Caller (daemon) treats this as a fatal halt-projection signal.
@@ -234,17 +233,16 @@ class Projector:
                 f"label {target!r} already exists",
             )
 
+        # H29: ref-missing and self-reference are CONTENT judgments and
+        # belong to the verifier (per ARCH §3.1.6 H29 boundary). The
+        # projector keeps only physical-integrity guards. ``deps`` may
+        # therefore include labels that don't yet resolve to a Node;
+        # ``_assemble_node`` substitutes empty hashes for missing deps,
+        # and ``_set_dependencies`` silently skips edges to non-existent
+        # targets (Cypher MATCH-CREATE pattern). When the missing dep
+        # is later defined, the agent's repair attempt regenerates this
+        # node with the now-resolvable refs and proper hashes.
         deps = _extract_refs(statement + "\n" + proof)
-        if target in deps:
-            raise ProjectionRejection(
-                REASON_SELF_REFERENCE,
-                f"node {target!r} references itself",
-            )
-        for dep in deps:
-            if self._kb.node_by_label(dep) is None:
-                raise ProjectionRejection(
-                    REASON_REF_MISSING, f"\\ref{{{dep}}} not found"
-                )
 
         node = self._assemble_node(
             label=target,
@@ -295,14 +293,12 @@ class Projector:
                 "schema", "external_theorem requires non-empty source_note"
             )
 
+        # H29: drop ref-missing / self-reference checks here too — the
+        # verifier flags those as content gaps. The cycle check stays
+        # because real DAG cycles among existing edges break Kuzu's
+        # graph queries (BFS / topological order) and that's a physical-
+        # integrity concern.
         deps = _extract_refs(statement + "\n" + proof)
-        if target in deps:
-            raise ProjectionRejection(REASON_SELF_REFERENCE, target)
-        for dep in deps:
-            if self._kb.node_by_label(dep) is None:
-                raise ProjectionRejection(
-                    REASON_REF_MISSING, f"\\ref{{{dep}}} not found"
-                )
         cycle = self._kb.would_introduce_cycle(target, deps)
         if cycle is not None:
             raise ProjectionRejection(REASON_CYCLE, _cycle_detail(cycle))
@@ -446,6 +442,17 @@ class Projector:
         order = _batch_topological_order(parsed)
 
         # First pass: build the staged Node list (for hashes + kind checks).
+        # H29: drop the ref-missing content check. The verifier reads the
+        # admitted node and emits ``verdict=gap`` with
+        # ``external_reference_checks[].status="missing_from_nodes"`` for
+        # unresolved refs. Self-loops, however, would write a self-edge
+        # into the DependsOn graph and break Kuzu's DAG invariants — so
+        # they stay rejected here as ``REASON_CYCLE`` (a length-1 cycle),
+        # matching how ``KuzuBackend.would_introduce_cycle`` handles them
+        # for the single-node node_added path.
+        # ``_assemble_node_with_staged`` substitutes empty hashes for
+        # missing deps so the cascade still works once the dep is later
+        # defined and the dependent node is regenerated.
         staged: dict[str, Node] = {}
         for lbl in order:
             entry = next(e for (l, _, e) in parsed if l == lbl)
@@ -453,15 +460,6 @@ class Projector:
             stmt = entry["statement"]
             proof = entry["proof"]
             deps = _extract_refs(stmt + "\n" + proof)
-            if lbl in deps:
-                raise ProjectionRejection(REASON_SELF_REFERENCE, lbl)
-            for dep in deps:
-                if dep in batch_label_set:
-                    continue  # satisfied by batch
-                if self._kb.node_by_label(dep) is None:
-                    raise ProjectionRejection(
-                        REASON_REF_MISSING, f"\\ref{{{dep}}} not found"
-                    )
             node = self._assemble_node_with_staged(
                 label=lbl,
                 kind=kind,
@@ -511,7 +509,9 @@ class Projector:
             node = staged[lbl]
             for dep in node.depends_on:
                 if dep == lbl:
-                    raise ProjectionRejection(REASON_SELF_REFERENCE, lbl)
+                    raise ProjectionRejection(
+                        REASON_CYCLE, _cycle_detail([lbl, lbl])
+                    )
                 path = _bfs_path(adjacency, dep, lbl)
                 if path is not None:
                     raise ProjectionRejection(
@@ -639,12 +639,20 @@ class Projector:
         remark: str,
         source_note: str,
     ) -> Node:
+        # H29: missing deps are tolerated (their hash is empty string).
+        # The verifier reports them as ``missing_from_nodes`` content
+        # gaps; once the dep is later defined, the dependent's repair
+        # round regenerates it with the proper hash.
         dep_refs: list[DepRef] = []
         for d in depends_on:
+            if d == label:
+                # Self-reference: include with empty hash; verifier
+                # judges the recursion as a content issue.
+                dep_refs.append(DepRef(label=d, statement_hash=""))
+                continue
             row = self._kb.node_by_label(d)
-            if row is None:
-                raise ProjectionRejection(REASON_REF_MISSING, d)
-            dep_refs.append(DepRef(label=d, statement_hash=row.statement_hash))
+            sh_dep = row.statement_hash if row is not None else ""
+            dep_refs.append(DepRef(label=d, statement_hash=sh_dep))
         sh = statement_hash(
             label=label,
             kind=kind.value,
@@ -678,17 +686,20 @@ class Projector:
         source_note: str,
         staged: dict[str, Node],
     ) -> Node:
+        # H29: missing deps are tolerated; verifier judges them.
         dep_refs: list[DepRef] = []
         for d in depends_on:
+            if d == label:
+                dep_refs.append(DepRef(label=d, statement_hash=""))
+                continue
             if d in staged:
                 dep_refs.append(
                     DepRef(label=d, statement_hash=staged[d].statement_hash)
                 )
                 continue
             row = self._kb.node_by_label(d)
-            if row is None:
-                raise ProjectionRejection(REASON_REF_MISSING, d)
-            dep_refs.append(DepRef(label=d, statement_hash=row.statement_hash))
+            sh_dep = row.statement_hash if row is not None else ""
+            dep_refs.append(DepRef(label=d, statement_hash=sh_dep))
         sh = statement_hash(
             label=label, kind=kind.value, statement=statement, depends_on=dep_refs
         )

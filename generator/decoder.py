@@ -1,36 +1,45 @@
 """Generator decoder — parse Codex stdout into a validated batch.
 
-ARCHITECTURE §6.2. The decoder is intentionally **Kuzu-free** (§4.1):
-its only inputs are:
+ARCHITECTURE §6.2. The decoder is intentionally **Kuzu-free** (§4.1)
+and **structural-only** (H29). It only rejects when the parsed bytes
+literally cannot be turned into a writable ``generator.batch_committed``
+event payload. Every *content* admissibility judgment — forbidden
+kind, prefix-kind mismatch, placeholder labels, existing non-target
+labels, self-reference, unresolved ``\\ref{}``, batch-internal cycles
+— is the verifier's responsibility (per ARCH §3.1.6 H29 boundary
+revision): the verifier reads the admitted node and emits
+``verdict=gap`` with ``external_reference_checks[].status =
+"missing_from_nodes"`` (or similar) plus a ``repair_hint`` that the
+generator's next attempt receives. The librarian projector still
+guards *physical KB integrity* (label uniqueness, kind immutability,
+hash chain, real DAG cycles among existing edges); it no longer
+rejects on missing-ref or self-ref content patterns.
+
+Inputs:
 
 - the raw bytes of Codex stdout (already merged with stderr in the
   per-job log file, but the wrapper passes only the stdout stream)
-- the dispatch context (``target``, ``mode``, ``H_rejected``,
-  ``dep_statement_hashes``) coming from the job file
-- ``existing_kb_view`` — a callable that answers "is this label
-  present in ``nodes/*.md`` at ``pass_count >= 1``?"; the wrapper
-  builds it by walking ``knowledge_base/nodes/`` once, no Kuzu needed
-- ``existing_dep_hash`` — a callable that returns the
-  ``statement_hash`` of an existing dep label as read from
-  ``nodes/*.md`` frontmatter
+- the dispatch context (``target``, ``mode``, ``H_rejected``)
+  coming from the job file
+- ``existing_label_present`` / ``existing_dep_hash`` — best-effort
+  callables that let the decoder compute the target's
+  ``verification_hash`` so the ``repair_no_change`` invariant can
+  fire on repair-mode runs. Missing entries are tolerated (used as
+  empty-string dep hashes); the projector is authoritative for
+  admissibility.
 
 Output: either a :class:`StagedBatch` ready for atomic publish, or a
-:class:`DecodeError` whose ``reason`` matches the §5.2 rejection
-table. Wrappers map :class:`DecodeError` to a single line in
-``runtime/state/rejected_writes.jsonl``.
+:class:`DecodeError` whose ``reason`` is one of the five structural
+codes below.
 
-**Failure modes** (PHASE1 M6 list):
-1. malformed ``<node>`` block
-2. ``kind: external_theorem``  (user-only)
-3. wrong label-prefix ↔ kind pairing
-4. placeholder label
-5. duplicate label within batch
-6. batch ``target`` not in ``nodes[]`` or mismatches dispatch target
-7. existing non-target label in ``nodes[]`` (write-scope invariant)
-8. self-reference
-9. unresolved ``\\ref{}``
-10. batch-internal cycle
-11. repair-must-change-hash (mode=repair only)
+**Failure modes** (post-H29 — only structural):
+1. ``malformed_node`` — YAML / section parse failure or invalid slug
+2. ``no_nodes_in_batch`` — stdout produced no parseable ``<node>`` blocks
+3. ``duplicate_label_in_batch`` — two non-identical blocks share a
+   label (byte-identical duplicates are auto-collapsed; H27)
+4. ``target_mismatch`` — dispatch target is not among the parsed labels
+5. ``repair_no_change`` — repair-mode batch produced a target
+   ``verification_hash`` equal to ``H_rejected`` (state-machine guard)
 """
 
 from __future__ import annotations
@@ -43,20 +52,17 @@ from typing import Callable
 import yaml
 
 from common.kb.hashing import DepRef, statement_hash, verification_hash
-from common.kb.types import KIND_PREFIX, LABEL_SLUG_RE, NodeKind, PLACEHOLDER_LABELS
+from common.kb.types import KIND_PREFIX, LABEL_SLUG_RE, NodeKind
 
 
-# Decoder reasons — keep aligned with §5.2 + PHASE1 §M6.
+# Decoder reasons — only the five structural codes survive the H29
+# boundary revision (ARCH §3.1.6). Anything that is "the agent wrote
+# something semantically inadmissible" lands at the librarian projector
+# (physical-integrity rejections like label_conflict) or at the
+# verifier (content gaps like missing references).
 REASON_MALFORMED_NODE = "malformed_node"
-REASON_FORBIDDEN_KIND = "forbidden_kind"
-REASON_PREFIX_KIND_MISMATCH = "prefix_kind_mismatch"
-REASON_PLACEHOLDER_LABEL = "placeholder_label"
 REASON_DUPLICATE_LABEL = "duplicate_label_in_batch"
 REASON_TARGET_MISMATCH = "target_mismatch"
-REASON_EXISTING_NON_TARGET = "existing_non_target_label"
-REASON_SELF_REFERENCE = "self_reference"
-REASON_REF_UNRESOLVED = "ref_unresolved"
-REASON_CYCLE = "cycle"
 REASON_REPAIR_NO_CHANGE = "repair_no_change"
 REASON_NO_NODES = "no_nodes_in_batch"
 
@@ -87,12 +93,27 @@ class StagedBatch:
 
 
 class DecodeError(Exception):
-    """Raised when decoder rejects a batch. Carries a §5.2 ``reason`` code."""
+    """Raised when decoder rejects a batch. Carries a §5.2 ``reason`` code.
 
-    def __init__(self, reason: str, detail: str) -> None:
+    ``parsed_blocks`` (H29 phase A-2) preserves the raw ``<node>`` block
+    dicts (``label``, ``kind``, ``statement``, ``proof``, ``remark``,
+    ``source_note``) the decoder managed to extract before failing, so
+    the wrapper can record them in ``rejected_writes.jsonl`` and the
+    next attempt's prompt has a draft to repair against. May be empty
+    when the batch failed before any block parsed cleanly (e.g.
+    ``no_nodes_in_batch``).
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        detail: str,
+        parsed_blocks: tuple[dict, ...] = (),
+    ) -> None:
         super().__init__(f"{reason}: {detail}")
         self.reason = reason
         self.detail = detail
+        self.parsed_blocks = parsed_blocks
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +143,17 @@ def decode_codex_stdout(
     if not blocks:
         raise DecodeError(REASON_NO_NODES, "no <node> blocks parsed from stdout")
 
-    parsed = []
-    for blk in blocks:
-        parsed.append(_parse_block(blk))
+    parsed: list[dict] = []
+    try:
+        for blk in blocks:
+            parsed.append(_parse_block(blk))
+    except DecodeError as exc:
+        # H29 phase A-2: surface every block we *did* manage to parse so
+        # the wrapper can persist them in ``rejected_writes.jsonl`` and
+        # the next attempt's prompt has a draft to repair against.
+        if not exc.parsed_blocks:
+            exc.parsed_blocks = tuple(parsed)
+        raise
 
     # H27: codex frequently emits the same node twice — once during
     # its reasoning ("here's my draft") and once as the final emission
@@ -137,7 +166,37 @@ def decode_codex_stdout(
     # ``duplicate_label_in_batch`` below.
     parsed = _dedupe_identical_blocks(parsed)
 
-    # Per-node admission checks.
+    # H29 phase A-2: anything that raises beyond this point already has
+    # the full ``parsed`` list of admitted block dicts; thread it onto
+    # any propagating ``DecodeError`` so the wrapper can persist them.
+    try:
+        return _decode_validate_and_stage(
+            parsed=parsed,
+            target=target,
+            mode=mode,
+            h_rejected=h_rejected,
+            existing_dep_hash=existing_dep_hash,
+        )
+    except DecodeError as exc:
+        if not exc.parsed_blocks:
+            exc.parsed_blocks = tuple(parsed)
+        raise
+
+
+def _decode_validate_and_stage(
+    *,
+    parsed: list[dict],
+    target: str,
+    mode: str,
+    h_rejected: str | None,
+    existing_dep_hash: Callable[[str], str | None],
+) -> StagedBatch:
+
+    # Per-node structural shape check (H29: only duplicate-label).
+    # Forbidden-kind / prefix-mismatch / placeholder-label / existing-
+    # non-target-label are all CONTENT judgments — the verifier and
+    # the projector handle them. The decoder only rejects when the
+    # batch literally cannot be assembled into a writable payload.
     labels_seen: set[str] = set()
     for entry in parsed:
         label = entry["label"]
@@ -146,18 +205,14 @@ def decode_codex_stdout(
                 REASON_DUPLICATE_LABEL, f"duplicate label {label!r} in batch"
             )
         labels_seen.add(label)
-        if label in PLACEHOLDER_LABELS:
-            raise DecodeError(REASON_PLACEHOLDER_LABEL, label)
-        kind = _parse_kind(entry["kind"])
-        if kind is NodeKind.EXTERNAL_THEOREM:
-            raise DecodeError(
-                REASON_FORBIDDEN_KIND, "generator may not introduce external_theorem"
-            )
-        _check_label_prefix(label, kind)
-        # external_theorem is already excluded above so source_note rule
-        # only applies to user-side; here every other kind permits empty.
+        # ``_parse_kind`` is structural — without a known kind we can't
+        # construct the StagedNode at all. An unknown kind is recorded
+        # as ``malformed_node`` (the YAML body was syntactically a
+        # mapping but ``kind: <bad>`` is not a NodeKind enum value).
+        _parse_kind(entry["kind"])
 
-    # Target presence.
+    # Target presence — without the target in the batch, the wrapper
+    # cannot fill ``payload.target`` correctly. This is structural.
     target_labels = [e["label"] for e in parsed]
     if target not in target_labels:
         raise DecodeError(
@@ -165,45 +220,28 @@ def decode_codex_stdout(
             f"dispatch target {target!r} missing from batch nodes",
         )
 
-    # Write-scope invariant: every non-target label must NOT exist in
-    # the local KB view (best-effort; librarian is authoritative).
+    # Compute refs per label (informational only — used to compute
+    # statement_hash and to expose ``depends_on`` on each StagedNode).
+    # Self-reference and unresolved refs are NOT errors here; the
+    # verifier (only) judges content quality and emits ``verdict=gap``
+    # with ``external_reference_checks[].status="missing_from_nodes"``.
     batch_label_set = set(target_labels)
-    for entry in parsed:
-        lbl = entry["label"]
-        if lbl == target:
-            continue
-        if existing_label_present(lbl):
-            raise DecodeError(
-                REASON_EXISTING_NON_TARGET,
-                f"label {lbl!r} already exists at pass_count>=1",
-            )
-
-    # Self-reference + ref resolution.
     refs_per_label: dict[str, list[str]] = {}
     for entry in parsed:
-        lbl = entry["label"]
         text = entry["statement"] + "\n" + entry["proof"]
-        refs = _extract_refs(text)
-        if lbl in refs:
-            raise DecodeError(REASON_SELF_REFERENCE, lbl)
-        for ref in refs:
-            if ref in batch_label_set:
-                continue
-            if existing_dep_hash(ref) is None:
-                raise DecodeError(
-                    REASON_REF_UNRESOLVED,
-                    f"\\ref{{{ref}}} not found in nodes/*.md and not in batch",
-                )
-        refs_per_label[lbl] = refs
+        refs_per_label[entry["label"]] = _extract_refs(text)
 
-    # Batch-internal cycle: directed graph over batch labels only.
-    _check_batch_internal_cycle(refs_per_label, batch_label_set)
+    # Hash each node in topological order so intra-batch refs see the
+    # freshly computed dep hash. ``_safe_topological_order`` falls back
+    # to insertion order when a real cycle exists in intra-batch refs;
+    # the projector will catch genuine DAG cycles against the existing
+    # graph at apply time. Self-loops (label refs itself) are simply
+    # ignored when ordering — the verifier flags them as content
+    # issues, and the hash treats a self-ref like an unresolved dep
+    # (empty string), which is harmless because the verifier will say
+    # ``gap`` regardless and the agent will repair.
+    order = _safe_topological_order(refs_per_label, batch_label_set)
 
-    # Topologically sort by intra-batch deps so we can compute hashes
-    # incrementally.
-    order = _topological_order(refs_per_label, batch_label_set)
-
-    # Hash each node.
     staged_by_label: dict[str, StagedNode] = {}
     parsed_by_label = {e["label"]: e for e in parsed}
     for lbl in order:
@@ -212,15 +250,23 @@ def decode_codex_stdout(
         deps = refs_per_label[lbl]
         dep_refs: list[DepRef] = []
         for d in deps:
+            if d == lbl:
+                # Self-ref: hash with empty dep — the verifier will
+                # flag the recursive reference as a content gap.
+                dep_refs.append(DepRef(label=d, statement_hash=""))
+                continue
             if d in staged_by_label:
                 dep_refs.append(
                     DepRef(label=d, statement_hash=staged_by_label[d].statement_hash)
                 )
-            else:
-                h = existing_dep_hash(d)
-                if h is None:
-                    raise DecodeError(REASON_REF_UNRESOLVED, d)
-                dep_refs.append(DepRef(label=d, statement_hash=h))
+                continue
+            h = existing_dep_hash(d)
+            # Missing dep is no longer a decoder error (H29). The
+            # statement_hash includes an empty string for the missing
+            # dep; the verifier will emit ``missing_from_nodes`` and
+            # the agent's repair attempt will rebuild this node once
+            # the dep is defined elsewhere.
+            dep_refs.append(DepRef(label=d, statement_hash=h or ""))
         sh = statement_hash(
             label=lbl,
             kind=kind.value,
@@ -240,7 +286,9 @@ def decode_codex_stdout(
             depends_on=tuple(deps),
         )
 
-    # Repair-must-change-hash.
+    # Repair-must-change-hash. Worker-contract guard: a repair attempt
+    # that re-emits the same proof would loop forever, so it is a
+    # state-machine error rather than a content judgment.
     if mode == "repair":
         target_node = staged_by_label[target]
         if target_node.verification_hash == h_rejected:
@@ -250,7 +298,8 @@ def decode_codex_stdout(
             )
 
     # Order final batch in topological dispatch order so librarian's
-    # apply path can rely on dep-before-target writes.
+    # apply path can rely on dep-before-target writes when refs do
+    # resolve inside the batch.
     nodes_tuple = tuple(staged_by_label[lbl] for lbl in order)
     return StagedBatch(target=target, mode=mode, nodes=nodes_tuple)
 
@@ -412,24 +461,14 @@ def _entries_byte_equal(a: dict[str, str], b: dict[str, str]) -> bool:
 # Validation helpers
 # ---------------------------------------------------------------------------
 def _parse_kind(raw: str) -> NodeKind:
+    # Unknown kind is structural — without a valid NodeKind enum
+    # value the wrapper cannot construct the staged node payload.
+    # Recorded as ``malformed_node`` (post-H29) since the YAML body
+    # was syntactically a mapping but the ``kind`` slot was unusable.
     try:
         return NodeKind(raw)
     except ValueError as exc:
-        raise DecodeError(REASON_PREFIX_KIND_MISMATCH, f"unknown kind {raw!r}") from exc
-
-
-def _check_label_prefix(label: str, kind: NodeKind) -> None:
-    expected = KIND_PREFIX[kind]
-    if ":" not in label:
-        raise DecodeError(REASON_PREFIX_KIND_MISMATCH, f"label {label!r} missing prefix:slug")
-    prefix, _, slug = label.partition(":")
-    if prefix != expected:
-        raise DecodeError(
-            REASON_PREFIX_KIND_MISMATCH,
-            f"label {label!r} prefix mismatch (kind={kind.value} requires {expected})",
-        )
-    if not slug or not LABEL_SLUG_RE.match(slug):
-        raise DecodeError(REASON_MALFORMED_NODE, f"label {label!r} has invalid slug")
+        raise DecodeError(REASON_MALFORMED_NODE, f"unknown kind {raw!r}") from exc
 
 
 def _extract_refs(text: str) -> list[str]:
@@ -441,96 +480,59 @@ def _extract_refs(text: str) -> list[str]:
     return seen
 
 
-def _check_batch_internal_cycle(
-    refs_per_label: dict[str, list[str]], batch_labels: set[str]
-) -> None:
-    """DFS over edges that stay inside the batch; raise on first cycle."""
-    WHITE, GREY, BLACK = 0, 1, 2
-    color: dict[str, int] = {lbl: WHITE for lbl in batch_labels}
-
-    def dfs(start: str) -> None:
-        path: list[str] = [start]
-        # iterator stack: each entry is an iterator over the *batch-internal*
-        # neighbours of the corresponding ``path`` entry.
-        iters: list[iter] = [iter(_internal_refs(refs_per_label, batch_labels, start))]
-        color[start] = GREY
-        while path:
-            try:
-                nxt = next(iters[-1])
-            except StopIteration:
-                color[path[-1]] = BLACK
-                path.pop()
-                iters.pop()
-                continue
-            c = color.get(nxt, WHITE)
-            if c == GREY:
-                # Cycle — find where ``nxt`` appears in path.
-                idx = path.index(nxt)
-                cycle = path[idx:] + [nxt]
-                raise DecodeError(REASON_CYCLE, "batch-internal cycle: " + " -> ".join(cycle))
-            if c == WHITE:
-                color[nxt] = GREY
-                path.append(nxt)
-                iters.append(iter(_internal_refs(refs_per_label, batch_labels, nxt)))
-
-    for lbl in batch_labels:
-        if color.get(lbl, WHITE) == WHITE:
-            dfs(lbl)
-
-
-def _internal_refs(
-    refs_per_label: dict[str, list[str]], batch_labels: set[str], lbl: str
-) -> list[str]:
-    return [r for r in refs_per_label.get(lbl, []) if r in batch_labels]
-
-
-def _topological_order(
+def _safe_topological_order(
     refs_per_label: dict[str, list[str]], batch_labels: set[str]
 ) -> list[str]:
-    """Kahn-style topological sort over intra-batch edges only.
+    """Kahn-style topological sort over intra-batch edges, cycle-tolerant.
 
-    Edges to non-batch labels are ignored. Caller has already verified
-    acyclicity.
+    H29: a real intra-batch cycle is no longer a decoder error — the
+    librarian projector catches genuine DAG cycles when the graph
+    closes against existing nodes, and the verifier flags suspicious
+    self / cyclic references as content gaps. When the intra-batch
+    sub-graph contains a cycle (or a self-loop), Kahn's algorithm
+    leaves some nodes unconsumed; we append those in their original
+    insertion order so every parsed node ends up in the dispatch.
+    Self-loops are excluded from the in-count so a node referencing
+    itself does not block its own admission.
     """
-    # Edges as ``lbl -> ref`` meaning "lbl needs ref first"; ref appears
-    # before lbl in the order. ``in_count[lbl]`` = number of intra-batch
-    # deps of ``lbl``; ``parents[r]`` = labels that depend on ``r``.
     in_count: dict[str, int] = {lbl: 0 for lbl in batch_labels}
     parents: dict[str, list[str]] = {lbl: [] for lbl in batch_labels}
     for lbl, refs in refs_per_label.items():
         for r in refs:
-            if r in batch_labels:
+            if r in batch_labels and r != lbl:
                 in_count[lbl] += 1
                 parents[r].append(lbl)
+
+    insertion_order = list(refs_per_label.keys())
     ready = sorted([lbl for lbl, c in in_count.items() if c == 0])
+    seen: set[str] = set()
     order: list[str] = []
     while ready:
         nxt = ready.pop(0)
+        if nxt in seen:
+            continue
+        seen.add(nxt)
         order.append(nxt)
-        for child in parents[nxt]:
+        for child in parents.get(nxt, ()):
             in_count[child] -= 1
-            if in_count[child] == 0:
+            if in_count[child] == 0 and child not in seen:
                 ready.append(child)
         ready.sort()
-    if len(order) != len(batch_labels):
-        # Should be unreachable thanks to _check_batch_internal_cycle.
-        raise DecodeError(REASON_CYCLE, "internal cycle (topo)")
+    # Cycle remnant: append leftovers in original insertion order so
+    # the projector still sees every parsed node.
+    for lbl in insertion_order:
+        if lbl not in seen:
+            order.append(lbl)
+            seen.add(lbl)
     return order
 
 
 __all__ = [
     "DecodeError",
-    "REASON_CYCLE",
     "REASON_DUPLICATE_LABEL",
-    "REASON_EXISTING_NON_TARGET",
-    "REASON_FORBIDDEN_KIND",
     "REASON_MALFORMED_NODE",
     "REASON_NO_NODES",
-    "REASON_PLACEHOLDER_LABEL",
-    "REASON_PREFIX_KIND_MISMATCH",
-    "REASON_REF_UNRESOLVED",
     "REASON_REPAIR_NO_CHANGE",
-    "REASON_SELF_REFERENCE",
     "REASON_TARGET_MISMATCH",
     "StagedBatch",
     "StagedNode",

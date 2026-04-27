@@ -1,7 +1,14 @@
-"""M6 — generator decoder unit tests.
+"""M6 — generator decoder unit tests (post-H29).
 
-Covers the 11 failure modes from PHASE1 §M6 + happy-path batch staging.
-The decoder is pure, so all tests run in-process without subprocesses.
+Covers the 5 structural failure modes the decoder still owns and the
+happy paths. Per ARCH §3.1.6 H29 boundary revision the decoder no
+longer judges *content*: forbidden kind, prefix-kind mismatch,
+placeholder labels, existing non-target labels, self-reference,
+unresolved ``\\ref{}``, and batch-internal cycles are all admitted by
+the decoder and judged downstream — physical-integrity violations by
+the librarian projector (REASON_LABEL_CONFLICT, REASON_CYCLE,
+REASON_KIND_MUTATION, REASON_HASH_MISMATCH); content gaps by the
+verifier (``verdict=gap``, ``external_reference_checks``).
 """
 
 from __future__ import annotations
@@ -11,20 +18,12 @@ from typing import Mapping
 import pytest
 
 from common.kb.hashing import DepRef, statement_hash, verification_hash
-from common.kb.types import NodeKind
 from generator.decoder import (
     DecodeError,
-    REASON_CYCLE,
     REASON_DUPLICATE_LABEL,
-    REASON_EXISTING_NON_TARGET,
-    REASON_FORBIDDEN_KIND,
     REASON_MALFORMED_NODE,
     REASON_NO_NODES,
-    REASON_PLACEHOLDER_LABEL,
-    REASON_PREFIX_KIND_MISMATCH,
-    REASON_REF_UNRESOLVED,
     REASON_REPAIR_NO_CHANGE,
-    REASON_SELF_REFERENCE,
     REASON_TARGET_MISMATCH,
     StagedBatch,
     decode_codex_stdout,
@@ -48,10 +47,7 @@ def block(label: str, kind: str, statement: str, proof: str = "", **extra: str) 
 
 
 def _kb_view(existing: Mapping[str, str]):
-    """Return ``(label_present, dep_hash)`` for an in-memory ``nodes/`` view.
-
-    ``existing`` maps label → statement_hash.
-    """
+    """Return ``(label_present, dep_hash)`` for an in-memory ``nodes/`` view."""
     return (lambda lbl: lbl in existing, lambda lbl: existing.get(lbl))
 
 
@@ -103,7 +99,6 @@ def test_existing_dep_resolved_from_kb_view() -> None:
         existing_label_present=label_present,
         existing_dep_hash=dep_hash,
     )
-    # Computed statement_hash must use the existing dep's hash.
     expected_sh = statement_hash(
         label="thm:goal",
         kind="theorem",
@@ -143,7 +138,146 @@ def test_mcp_trace_before_node_block_tolerated() -> None:
     assert len(batch.nodes) == 1
 
 
-# Failure modes -------------------------------------------------------------
+# H29 — the seven content checks the decoder no longer enforces -------------
+# Each of these used to raise a dedicated DecodeError reason; now the
+# batch is admitted and the verifier / projector handle the issue
+# downstream. The corresponding tests below assert *admission*.
+
+
+def test_h29_unresolved_ref_is_admitted() -> None:
+    """H29: an unresolved ``\\ref{def:nope}`` is no longer a decoder
+    rejection. The decoder hashes the target with an empty dep hash;
+    the verifier downstream emits ``external_reference_checks[].status
+    = "missing_from_nodes"`` and the agent's repair attempt regenerates
+    the node once the dep is defined."""
+    raw = block("thm:goal", "theorem", r"uses \ref{def:nope}", "p")
+    label_present, dep_hash = _kb_view({})
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="fresh",
+        existing_label_present=label_present,
+        existing_dep_hash=dep_hash,
+    )
+    assert len(batch.nodes) == 1
+    assert "def:nope" in batch.nodes[0].depends_on
+    # Hash must include the dep with an empty statement_hash so the
+    # cascade later picks up the proper hash once def:nope is defined.
+    expected_sh = statement_hash(
+        label="thm:goal",
+        kind="theorem",
+        statement=r"uses \ref{def:nope}",
+        depends_on=[DepRef(label="def:nope", statement_hash="")],
+    )
+    assert batch.nodes[0].statement_hash == expected_sh
+
+
+def test_h29_self_reference_is_admitted() -> None:
+    """H29: ``\\ref{thm:goal}`` inside thm:goal's own proof is a content
+    judgment for the verifier (recursive citation), not a decoder
+    rejection. The decoder admits the node with an empty dep hash for
+    the self-loop."""
+    raw = block("thm:goal", "theorem", r"uses \ref{thm:goal}", "p")
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    assert len(batch.nodes) == 1
+    assert "thm:goal" in batch.nodes[0].depends_on
+
+
+def test_h29_batch_internal_cycle_is_admitted() -> None:
+    """H29: a cycle within the batch's intra-batch refs is no longer a
+    decoder error. The projector catches genuine DAG cycles when the
+    graph closes against the existing KB; the verifier flags suspicious
+    citation patterns as content gaps."""
+    raw = (
+        block("lem:a", "lemma", r"refers \ref{lem:b}", "p")
+        + "\n"
+        + block("lem:b", "lemma", r"refers \ref{lem:a}", "p")
+        + "\n"
+        + block("thm:goal", "theorem", r"uses \ref{lem:a}", "p")
+    )
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    labels = [n.label for n in batch.nodes]
+    assert set(labels) == {"lem:a", "lem:b", "thm:goal"}
+
+
+def test_h29_external_theorem_kind_is_admitted() -> None:
+    """H29: ``kind: external_theorem`` from the generator is a content
+    judgment for the projector / verifier (only users may publish
+    external_theorem nodes per §6.5). The decoder no longer guards it."""
+    raw = block("ext:foo", "external_theorem", "S")
+    batch = decode_codex_stdout(
+        raw,
+        target="ext:foo",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    assert batch.nodes[0].label == "ext:foo"
+
+
+def test_h29_prefix_kind_mismatch_is_admitted() -> None:
+    """H29: prefix-vs-kind mismatch (label says ``thm:`` but kind is
+    ``lemma``) is now a projector concern. ``_check_label_prefix`` lives
+    only on the projector side."""
+    raw = block("thm:foo", "lemma", "S", "P")
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:foo",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    assert batch.nodes[0].label == "thm:foo"
+
+
+def test_h29_placeholder_label_is_admitted() -> None:
+    """H29: placeholder labels (``thm:main``, ``prop:claim1``) are no
+    longer rejected by the decoder. The verifier or operator catches
+    placeholder citations during content review."""
+    raw = block("thm:main", "theorem", "S", "P")
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:main",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    assert batch.nodes[0].label == "thm:main"
+
+
+def test_h29_existing_non_target_label_is_admitted() -> None:
+    """H29: trying to add a brand-new node whose label collides with an
+    existing verified node is the projector's REASON_LABEL_CONFLICT,
+    not the decoder's job. The decoder admits both blocks."""
+    raw = block("lem:exists", "lemma", "S", "P") + "\n" + block(
+        "thm:goal", "theorem", "S", "P"
+    )
+    label_present, dep_hash = _kb_view({"lem:exists": "a" * 64})
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="fresh",
+        existing_label_present=label_present,
+        existing_dep_hash=dep_hash,
+    )
+    labels = [n.label for n in batch.nodes]
+    assert "lem:exists" in labels
+    assert "thm:goal" in labels
+
+
+# Failure modes (the 5 structural rejections that remain) -------------------
 def _expect(reason: str, raw: str, **kw):
     label_present = kw.pop("existing_label_present", lambda x: False)
     dep_hash = kw.pop("existing_dep_hash", lambda x: None)
@@ -165,12 +299,47 @@ def test_failure_no_nodes() -> None:
     _expect(REASON_NO_NODES, "no node blocks here")
 
 
+def test_failure_malformed_yaml() -> None:
+    raw = "<node>\n!!!!:::: not yaml\n---\n**Statement.**\nx\n</node>"
+    _expect(REASON_MALFORMED_NODE, raw)
+
+
+def test_failure_unknown_kind_is_malformed_node() -> None:
+    """H29: an unknown ``kind`` value is structural (we can't construct
+    the StagedNode without a NodeKind enum value) — recorded as
+    ``malformed_node`` so the agent gets a clear shape error."""
+    raw = block("thm:goal", "axiom", "S", "P")
+    _expect(REASON_MALFORMED_NODE, raw)
+
+
+def test_failure_target_missing_from_batch() -> None:
+    raw = block("lem:other", "lemma", "S", "P")
+    _expect(REASON_TARGET_MISMATCH, raw)
+
+
+def test_failure_repair_no_change() -> None:
+    raw = block("thm:goal", "theorem", "S", "P")
+    sh = statement_hash(label="thm:goal", kind="theorem", statement="S", depends_on=[])
+    vh = verification_hash(statement_hash_hex=sh, proof="P")
+    _expect(REASON_REPAIR_NO_CHANGE, raw, mode="repair", h_rejected=vh)
+
+
+def test_repair_mode_with_changed_proof_succeeds() -> None:
+    raw = block("thm:goal", "theorem", "S", "new proof")
+    label_present, dep_hash = _kb_view({})
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="repair",
+        h_rejected="d" * 64,
+        existing_label_present=label_present,
+        existing_dep_hash=dep_hash,
+    )
+    assert batch.mode == "repair"
+
+
+# H27 — byte-identical duplicates collapse; genuine label clashes still reject
 def test_byte_identical_duplicate_blocks_collapse_to_one() -> None:
-    """H27 regression: codex sometimes echoes its draft batch and its
-    final batch into stdout, producing two byte-identical blocks
-    under the same label. That isn't a real ``duplicate_label_in_batch``
-    contract violation — both blocks agree, so we keep the last
-    occurrence and admit the batch."""
     blk = block("thm:goal", "theorem", "S", "P")
     raw = blk + "\n" + blk
     batch = decode_codex_stdout(
@@ -185,10 +354,6 @@ def test_byte_identical_duplicate_blocks_collapse_to_one() -> None:
 
 
 def test_label_clash_with_different_content_still_rejects() -> None:
-    """H27 escape valve: when two blocks share a label but differ in
-    content (statement/proof/remark/source_note/kind), the dedupe pass
-    must NOT collapse them — that is a genuine ``duplicate_label_in_batch``
-    contract violation."""
     raw = (
         block("thm:goal", "theorem", "S1", "P1")
         + "\n"
@@ -198,12 +363,6 @@ def test_label_clash_with_different_content_still_rejects() -> None:
 
 
 def test_inline_backtick_node_text_is_skipped() -> None:
-    """H25 regression: skill prose echoed by codex contains the literal
-    text "``<node>``" surrounded by backticks. The decoder must not
-    match this as the start of a node block — only bare-line
-    ``<node>``/``</node>`` tags count. Without this anchor the prose
-    swallowed the real batch and produced ``malformed_node`` even when
-    the agent emitted a perfectly valid block later."""
     raw = (
         "Here are my plan steps:\n"
         "8. Assemble candidate `<node>` blocks for the batch.\n"
@@ -225,96 +384,43 @@ def test_inline_backtick_node_text_is_skipped() -> None:
     assert batch.nodes[0].label == "thm:goal"
 
 
-def test_failure_malformed_yaml() -> None:
-    raw = "<node>\n!!!!:::: not yaml\n---\n**Statement.**\nx\n</node>"
-    _expect(REASON_MALFORMED_NODE, raw)
-
-
-def test_failure_external_theorem_kind() -> None:
-    raw = block("ext:foo", "external_theorem", "S")
-    _expect(REASON_FORBIDDEN_KIND, raw, target="ext:foo")
-
-
-def test_failure_prefix_kind_mismatch() -> None:
-    raw = block("thm:foo", "lemma", "S", "P")
-    _expect(REASON_PREFIX_KIND_MISMATCH, raw, target="thm:foo")
-
-
-def test_failure_placeholder_label() -> None:
-    raw = block("thm:main", "theorem", "S", "P")
-    _expect(REASON_PLACEHOLDER_LABEL, raw, target="thm:main")
-
-
-def test_failure_additional_placeholder_label() -> None:
-    raw = block("prop:claim1", "proposition", "S", "P")
-    _expect(REASON_PLACEHOLDER_LABEL, raw, target="prop:claim1")
-
-
-def test_failure_duplicate_label() -> None:
-    raw = block("thm:goal", "theorem", "S1", "P1") + "\n" + block(
-        "thm:goal", "theorem", "S2", "P2"
-    )
-    _expect(REASON_DUPLICATE_LABEL, raw)
-
-
-def test_failure_target_missing_from_batch() -> None:
-    raw = block("lem:other", "lemma", "S", "P")
-    _expect(REASON_TARGET_MISMATCH, raw)
-
-
-def test_failure_existing_non_target_label() -> None:
-    raw = block("lem:exists", "lemma", "S", "P") + "\n" + block(
-        "thm:goal", "theorem", "S", "P"
-    )
-    label_present, dep_hash = _kb_view({"lem:exists": "a" * 64})
-    _expect(
-        REASON_EXISTING_NON_TARGET,
-        raw,
-        existing_label_present=label_present,
-        existing_dep_hash=dep_hash,
-    )
-
-
-def test_failure_self_reference() -> None:
-    raw = block("thm:goal", "theorem", r"uses \ref{thm:goal}", "p")
-    _expect(REASON_SELF_REFERENCE, raw)
-
-
-def test_failure_unresolved_ref() -> None:
-    raw = block("thm:goal", "theorem", r"uses \ref{def:nope}", "p")
-    _expect(REASON_REF_UNRESOLVED, raw)
-
-
-def test_failure_batch_internal_cycle() -> None:
+# H29 phase A-2 — parsed-block capture on rejection
+def test_h29_target_mismatch_carries_parsed_blocks() -> None:
+    """A structurally-rejected batch still surfaces every block the
+    decoder did parse so the wrapper can persist them in
+    ``rejected_writes.jsonl`` and the next attempt's prompt has a draft
+    to repair against."""
     raw = (
-        block("lem:a", "lemma", r"refers \ref{lem:b}", "p")
+        block("lem:helper", "lemma", "Sh", "Ph")
         + "\n"
-        + block("lem:b", "lemma", r"refers \ref{lem:a}", "p")
-        + "\n"
-        + block("thm:goal", "theorem", r"uses \ref{lem:a}", "p")
+        + block("lem:other", "lemma", "So", "Po")
     )
-    _expect(REASON_CYCLE, raw)
-
-
-def test_failure_repair_no_change() -> None:
-    raw = block("thm:goal", "theorem", "S", "P")
-    # Compute the verification_hash that the staged batch would produce
-    # so the test forces a clash.
-    sh = statement_hash(label="thm:goal", kind="theorem", statement="S", depends_on=[])
-    vh = verification_hash(statement_hash_hex=sh, proof="P")
-    _expect(REASON_REPAIR_NO_CHANGE, raw, mode="repair", h_rejected=vh)
-
-
-def test_repair_mode_with_changed_proof_succeeds() -> None:
-    """Repair must change verification_hash; trivially achieved by a different proof."""
-    raw = block("thm:goal", "theorem", "S", "new proof")
     label_present, dep_hash = _kb_view({})
-    batch = decode_codex_stdout(
-        raw,
-        target="thm:goal",
-        mode="repair",
-        h_rejected="d" * 64,  # different from the new proof's hash
-        existing_label_present=label_present,
-        existing_dep_hash=dep_hash,
-    )
-    assert batch.mode == "repair"
+    with pytest.raises(DecodeError) as ei:
+        decode_codex_stdout(
+            raw,
+            target="thm:goal",
+            mode="fresh",
+            existing_label_present=label_present,
+            existing_dep_hash=dep_hash,
+        )
+    assert ei.value.reason == REASON_TARGET_MISMATCH
+    captured_labels = [b["label"] for b in ei.value.parsed_blocks]
+    assert captured_labels == ["lem:helper", "lem:other"]
+
+
+def test_h29_no_nodes_has_empty_parsed_blocks() -> None:
+    """``no_nodes_in_batch`` happens before any block parsed — the
+    wrapper records an empty ``parsed_blocks`` list so it can fall back
+    to the raw codex log for repair context."""
+    label_present, dep_hash = _kb_view({})
+    with pytest.raises(DecodeError) as ei:
+        decode_codex_stdout(
+            "no node blocks here at all",
+            target="thm:goal",
+            mode="fresh",
+            existing_label_present=label_present,
+            existing_dep_hash=dep_hash,
+        )
+    assert ei.value.reason == REASON_NO_NODES
+    assert ei.value.parsed_blocks == ()
