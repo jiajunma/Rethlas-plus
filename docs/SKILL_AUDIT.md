@@ -385,6 +385,21 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H27 — Decoder rejected harmless byte-identical duplicate emissions
+- After H26 codex emitted a clean batch but still got rejected with
+  ``duplicate_label_in_batch``. Cause: codex echoes its *reasoning
+  draft* and its *final emission* into the same stdout stream. Both
+  carry well-formed ``<node>...</node>`` blocks under the same label
+  and with byte-identical bodies. The strict check fired even though
+  the two copies agree.
+- **Status**: resolved. ``_dedupe_identical_blocks`` collapses
+  same-label same-content duplicates to a single (last-wins) entry
+  before the duplicate-label check runs. Genuinely different bodies
+  still raise ``duplicate_label_in_batch``. Two new regression tests
+  in ``tests/unit/test_m6_decoder.py``:
+  ``test_byte_identical_duplicate_blocks_collapse_to_one`` and
+  ``test_label_clash_with_different_content_still_rejects``.
+
 ### H26 — Decoder section regex required statement body on a new line
 - After H25 the agent emitted two clean ``<node>`` blocks (auxiliary
   lemma + target theorem). Decoder still rejected with

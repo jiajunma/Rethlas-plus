@@ -165,6 +165,38 @@ def test_failure_no_nodes() -> None:
     _expect(REASON_NO_NODES, "no node blocks here")
 
 
+def test_byte_identical_duplicate_blocks_collapse_to_one() -> None:
+    """H27 regression: codex sometimes echoes its draft batch and its
+    final batch into stdout, producing two byte-identical blocks
+    under the same label. That isn't a real ``duplicate_label_in_batch``
+    contract violation — both blocks agree, so we keep the last
+    occurrence and admit the batch."""
+    blk = block("thm:goal", "theorem", "S", "P")
+    raw = blk + "\n" + blk
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    assert len(batch.nodes) == 1
+    assert batch.nodes[0].label == "thm:goal"
+
+
+def test_label_clash_with_different_content_still_rejects() -> None:
+    """H27 escape valve: when two blocks share a label but differ in
+    content (statement/proof/remark/source_note/kind), the dedupe pass
+    must NOT collapse them — that is a genuine ``duplicate_label_in_batch``
+    contract violation."""
+    raw = (
+        block("thm:goal", "theorem", "S1", "P1")
+        + "\n"
+        + block("thm:goal", "theorem", "S2", "P2")
+    )
+    _expect(REASON_DUPLICATE_LABEL, raw)
+
+
 def test_inline_backtick_node_text_is_skipped() -> None:
     """H25 regression: skill prose echoed by codex contains the literal
     text "``<node>``" surrounded by backticks. The decoder must not

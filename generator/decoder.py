@@ -126,6 +126,17 @@ def decode_codex_stdout(
     for blk in blocks:
         parsed.append(_parse_block(blk))
 
+    # H27: codex frequently emits the same node twice — once during
+    # its reasoning ("here's my draft") and once as the final emission
+    # ("emitting batch") — with byte-identical content. The agent
+    # didn't make a real mistake; the duplicate is an artifact of
+    # codex echoing its own reasoning into stdout. Treat
+    # content-identical same-label blocks as a single emission (keep
+    # the last; semantically they're indistinguishable). Only
+    # genuinely different-content collisions still raise
+    # ``duplicate_label_in_batch`` below.
+    parsed = _dedupe_identical_blocks(parsed)
+
     # Per-node admission checks.
     labels_seen: set[str] = set()
     for entry in parsed:
@@ -357,6 +368,44 @@ def _extract_section(body: str, name: str) -> str:
 
 def _normalise_text(s: str) -> str:
     return unicodedata.normalize("NFC", s).replace("\r\n", "\n").replace("\r", "\n").strip()
+
+
+def _dedupe_identical_blocks(parsed: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Collapse byte-identical duplicates emitted under the same label.
+
+    Codex sometimes echoes its draft batch and its final batch into
+    the same stdout stream, producing two ``<node>...</node>`` blocks
+    with the same label and the same body. The original strict check
+    rejected the batch as ``duplicate_label_in_batch`` even though
+    the two blocks carry no semantic disagreement. We preserve that
+    strictness when the bodies actually differ — that is a real
+    contract violation — but treat identical-body duplicates as a
+    single emission (the last copy wins). Order is preserved by the
+    label's first occurrence so downstream consumers see a stable list.
+    """
+    first_index_for_label: dict[str, int] = {}
+    result: list[dict[str, str]] = []
+    for entry in parsed:
+        label = entry["label"]
+        prior_idx = first_index_for_label.get(label)
+        if prior_idx is None:
+            first_index_for_label[label] = len(result)
+            result.append(entry)
+            continue
+        if _entries_byte_equal(result[prior_idx], entry):
+            # Same content — replace the prior copy in-place so the
+            # last-emitted version wins while preserving its slot.
+            result[prior_idx] = entry
+        else:
+            # Different content — preserve both so the caller's
+            # duplicate-label check fires the correct rejection reason.
+            result.append(entry)
+    return result
+
+
+def _entries_byte_equal(a: dict[str, str], b: dict[str, str]) -> bool:
+    fields = ("kind", "statement", "proof", "remark", "source_note")
+    return all(a.get(f, "") == b.get(f, "") for f in fields)
 
 
 # ---------------------------------------------------------------------------
