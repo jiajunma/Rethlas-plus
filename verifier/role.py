@@ -169,10 +169,43 @@ def main(argv: list[str] | None = None) -> int:
     env = os.environ.copy()
     env.setdefault("RETHLAS_VERIFIER_PROMPT", prompt)
 
+    # H22: same workspace-bounded codex invocation as the generator
+    # wrapper. Verifier reads ``knowledge_base/nodes/*.md`` for verified
+    # dependency context, so we add the workspace as a reachable dir on
+    # top of the agents/verification cwd.
+    from common.runtime.agents_install import agent_kind_dir
+
+    agent_dir = agent_kind_dir(workspace, "verification")
+    codex_cwd: Path | None
     if args.codex_argv:
         codex_argv = [a for a in args.codex_argv.split(" ") if a]
+        codex_cwd = None
     else:
-        codex_argv = ["codex", "exec", "-m", "auto", "--sandbox", "read-only", prompt]
+        if not agent_dir.is_dir():
+            sys.stderr.write(
+                f"verifier: agent dir {agent_dir} missing — "
+                "run `rethlas init` against this workspace before dispatching\n"
+            )
+            update_job_file(
+                job_path,
+                status=STATUS_CRASHED,
+                detail="verifier agent dir missing in workspace",
+            )
+            return 2
+        codex_argv = [
+            "codex",
+            "exec",
+            "-m",
+            "auto",
+            "--sandbox",
+            "read-only",
+            "-C",
+            str(agent_dir),
+            "--add-dir",
+            str(workspace),
+            prompt,
+        ]
+        codex_cwd = agent_dir
 
     with JobHeartbeat(job_path, interval_s=_heartbeat_interval_s()):
         outcome = run_codex(
@@ -180,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
             log_path=log_path,
             silent_timeout_s=args.silent_timeout_s,
             env=env,
+            cwd=codex_cwd,
         )
 
     if outcome.timed_out:

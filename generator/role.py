@@ -237,10 +237,47 @@ def main(argv: list[str] | None = None) -> int:
     env = os.environ.copy()
     env.setdefault("RETHLAS_GENERATOR_PROMPT", prompt)
 
+    # H22: codex must run from the workspace-local agent dir so it loads
+    # the Phase I AGENTS.md / .codex/config.toml / skill set materialized
+    # by ``rethlas init`` (see common/runtime/agents_install.py). With
+    # ``-C agent_dir`` and ``--add-dir workspace`` the agent's working
+    # tree is bounded to two known paths under the workspace, so a stray
+    # ``rg --files ..`` cannot escape into the user's home dir or a
+    # sibling project. Test paths set ``--codex-argv`` explicitly and
+    # bypass this default.
+    from common.runtime.agents_install import agent_kind_dir
+
+    agent_dir = agent_kind_dir(workspace, "generation")
+    codex_cwd: Path | None
     if args.codex_argv:
         codex_argv = [a for a in args.codex_argv.split(" ") if a]
+        codex_cwd = None
     else:
-        codex_argv = ["codex", "exec", "-m", "auto", "--sandbox", "read-only", prompt]
+        if not agent_dir.is_dir():
+            sys.stderr.write(
+                f"generator: agent dir {agent_dir} missing — "
+                "run `rethlas init` against this workspace before dispatching\n"
+            )
+            update_job_file(
+                job_path,
+                status=STATUS_CRASHED,
+                detail="generator agent dir missing in workspace",
+            )
+            return 2
+        codex_argv = [
+            "codex",
+            "exec",
+            "-m",
+            "auto",
+            "--sandbox",
+            "read-only",
+            "-C",
+            str(agent_dir),
+            "--add-dir",
+            str(workspace),
+            prompt,
+        ]
+        codex_cwd = agent_dir
 
     with JobHeartbeat(job_path, interval_s=_heartbeat_interval_s()):
         outcome = run_codex(
@@ -248,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
             log_path=log_path,
             silent_timeout_s=args.silent_timeout_s,
             env=env,
+            cwd=codex_cwd,
         )
 
     if outcome.timed_out:

@@ -385,6 +385,36 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H22 — Worker codex invocation read-escapes the workspace
+- `generator/role.py` and `verifier/role.py` invoked
+  ``codex exec -m auto --sandbox read-only <prompt>`` with no ``cwd``,
+  no ``-C``, and no ``--add-dir``. Codex therefore inherited the
+  worker process's cwd (the workspace) and resolved ``.codex/`` /
+  ``AGENTS.md`` from there upwards. Two failures followed:
+  1. **Wrong agent contract.** The workspace has no ``.codex/`` or
+     ``AGENTS.md`` of its own, so codex fell back to the user-global
+     ``~/.codex/config.toml``. The Phase I MCP server, the Phase I
+     skill set, and the Phase I prompt instructions never loaded.
+     The agent improvised, exploring files instead of emitting
+     ``<node>`` blocks; decoder rejected every batch with
+     ``no_nodes_in_batch`` (H21 reason).
+  2. **Read-escape into sibling projects.** ``--sandbox read-only``
+     blocks writes but does not cap reads. The agent ran
+     ``rg --files ..`` and found ``../Rethlas/agents/generation/...``
+     — the upstream Rethlas snapshot in the operator's directory.
+     It then partially imitated the *old* (pre-Phase-I) blueprint
+     workflow, which is exactly the cross-project pollution the
+     workspace was supposed to isolate.
+- **Status**: resolved. ``rethlas init`` now materializes
+  ``<workspace>/agents/{generation,verification}/`` from the source
+  repo (``common/runtime/agents_install.py``). ``generator/role.py``
+  and ``verifier/role.py`` invoke codex with ``cwd`` inside the
+  materialized agent dir and pass ``-C <agent_dir> --add-dir
+  <workspace>`` so the writable / reachable scope is bounded to
+  workspace-resident paths. Static guards in
+  ``tests/unit/test_agent_phase1_contract.py`` pin the
+  materialization layout and the wrapper-side argv shape.
+
 ### H21 — Decoder rejection surface undercounted in docs
 - `generator/decoder.py` exports 12 `REASON_*` constants and ships
   a dedicated unit test for each (`tests/unit/test_m6_decoder.py`),

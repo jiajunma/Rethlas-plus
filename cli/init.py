@@ -10,6 +10,7 @@ from cli.workspace import (
     create_workspace_layout,
     workspace_paths,
 )
+from common.runtime.agents_install import materialize_agents
 
 
 def run_init(workspace: str | None, *, force: bool = False) -> int:
@@ -36,6 +37,17 @@ def run_init(workspace: str | None, *, force: bool = False) -> int:
     # when absent.
     if force or not ws.rethlas_toml.exists():
         ws.rethlas_toml.write_text(ANNOTATED_RETHLAS_TOML, encoding="utf-8")
+
+    # H22: materialize the Phase I agent tree (AGENTS.md, .codex/, .agents/
+    # skills, mcp/ server) into the workspace so codex worker invocations
+    # find their config from the workspace and never have to read above it.
+    try:
+        materialize_agents(workspace_root=ws.root, overwrite=force)
+    except FileNotFoundError as exc:
+        sys.stderr.write(
+            f"warning: could not materialize agents into workspace: {exc}\n"
+            "the workspace is initialized but generator/verifier worker dispatches will fail\n"
+        )
 
     sys.stdout.write(f"initialized workspace at {ws.root}\n")
     return 0

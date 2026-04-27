@@ -130,6 +130,70 @@ def test_generator_agents_md_documents_identifier_conventions() -> None:
         assert token in text
 
 
+def test_init_materializes_agents_into_workspace(tmp_path) -> None:
+    """H22: ``rethlas init`` must copy the Phase I agent tree into the
+    workspace so codex worker invocations load AGENTS.md / .codex/
+    config / skills from the workspace itself, not from the operator's
+    home dir or a sibling project's old artifacts."""
+    from cli.init import run_init
+
+    rc = run_init(str(tmp_path))
+    assert rc == 0, "rethlas init should succeed in a fresh workspace"
+
+    gen_dir = tmp_path / "agents" / "generation"
+    ver_dir = tmp_path / "agents" / "verification"
+    assert gen_dir.is_dir(), "generation agent dir not materialized"
+    assert ver_dir.is_dir(), "verification agent dir not materialized"
+
+    for marker in (
+        gen_dir / "AGENTS.md",
+        gen_dir / ".codex" / "config.toml",
+        gen_dir / ".agents" / "skills",
+        gen_dir / "mcp" / "server.py",
+        ver_dir / "AGENTS.md",
+        ver_dir / ".codex" / "config.toml",
+        ver_dir / ".agents" / "skills",
+    ):
+        assert marker.exists(), f"materialized agent tree missing {marker}"
+
+    # H22 also requires that runtime-only directories are NOT carried
+    # into the workspace copy — they pollute and may leak prior runs.
+    for forbidden in (
+        gen_dir / ".venv",
+        gen_dir / "memory",
+        gen_dir / "logs",
+        gen_dir / "results",
+        gen_dir / "data",
+        gen_dir / "site",
+        gen_dir / "scripts",
+        ver_dir / ".venv",
+        ver_dir / "results",
+    ):
+        assert not forbidden.exists(), (
+            f"materialized agent tree should not include {forbidden}"
+        )
+
+
+def test_role_codex_invocation_is_workspace_bounded() -> None:
+    """H22: generator/role.py and verifier/role.py must invoke codex with
+    cwd inside the workspace agent dir (so .. cannot escape into the
+    user's home dir) and ``-C agent_dir --add-dir workspace`` to limit
+    the writable scope. Pure source-string assertion so we don't have to
+    spin up a real subprocess to verify the contract."""
+    for path_str in ("generator/role.py", "verifier/role.py"):
+        text = (ROOT / path_str).read_text(encoding="utf-8")
+        assert "agent_kind_dir" in text, (
+            f"{path_str} must derive its codex cwd via "
+            "common.runtime.agents_install.agent_kind_dir"
+        )
+        assert '"-C"' in text and '"--add-dir"' in text, (
+            f"{path_str} must pass -C and --add-dir to codex"
+        )
+        assert "cwd=codex_cwd" in text, (
+            f"{path_str} must pass cwd to run_codex"
+        )
+
+
 def test_decoder_reason_constants_match_documented_count() -> None:
     """H21: ARCH §6.2 promises "twelve `reason` values" as the complete
     decoder rejection surface, and PHASE1 M6 promises 12 failure modes.
