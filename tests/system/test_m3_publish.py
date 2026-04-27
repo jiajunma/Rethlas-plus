@@ -170,3 +170,48 @@ def test_workspace_flag_universality(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     events = list((alt / "events").rglob("*.json"))
     assert len(events) == 1
+
+
+def test_actor_invalid_format_rejected_at_parse_time(tmp_path: Path) -> None:
+    """CLI must fail fast when --actor lacks the kind:instance shape.
+
+    Regression: previously the CLI happily accepted ``--actor user`` and
+    let the librarian admission reject the resulting event with
+    ``actor 'user' must match kind:instance`` — wasted disk + confusing
+    error far from the cause.
+    """
+    _init(tmp_path)
+    r = _run(
+        "--workspace", str(tmp_path),
+        "add-node",
+        "--label", "def:x",
+        "--kind", "definition",
+        "--statement", "s",
+        "--actor", "user",
+    )
+    assert r.returncode != 0
+    assert "kind:instance" in r.stderr or "kind:instance" in r.stdout
+    # No event was written.
+    assert _events(tmp_path) == []
+
+
+def test_axiom_with_proof_rejected_at_parse_time(tmp_path: Path) -> None:
+    """CLI must reject --proof for axiom kinds at parse time.
+
+    Regression: same fail-late pattern. Letting a definition through
+    with --proof just to have the librarian admission reject it later
+    wastes a disk write and produces a rejected_writes entry that
+    points at admission rather than the user's CLI invocation.
+    """
+    _init(tmp_path)
+    r = _run(
+        "--workspace", str(tmp_path),
+        "add-node",
+        "--label", "def:x",
+        "--kind", "definition",
+        "--statement", "s",
+        "--proof", "this should not be here",
+    )
+    assert r.returncode != 0
+    assert "axioms carry no proof" in r.stderr or "axioms carry no proof" in r.stdout
+    assert _events(tmp_path) == []

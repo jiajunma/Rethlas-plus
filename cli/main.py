@@ -15,8 +15,34 @@ milestone lands (``supervise`` M8, ``dashboard`` M9, ``linter`` M10,
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from typing import Sequence
+
+# Mirror common.events.schema._ACTOR_RE so the CLI can fail at parse
+# time instead of letting a malformed actor reach the librarian and
+# get bounced via rejected_writes (which is wasted disk + confusing
+# error far from the cause).
+_CLI_ACTOR_RE = re.compile(r"^[a-z][a-z0-9_-]*:[A-Za-z0-9_.-]+$")
+_AXIOM_KINDS_FOR_CLI = frozenset({"definition", "external_theorem"})
+
+
+def _validate_actor(actor: str) -> str:
+    if not _CLI_ACTOR_RE.match(actor):
+        raise SystemExit(
+            f"--actor {actor!r} must match kind:instance "
+            f"(e.g. user:cli, generator:codex-default). "
+            f"Bare 'user' is not valid; use --actor user:cli."
+        )
+    return actor
+
+
+def _validate_axiom_no_proof(kind: str, proof: str) -> None:
+    if kind in _AXIOM_KINDS_FOR_CLI and proof:
+        raise SystemExit(
+            f"--proof must be empty for kind={kind!r} (axioms carry no proof per ARCH §5.1). "
+            f"Move any well-formedness justification to --remark."
+        )
 
 
 SUBCOMMANDS: dict[str, str] = {
@@ -160,6 +186,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_init(ws, force=getattr(args, "force", False))
 
     if args.command == "add-node":
+        _validate_actor(args.actor)
+        _validate_axiom_no_proof(args.kind, args.proof)
         from cli.add_node import run_add_node
         return run_add_node(
             workspace=ws,
@@ -173,6 +201,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "revise-node":
+        _validate_actor(args.actor)
+        _validate_axiom_no_proof(args.kind, args.proof)
         from cli.revise_node import run_revise_node
         return run_revise_node(
             workspace=ws,
@@ -186,6 +216,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     if args.command == "attach-hint":
+        _validate_actor(args.actor)
         from cli.attach_hint import run_attach_hint
         return run_attach_hint(
             workspace=ws,
