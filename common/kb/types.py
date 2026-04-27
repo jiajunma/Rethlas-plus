@@ -83,12 +83,23 @@ class Node:
     verification_report: str = ""
     repair_hint: str = ""
     depends_on: tuple[str, ...] = ()  # label list; empty by default
+    # Provenance: actor that *first introduced* this label (kind:instance,
+    # e.g. ``user:cli`` or ``generator:codex-default``). Set on creation,
+    # preserved across revisions. Used by the verifier-reject router so
+    # generator-introduced helper definitions can be repaired by the
+    # generator instead of escalating to ``user_blocked``.
+    introduced_by_actor: str = "user:cli"
 
     def initial_count(self) -> int:
         """§5.4 ``initial_count(kind, proof)``."""
         if self.kind in AXIOM_KINDS:
             return 0
         return 0 if self.proof else -1
+
+    @property
+    def introduced_by_generator(self) -> bool:
+        """True iff the label was first introduced by a generator actor."""
+        return self.introduced_by_actor.startswith("generator:")
 
 
 # ---------------------------------------------------------------------------

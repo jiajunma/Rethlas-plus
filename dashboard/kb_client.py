@@ -35,6 +35,7 @@ class NodeRow:
     repair_hint: str
     verification_report: str
     deps: tuple[str, ...]
+    introduced_by_actor: str = "user:cli"
 
 
 def _check_rebuild(state_dir: Path) -> None:
@@ -98,6 +99,8 @@ def list_nodes(ws_root: Path) -> list[NodeRow]:
                 repair_hint=row.get("repair_hint", ""),
                 verification_report=row.get("verification_report", ""),
                 deps=deps,
+                introduced_by_actor=row.get("introduced_by_actor", "user:cli")
+                or "user:cli",
             )
         )
     return out

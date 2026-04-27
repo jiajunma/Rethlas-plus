@@ -186,3 +186,44 @@ def test_classify_brand_new_axiom_needs_verification() -> None:
 def test_classify_in_flight_overrides() -> None:
     assert _node(pass_count=3, in_flight=True) == STATUS_IN_FLIGHT
     assert _node(pass_count=-1, in_flight=True) == STATUS_IN_FLIGHT
+
+
+def test_classify_generator_introduced_axiom_at_minus_one_needs_generation() -> None:
+    """Generator-introduced helper definitions that the verifier rejected
+    (pass_count == -1 under the post-provenance projector) must route
+    back to the generator instead of escalating to user_blocked. The
+    user is hands-off after the initial question; the generator can
+    repair its own helpers.
+    """
+    assert (
+        _node(
+            kind="definition",
+            pass_count=-1,
+            introduced_by_actor="generator:codex-default",
+        )
+        == STATUS_NEEDS_GENERATION
+    )
+    assert (
+        _node(
+            kind="external_theorem",
+            pass_count=-1,
+            introduced_by_actor="generator:codex-default",
+        )
+        == STATUS_NEEDS_GENERATION
+    )
+
+
+def test_classify_generator_introduced_axiom_pass0_with_repair_not_user_blocked() -> None:
+    """Even at the legacy pass_count==0+repair>0 representation, a
+    generator-introduced axiom should not be marked user_blocked: the
+    coordinator routes it back through the generator pool.
+    """
+    assert (
+        _node(
+            kind="definition",
+            pass_count=0,
+            repair_count=1,
+            introduced_by_actor="generator:codex-default",
+        )
+        == STATUS_NEEDS_VERIFICATION
+    )

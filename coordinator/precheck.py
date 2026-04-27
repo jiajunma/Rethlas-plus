@@ -67,6 +67,7 @@ class CandidateInput:
     dep_statement_hashes: dict[str, str]
     dep_pass_counts: dict[str, int]
     last_rejected_verification_hash: str = ""
+    introduced_by_actor: str = "user:cli"
 
     @property
     def deps_ready(self) -> bool:
@@ -78,6 +79,10 @@ class CandidateInput:
     @property
     def verifier_deps_strictly_ahead(self) -> bool:
         return all(self.dep_pass_counts.get(dep, -1) > self.pass_count for dep in self.dep_statement_hashes)
+
+    @property
+    def introduced_by_generator(self) -> bool:
+        return self.introduced_by_actor.startswith("generator:")
 
 
 def precheck_generator(

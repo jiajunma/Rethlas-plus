@@ -60,6 +60,7 @@ def classify_theorem(
     in_flight: bool,
     repair_hint: str = "",
     repair_count: int = 0,
+    introduced_by_actor: str = "user:cli",
 ) -> str:
     """Return the §M9 status keyword for a node."""
     if in_flight:
@@ -67,6 +68,7 @@ def classify_theorem(
     if pass_count >= desired:
         return STATUS_DONE
     deps_ready = all(deps_pass_counts.get(d, -1) >= 1 for d in deps)
+    introduced_by_generator = introduced_by_actor.startswith("generator:")
     if pass_count >= 1:
         # A node verified at least once but whose deps got reset (e.g.
         # an upstream Merkle cascade) cannot progress further until the
@@ -77,20 +79,24 @@ def classify_theorem(
             return STATUS_BLOCKED_ON_DEPENDENCY
         return STATUS_VERIFIED
     if pass_count == 0:
-        # §5.4.1 bugfix: axioms (definition / external_theorem) that the
-        # verifier has already rejected (repair_count > 0) require user
-        # action — generator is not allowed to revise pre-existing
-        # definitions per §6.2 write-scope. Brand-new axioms (repair=0)
-        # just need a verifier dispatch.
-        if kind in {"definition", "external_theorem"} and repair_count > 0:
+        # §5.4.1 + provenance: a *user-introduced* axiom that the
+        # verifier has already rejected (repair_count > 0) is
+        # user_blocked — only the user can rewrite it. Generator-
+        # introduced helpers are routed to the generator pool instead
+        # (see projector reject branch + coordinator gen_pool).
+        if (
+            kind in {"definition", "external_theorem"}
+            and repair_count > 0
+            and not introduced_by_generator
+        ):
             return STATUS_USER_BLOCKED
         if not deps_ready:
             return STATUS_BLOCKED_ON_DEPENDENCY
         return STATUS_NEEDS_VERIFICATION
-    # pass_count == -1: only proof-requiring kinds reach this state under
-    # the §5.4.1 fix; if a legacy projection still has an axiom at -1,
-    # treat it as user_blocked for back-compat.
-    if kind in {"definition", "external_theorem"}:
+    # pass_count == -1: proof-requiring kinds and generator-introduced
+    # axioms both go through the generator. A user-introduced axiom at
+    # -1 (legacy state, pre-rebuild) still flags as user_blocked.
+    if kind in {"definition", "external_theorem"} and not introduced_by_generator:
         return STATUS_USER_BLOCKED
     if not deps_ready:
         return STATUS_GEN_BLOCKED_ON_DEPENDENCY

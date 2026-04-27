@@ -148,7 +148,7 @@ class Projector:
 
         self._kb.begin()
         try:
-            target_label = self._dispatch(event_body)
+            target_label = self._dispatch(event_body, actor=event_body.get("actor", ""))
             self._kb.record_applied_event(
                 event_id=event_id,
                 status=ApplyOutcome.APPLIED,
@@ -184,18 +184,18 @@ class Projector:
             raise
 
     # ---- per-type handlers --------------------------------------
-    def _dispatch(self, event: dict[str, Any]) -> str | None:
+    def _dispatch(self, event: dict[str, Any], *, actor: str) -> str | None:
         etype: str = event["type"]
         payload = event["payload"]
         target = event.get("target")
         if etype == "user.node_added":
-            return self._apply_node_added(target, payload)
+            return self._apply_node_added(target, payload, actor=actor)
         if etype == "user.node_revised":
-            return self._apply_node_revised(target, payload)
+            return self._apply_node_revised(target, payload, actor=actor)
         if etype == "user.hint_attached":
             return self._apply_hint_attached(target, payload, ts=event.get("ts", ""))
         if etype == "generator.batch_committed":
-            return self._apply_generator_batch(payload)
+            return self._apply_generator_batch(payload, actor=actor)
         if etype == "verifier.run_completed":
             return self._apply_verifier_run(event, payload)
         raise ProjectionRejection(
@@ -203,7 +203,9 @@ class Projector:
         )
 
     # -- user.node_added --
-    def _apply_node_added(self, target: str | None, payload: dict[str, Any]) -> str:
+    def _apply_node_added(
+        self, target: str | None, payload: dict[str, Any], *, actor: str
+    ) -> str:
         if not isinstance(target, str):
             raise ProjectionRejection("schema", "user.node_added requires a target label")
         self._require_payload_fields(
@@ -252,6 +254,7 @@ class Projector:
             depends_on=deps,
             remark=payload.get("remark", ""),
             source_note=payload.get("source_note", ""),
+            introduced_by_actor=actor or "user:cli",
         )
         cycle = self._kb.would_introduce_cycle(target, deps)
         if cycle is not None:
@@ -260,7 +263,9 @@ class Projector:
         return target
 
     # -- user.node_revised --
-    def _apply_node_revised(self, target: str | None, payload: dict[str, Any]) -> str:
+    def _apply_node_revised(
+        self, target: str | None, payload: dict[str, Any], *, actor: str
+    ) -> str:
         if not isinstance(target, str):
             raise ProjectionRejection("schema", "user.node_revised requires a target label")
         existing = self._kb.node_by_label(target)
@@ -303,7 +308,10 @@ class Projector:
         if cycle is not None:
             raise ProjectionRejection(REASON_CYCLE, _cycle_detail(cycle))
 
-        # Compute new hashes.
+        # Compute new hashes. Provenance (introduced_by_actor) is set on
+        # initial introduction and preserved across revisions: a user
+        # touching a generator-introduced helper does not transfer
+        # ownership; the original introducer remains responsible.
         new_node = self._assemble_node(
             label=target,
             kind=new_kind,
@@ -312,6 +320,7 @@ class Projector:
             depends_on=deps,
             remark=payload.get("remark", ""),
             source_note=payload.get("source_note", ""),
+            introduced_by_actor=existing.introduced_by_actor or "user:cli",
         )
 
         # §5.4 revision rules: pass_count reset via initial_count; if
@@ -341,6 +350,7 @@ class Projector:
                 verification_report="" if clear_hint_and_report else existing.verification_report,
                 repair_hint="" if clear_hint_and_report else existing.repair_hint,
                 depends_on=tuple(deps),
+                introduced_by_actor=new_node.introduced_by_actor,
             )
         )
         if new_node.statement_hash != existing.statement_hash:
@@ -395,7 +405,7 @@ class Projector:
         return target
 
     # -- generator.batch_committed --
-    def _apply_generator_batch(self, payload: dict[str, Any]) -> str:
+    def _apply_generator_batch(self, payload: dict[str, Any], *, actor: str) -> str:
         target = payload.get("target")
         nodes = payload.get("nodes") or []
         if not target or not isinstance(nodes, list) or not nodes:
@@ -453,6 +463,17 @@ class Projector:
         # ``_assemble_node_with_staged`` substitutes empty hashes for
         # missing deps so the cascade still works once the dep is later
         # defined and the dependent node is regenerated.
+        # Pre-fetch the target's existing provenance (if any). Brand-new
+        # batch labels carry the generator's actor; the target's
+        # introducer is preserved across regeneration.
+        existing_target_for_actor = self._kb.node_by_label(target)
+        target_introducer = (
+            existing_target_for_actor.introduced_by_actor
+            if existing_target_for_actor is not None
+            else (actor or "user:cli")
+        )
+        gen_actor = actor or "generator:unknown"
+
         staged: dict[str, Node] = {}
         for lbl in order:
             entry = next(e for (l, _, e) in parsed if l == lbl)
@@ -460,6 +481,7 @@ class Projector:
             stmt = entry["statement"]
             proof = entry["proof"]
             deps = _extract_refs(stmt + "\n" + proof)
+            introducer = target_introducer if lbl == target else gen_actor
             node = self._assemble_node_with_staged(
                 label=lbl,
                 kind=kind,
@@ -469,6 +491,7 @@ class Projector:
                 remark=entry.get("remark", ""),
                 source_note=entry.get("source_note", ""),
                 staged=staged,
+                introduced_by_actor=introducer,
             )
             staged[lbl] = node
 
@@ -546,6 +569,7 @@ class Projector:
                         verification_report="" if clear_hint_and_report else existing_target.verification_report,
                         repair_hint="" if clear_hint_and_report else existing_target.repair_hint,
                         depends_on=node.depends_on,
+                        introduced_by_actor=node.introduced_by_actor,
                     )
                 )
             else:
@@ -596,14 +620,28 @@ class Projector:
                 verification_report=report,
             )
         else:
-            # §5.4.1 bugfix: axioms (definition / external_theorem) reset
-            # to 0 on rejection (their initial_count) — generator may not
-            # revise pre-existing definitions, so -1 ("needs generator")
-            # would mis-route to a worker that legally cannot fix it.
-            # Proof-requiring kinds still reset to -1 because the
-            # coordinator's generator pool keys off pass_count == -1.
+            # §5.4.1 reject routing — branches on (kind, provenance):
+            #
+            #   proof-requiring kind                 -> pass = -1
+            #   axiom + introduced by generator      -> pass = -1
+            #   axiom + introduced by user           -> pass =  0
+            #
+            # Generator-introduced helper definitions (brand-new labels
+            # added inside a ``generator.batch_committed`` payload) belong
+            # to the generator's write-scope; if the verifier rejects one
+            # the generator can repair it on the next dispatch round.
+            # Pre-existing definitions/axioms authored by the user are
+            # outside generator write-scope (§6.2) — those must stay at 0
+            # so the dashboard surfaces them as ``user_blocked`` instead
+            # of spinning a worker that can't fix them.
             existing_kind = NodeKind(existing.kind)
-            new_pc = -1 if existing_kind in PROOF_REQUIRING_KINDS else 0
+            introduced_by_generator = (existing.introduced_by_actor or "").startswith(
+                "generator:"
+            )
+            if existing_kind in PROOF_REQUIRING_KINDS or introduced_by_generator:
+                new_pc = -1
+            else:
+                new_pc = 0
             new_hint = _merge_verifier_section(existing.repair_hint, hint)
             self._kb.set_node_fields(
                 target,
@@ -644,6 +682,7 @@ class Projector:
         depends_on: list[str],
         remark: str,
         source_note: str,
+        introduced_by_actor: str = "user:cli",
     ) -> Node:
         # H29: missing deps are tolerated (their hash is empty string).
         # The verifier reports them as ``missing_from_nodes`` content
@@ -678,6 +717,7 @@ class Projector:
             statement_hash=sh,
             verification_hash=vh,
             depends_on=tuple(depends_on),
+            introduced_by_actor=introduced_by_actor or "user:cli",
         )
 
     def _assemble_node_with_staged(
@@ -691,6 +731,7 @@ class Projector:
         remark: str,
         source_note: str,
         staged: dict[str, Node],
+        introduced_by_actor: str = "user:cli",
     ) -> Node:
         # H29: missing deps are tolerated; verifier judges them.
         dep_refs: list[DepRef] = []
@@ -722,6 +763,7 @@ class Projector:
             statement_hash=sh,
             verification_hash=vh,
             depends_on=tuple(depends_on),
+            introduced_by_actor=introduced_by_actor or "user:cli",
         )
 
     def _cascade_statement_change(self, start_label: str) -> None:
@@ -767,6 +809,10 @@ class Projector:
                     updates["pass_count"] = 0
                 else:
                     updates["pass_count"] = -1
+                # repair_count was already reset above when the statement
+                # hash changed; the cascade is "hash drift", not a verifier
+                # rejection — provenance stays intact via set_node_fields
+                # leaving the introduced_by_actor column untouched.
             self._kb.set_node_fields(lbl, **updates)
             frontier.extend(self._kb.dependents_of(lbl))
 

@@ -337,6 +337,8 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
                 dep_statement_hashes=deps,
                 dep_pass_counts=dep_pass_counts,
                 last_rejected_verification_hash=row.get("verification_hash", "") or "",
+                introduced_by_actor=row.get("introduced_by_actor", "user:cli")
+                or "user:cli",
             )
         )
     return _KBSnapshot(candidates=out)
@@ -562,7 +564,18 @@ def _decide_idle_reason(
         return IDLE_ALL_DONE, ""
     # Why couldn't we dispatch? Prefer generator-blocked > verifier-blocked > user.
     proof_kinds = {k.value for k in PROOF_REQUIRING_KINDS}
-    gen_candidates = [c for c in nodes if c.pass_count == -1 and c.target_kind in proof_kinds]
+    gen_candidates = [
+        c
+        for c in nodes
+        if c.pass_count == -1
+        and (
+            c.target_kind in proof_kinds
+            or (
+                c.target_kind in {"definition", "external_theorem"}
+                and c.introduced_by_generator
+            )
+        )
+    ]
     if gen_candidates:
         not_ready = [c for c in gen_candidates if not c.deps_ready]
         if not_ready:
@@ -799,11 +812,22 @@ def _tick(state: CoordinatorState) -> None:
         if rec.status not in {"applied", "apply_failed"}:
             in_flight_targets.add(rec.target)
 
+    # Generator pool: proof-requiring kinds with no proof, OR axioms
+    # that the generator originally introduced (its own helper
+    # definitions). The verifier-reject router (§5.4.1) sets pass_count=-1
+    # exactly for these two cases, so they enter the same dispatch lane
+    # and the generator's repair round can rewrite the helper.
     gen_pool = [
         GeneratorCandidate(label=c.target)
         for c in snapshot.candidates
         if c.pass_count == -1
-        and c.target_kind in {"lemma", "theorem", "proposition"}
+        and (
+            c.target_kind in {"lemma", "theorem", "proposition"}
+            or (
+                c.target_kind in {"definition", "external_theorem"}
+                and c.introduced_by_generator
+            )
+        )
         and c.deps_ready
     ]
     ver_pool = [
@@ -812,16 +836,17 @@ def _tick(state: CoordinatorState) -> None:
         if 0 <= c.pass_count < state.config.scheduling.desired_pass_count
         and c.deps_ready
         and c.verifier_deps_strictly_ahead
-        # §5.4.1 bugfix: an axiom that the verifier has already rejected
-        # (repair_count > 0) cannot be advanced by re-running the
-        # verifier — the content is unchanged and the verdict will be
-        # identical. Generator may not revise pre-existing definitions
-        # (§6.2 write-scope), so this candidate is user_blocked and
-        # must drop out of the dispatch pool. Prevents a spin-loop on
-        # rejected axioms.
+        # §5.4.1 bugfix: a *user-introduced* axiom that the verifier has
+        # already rejected (repair_count > 0) cannot be advanced by re-
+        # running the verifier — the content is unchanged and the verdict
+        # will be identical, and the generator's write-scope (§6.2) does
+        # not let it revise user-authored definitions. Generator-
+        # introduced helpers fall through to the generator pool above
+        # instead.
         and not (
             c.target_kind in {"definition", "external_theorem"}
             and c.repair_count > 0
+            and not c.introduced_by_generator
         )
     ]
 
@@ -845,17 +870,17 @@ def _tick(state: CoordinatorState) -> None:
     by_label = {c.target: c for c in snapshot.candidates}
     dispatched_gen = 0
     dispatched_ver = 0
-    # §5.4.1 bugfix: an axiom is user_blocked once the verifier has
-    # rejected it at least once (repair_count > 0) and no further worker
-    # can advance it — generator is not allowed to revise pre-existing
-    # definitions. Brand-new axioms (pass_count==0, repair_count==0) are
-    # awaiting their first verifier dispatch and not blocked.
-    # The legacy `pass_count == -1` arm is preserved for nodes still in
-    # the old representation (pre-rebuild migration).
+    # §5.4.1 bugfix + provenance: an axiom is user_blocked only when the
+    # verifier has rejected it AND the generator is not allowed to repair
+    # it. With introduced_by_actor in place that means user-introduced
+    # axioms with repair_count > 0 (or the legacy -1 representation that
+    # might persist on a pre-rebuild workspace). Generator-introduced
+    # helpers route to the generator pool instead and are not blocked.
     user_blocked = sum(
         1
         for c in snapshot.candidates
         if c.target_kind in {"definition", "external_theorem"}
+        and not c.introduced_by_generator
         and (
             c.pass_count == -1
             or (c.pass_count == 0 and c.repair_count > 0)
@@ -865,7 +890,13 @@ def _tick(state: CoordinatorState) -> None:
         1
         for c in snapshot.candidates
         if c.pass_count == -1
-        and c.target_kind in {"lemma", "theorem", "proposition"}
+        and (
+            c.target_kind in {"lemma", "theorem", "proposition"}
+            or (
+                c.target_kind in {"definition", "external_theorem"}
+                and c.introduced_by_generator
+            )
+        )
         and not c.deps_ready
     )
     ver_blocked = sum(

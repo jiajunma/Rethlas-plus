@@ -628,6 +628,119 @@ def test_verifier_gap_on_definition_keeps_pass_count_at_zero(
     assert "please cite the source definition" in n1.repair_hint
 
 
+def test_verifier_gap_on_generator_introduced_axiom_resets_to_minus_one(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """Generator-introduced helper definitions that the verifier rejects
+    must reset to ``pass_count = -1`` so they re-enter the generator
+    pool and the system stays autonomous. The user-introduced
+    counterpart still resets to 0 (user_blocked).
+    """
+    # Seed a target lemma for the generator batch (target must already
+    # exist; brand-new helper labels appear inside the same batch).
+    body0, raw0 = _node_added(
+        eid="20260427T120000.000-0001-aaaaaaaaaaaaaaaa",
+        target="thm:induced_orbit_target",
+        kind="theorem",
+        statement="A target theorem.",
+        proof="",
+    )
+    projector.apply(body0, raw0)
+
+    # Generator commits a brand-new helper definition + the target proof.
+    body_gen, raw_gen = _event(
+        eid="20260427T120001.000-0001-bbbbbbbbbbbbbbbb",
+        etype="generator.batch_committed",
+        actor="generator:codex-default",
+        payload={
+            "target": "thm:induced_orbit_target",
+            "nodes": [
+                {
+                    "label": "def:helper",
+                    "kind": "definition",
+                    "statement": "A helper definition introduced by the generator.",
+                    "proof": "",
+                    "remark": "",
+                    "source_note": "",
+                },
+                {
+                    "label": "thm:induced_orbit_target",
+                    "kind": "theorem",
+                    "statement": "A target theorem.",
+                    "proof": r"By \ref{def:helper}, the result follows.",
+                    "remark": "",
+                    "source_note": "",
+                },
+            ],
+        },
+    )
+    r_gen = projector.apply(body_gen, raw_gen)
+    assert r_gen.status is ApplyOutcome.APPLIED
+    helper = kb.node_by_label("def:helper")
+    assert helper is not None
+    assert helper.introduced_by_actor == "generator:codex-default"
+    assert helper.pass_count == 0  # axiom initial_count
+
+    # Verifier rejects the helper.
+    body_v, raw_v = _verdict(
+        eid="20260427T120002.000-0001-cccccccccccccccc",
+        target="def:helper",
+        verdict="gap",
+        verification_hash=helper.verification_hash,
+        repair_hint="please clarify the helper definition",
+    )
+    projector.apply(body_v, raw_v)
+    rejected = kb.node_by_label("def:helper")
+    assert rejected is not None
+    assert rejected.pass_count == -1, (
+        "generator-introduced axiom must reset to -1 so the generator "
+        "pool can pick it up for repair"
+    )
+    assert rejected.repair_count == 1
+    assert rejected.introduced_by_actor == "generator:codex-default"
+
+
+def test_user_introduced_definition_keeps_provenance_across_revision(
+    projector: Projector, kb: KuzuBackend
+) -> None:
+    """Revisions must not transfer provenance: a user revising a
+    generator-introduced helper must not strip its generator
+    ownership (otherwise verifier rejection would leak back to the
+    user). Mirrored: a user-introduced definition stays user-owned.
+    """
+    body, raw = _node_added(
+        eid="20260427T120000.000-0001-dddddddddddddddd",
+        target="def:user_def",
+        kind="definition",
+        statement="An original user-authored definition.",
+        proof="",
+        actor="user:cli",
+    )
+    projector.apply(body, raw)
+    n0 = kb.node_by_label("def:user_def")
+    assert n0 is not None and n0.introduced_by_actor == "user:cli"
+
+    revise_body, revise_raw = _event(
+        eid="20260427T120001.000-0001-eeeeeeeeeeeeeeee",
+        etype="user.node_revised",
+        actor="user:bob",
+        target="def:user_def",
+        payload={
+            "kind": "definition",
+            "statement": "Revised user-authored definition.",
+            "proof": "",
+            "remark": "",
+            "source_note": "",
+        },
+    )
+    projector.apply(revise_body, revise_raw)
+    n1 = kb.node_by_label("def:user_def")
+    assert n1 is not None
+    assert n1.introduced_by_actor == "user:cli", (
+        "introduced_by_actor records first introducer, not the latest reviser"
+    )
+
+
 def test_verifier_hash_mismatch_rejected(
     projector: Projector, kb: KuzuBackend
 ) -> None:

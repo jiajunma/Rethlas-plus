@@ -47,7 +47,8 @@ _SCHEMA_DDL: list[str] = [
       verification_report STRING DEFAULT '',
       repair_hint STRING DEFAULT '',
       remark STRING DEFAULT '',
-      source_note STRING DEFAULT ''
+      source_note STRING DEFAULT '',
+      introduced_by_actor STRING DEFAULT 'user:cli'
     )
     """,
     # Kuzu currently requires explicit REL TABLE DDL without IF NOT EXISTS
@@ -96,6 +97,7 @@ class RawNodeRow:
     repair_hint: str
     remark: str
     source_note: str
+    introduced_by_actor: str = "user:cli"
 
 
 class KuzuBackend:
@@ -128,6 +130,38 @@ class KuzuBackend:
         for ddl in _SCHEMA_DDL:
             self._conn.execute(ddl)
         self._ensure_rel_table()
+        self._migrate_introduced_by_actor()
+
+    def _migrate_introduced_by_actor(self) -> None:
+        """Add ``Node.introduced_by_actor`` to a pre-existing DB.
+
+        ``CREATE NODE TABLE IF NOT EXISTS`` does not add columns to a
+        table that already exists, so a workspace whose Kuzu DB was
+        initialised before this column landed needs an ``ALTER TABLE``
+        backfill. The default keeps prior rows behaving as user-introduced
+        nodes (the conservative choice — only generator-introduced helpers
+        get the broader repair path); rerun ``rethlas rebuild`` after
+        upgrade to repopulate the column with actual provenance from the
+        replay.
+        """
+        try:
+            self._conn.execute(
+                "ALTER TABLE Node ADD introduced_by_actor STRING DEFAULT 'user:cli'"
+            )
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            # Kuzu emits "Node table already has property introduced_by_actor"
+            # when CREATE NODE TABLE already declared the column on a fresh
+            # DB (the typical case after this code lands). Tolerate that
+            # wording plus the generic "already exists" / "duplicate"
+            # phrases for forward compatibility with future Kuzu releases.
+            if (
+                "already has property" in msg
+                or "already exists" in msg
+                or "duplicate" in msg
+            ):
+                return
+            raise
 
     def _ensure_rel_table(self) -> None:
         # DependsOn does not support IF NOT EXISTS at Kuzu 0.11.3; swallow
@@ -249,6 +283,7 @@ class KuzuBackend:
                    n.pass_count, n.repair_count,
                    n.statement_hash, n.verification_hash,
                    n.repair_hint, n.verification_report,
+                   n.introduced_by_actor,
                    collect(d.label)
             """
         )
@@ -267,7 +302,8 @@ class KuzuBackend:
                     "verification_hash": r[7] or "",
                     "repair_hint": r[8] or "",
                     "verification_report": r[9] or "",
-                    "deps": [d for d in (r[10] or []) if d is not None],
+                    "introduced_by_actor": r[10] or "user:cli",
+                    "deps": [d for d in (r[11] or []) if d is not None],
                 }
             )
         return out
@@ -280,15 +316,16 @@ class KuzuBackend:
             RETURN n.label, n.kind, n.statement, n.proof, n.statement_hash,
                    n.verification_hash, n.pass_count, n.repair_count,
                    n.repair_hint, n.verification_report,
+                   n.introduced_by_actor,
                    collect(d.label), collect(d.statement_hash), collect(d.pass_count)
             """
         )
         out: list[dict[str, Any]] = []
         while res.has_next():
             r = res.get_next()
-            dep_labels = [d for d in (r[10] or []) if d is not None]
-            dep_hashes = [h or "" for h in (r[11] or [])]
-            dep_counts = [int(c) if c is not None else -1 for c in (r[12] or [])]
+            dep_labels = [d for d in (r[11] or []) if d is not None]
+            dep_hashes = [h or "" for h in (r[12] or [])]
+            dep_counts = [int(c) if c is not None else -1 for c in (r[13] or [])]
             out.append(
                 {
                     "target": r[0],
@@ -301,6 +338,7 @@ class KuzuBackend:
                     "repair_count": int(r[7]) if r[7] is not None else 0,
                     "repair_hint": r[8] or "",
                     "verification_report": r[9] or "",
+                    "introduced_by_actor": r[10] or "user:cli",
                     "dep_labels": dep_labels,
                     "dep_hashes": dep_hashes,
                     "dep_counts": dep_counts,
@@ -367,7 +405,8 @@ class KuzuBackend:
             MATCH (n:Node {label: $lbl})
             RETURN n.label, n.kind, n.statement, n.proof, n.statement_hash,
                    n.verification_hash, n.pass_count, n.repair_count,
-                   n.verification_report, n.repair_hint, n.remark, n.source_note
+                   n.verification_report, n.repair_hint, n.remark, n.source_note,
+                   n.introduced_by_actor
             """,
             {"lbl": label},
         )
@@ -387,6 +426,7 @@ class KuzuBackend:
             repair_hint=r[9] or "",
             remark=r[10] or "",
             source_note=r[11] or "",
+            introduced_by_actor=r[12] or "user:cli",
         )
 
     def node_labels(self) -> list[str]:
@@ -411,7 +451,8 @@ class KuzuBackend:
               verification_report: $vr,
               repair_hint: $rh,
               remark: $rem,
-              source_note: $src
+              source_note: $src,
+              introduced_by_actor: $iba
             })
             """,
             self._node_params(node),
@@ -434,7 +475,8 @@ class KuzuBackend:
                 n.verification_report = $vr,
                 n.repair_hint = $rh,
                 n.remark = $rem,
-                n.source_note = $src
+                n.source_note = $src,
+                n.introduced_by_actor = $iba
             """,
             params,
         )
@@ -467,6 +509,7 @@ class KuzuBackend:
             "rh": node.repair_hint,
             "rem": node.remark,
             "src": node.source_note,
+            "iba": node.introduced_by_actor or "user:cli",
         }
 
     def _set_dependencies(self, label: str, depends_on: Iterable[str]) -> None:

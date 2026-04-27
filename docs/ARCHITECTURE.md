@@ -1347,6 +1347,67 @@ The librarian rebuild (`rethlas rebuild`) re-projects from `events/`
 using the corrected rule, so a one-shot rebuild migrates them in
 place. No event format changes; only the projection function changed.
 
+#### 5.4.2 Provenance: `introduced_by_actor` lets the generator repair its own helper definitions
+
+**Symptom (observed 2026-04-27, after the §5.4.1 fix landed):** the
+coordinator was no longer deadlocking, but every verifier complaint
+about a generator-introduced helper definition (e.g. `def:helper_X`
+brand-new label inside a `generator.batch_committed` payload)
+escalated to `STATUS_USER_BLOCKED`. The user had asked to be
+hands-off after the initial question, yet trivial nitpicks ("symbol
+`X_0` not stated to lie in `g`") froze the autonomous loop. The
+verifier skill update (`verify-sequential-statements/SKILL.md`)
+helped one verifier accept, but the second verifier's rerun raised
+a fresh nitpick and the cycle repeated.
+
+**Root cause:** §5.4.1 routed *all* axiom rejections to `pass_count = 0`
+on the assumption that "definitions belong to the user". That holds
+for user-authored `def:` nodes admitted via `user.node_added`, but
+not for generator-introduced helpers. Per §6.2 write-scope the
+generator may write to brand-new labels inside its batch — those
+helpers belong to the generator's repair lane, not the user's.
+
+**Fix:** introduce a per-node `introduced_by_actor` field
+(`kind:instance` form, e.g. `user:cli` / `generator:codex-default`).
+The projector sets it on first introduction and preserves it across
+revisions. Reject routing now branches on `(kind, introduced_by_actor)`:
+
+| Target | `pass_count` after `gap` / `critical` |
+| --- | --- |
+| Proof-requiring kind (`lemma` / `theorem` / `proposition`) | `-1` (generator pool) |
+| Axiom kind, `introduced_by_actor` starts with `generator:` | `-1` (generator pool — its own helper) |
+| Axiom kind, `introduced_by_actor` starts with `user:` | `0` (user_blocked once `repair_count > 0`) |
+
+Coordinator (`coordinator/main.py`) widens `gen_pool` to include
+generator-introduced axioms at `pass_count == -1`; `user_blocked`
+counter and `ver_pool` exclusion are restricted to user-introduced
+axioms. Dashboard classifier (`dashboard/state.py:classify_theorem`)
+takes `introduced_by_actor` and only flags user-introduced axioms
+with `repair_count > 0` as `user_blocked`.
+
+**Implementation:**
+
+- `common/kb/types.py:Node` — new field `introduced_by_actor: str = "user:cli"`,
+  preserved on revision; convenience property `introduced_by_generator`.
+- `common/kb/kuzu_backend.py` — `Node` table gets an `introduced_by_actor`
+  column; `_migrate_introduced_by_actor()` runs `ALTER TABLE Node ADD ...`
+  for pre-existing DBs (silenced when the column already exists).
+- `librarian/projector.py` — `_apply_node_added` / `_apply_node_revised`
+  / `_apply_generator_batch` thread the event's `actor` into Node
+  construction; `_apply_verifier_run` branches on provenance.
+- `coordinator/main.py` — `gen_pool` adds `(axiom kind ∧
+  introduced_by_generator)`; `user_blocked` counter restricted to
+  `not introduced_by_generator`; `_decide_idle_reason` matches.
+- `dashboard/state.py:classify_theorem` — accepts `introduced_by_actor`
+  kwarg; user_blocked branches require user-introduced.
+
+**Migration:** the schema change carries a `DEFAULT 'user:cli'` so old
+rows pass through cleanly, but the field reflects the migration
+default rather than the real provenance until you run `rethlas rebuild`,
+which replays `events/` with the new code path and writes the actual
+`event.actor` for each row. After rebuild, generator-introduced
+helpers route correctly back to the generator pool on rejection.
+
 ### 5.5 Auditability and safety checks
 
 #### 5.5.0 Prevention-first mechanisms for `pass_count` correctness

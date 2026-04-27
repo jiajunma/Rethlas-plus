@@ -329,6 +329,7 @@ class DashboardCore:
                 in_flight=n.label in in_flight_targets,
                 repair_hint=n.repair_hint,
                 repair_count=n.repair_count,
+                introduced_by_actor=n.introduced_by_actor,
             )
             out.append(
                 {
@@ -338,6 +339,7 @@ class DashboardCore:
                     "repair_count": n.repair_count,
                     "deps": list(n.deps),
                     "status": status,
+                    "introduced_by_actor": n.introduced_by_actor,
                 }
             )
         out.sort(key=lambda d: (d["kind"], d["label"]))
@@ -367,6 +369,7 @@ class DashboardCore:
                 in_flight=n.label in in_flight_targets,
                 repair_hint=n.repair_hint,
                 repair_count=n.repair_count,
+                introduced_by_actor=n.introduced_by_actor,
             )
             # ARCHITECTURE §6.7 per-node detail surface.
             active_job: dict[str, Any] | None = None
@@ -434,6 +437,7 @@ class DashboardCore:
                 "status": status,
                 "active_job": active_job,
                 "recent_events": recent_events,
+                "introduced_by_actor": n.introduced_by_actor,
             }
         return None
 
@@ -511,7 +515,14 @@ class DashboardCore:
         except KBUnavailable:
             nodes = []
         for n in nodes:
-            if n.kind in {"definition", "external_theorem"} and n.pass_count == -1:
+            # Only flag user-introduced axioms as user_blocked. Generator-
+            # introduced helper definitions sitting at -1 are awaiting a
+            # generator repair round and don't need user attention.
+            if (
+                n.kind in {"definition", "external_theorem"}
+                and not n.introduced_by_actor.startswith("generator:")
+                and n.pass_count == -1
+            ):
                 items.append(
                     {
                         "kind": "user_blocked",

@@ -709,6 +709,7 @@ def _row_to_node(row, deps: list[str]) -> Node:
         statement_hash=row.statement_hash,
         verification_hash=row.verification_hash,
         depends_on=tuple(deps),
+        introduced_by_actor=getattr(row, "introduced_by_actor", "user:cli"),
     )
 
 
