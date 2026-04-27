@@ -4,6 +4,40 @@
   <meta charset="utf-8" />
   <title>Rethlas Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- MathJax v3 — chosen over KaTeX for Rethlas because agents emit
+       unconstrained LaTeX (custom \def, \begin{align}, \overset, etc.)
+       and MathJax has wider package coverage + better dynamic-typeset
+       story (M12.D will call ``MathJax.typesetPromise([root])`` on
+       SSE-patched subtrees rather than re-running renderMathInElement
+       across the whole detail panel). CDN now; will be vendored under
+       ``dashboard/templates/static/`` in M13.C alongside Cytoscape so
+       the supervise process works air-gapped. -->
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath:  [["$", "$"], ["\\(", "\\)"]],
+        displayMath: [["$$", "$$"], ["\\[", "\\]"]],
+        processEscapes: true,
+        processEnvironments: true,
+      },
+      options: {
+        // Skip MathJax inside <code>/<pre>/<script>/<noscript> so the
+        // dashboard's JSON / log displays don't get accidentally
+        // typeset.
+        skipHtmlTags: ["script", "noscript", "style", "textarea", "code", "pre"],
+      },
+      startup: {
+        // Don't auto-typeset on page load — we explicitly call
+        // ``renderMath(root)`` after each detail-panel mount so
+        // SSE-driven updates stay local to one subtree.
+        typeset: false,
+      },
+    };
+  </script>
+  <!-- TODO(M13.C): vendor MathJax under static/ and add SRI hash. -->
+  <script defer
+          src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-chtml.js"
+          crossorigin="anonymous"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -91,6 +125,17 @@
     .empty { color: var(--muted); font-style: italic; }
     .footnote { color: var(--muted); font-size: .8rem; }
     a { color: var(--accent); }
+    .math-body {
+      white-space: pre-wrap;
+      background: var(--code-bg);
+      padding: .5rem .75rem;
+      border-radius: 6px;
+      margin: 0;
+      font-size: .9rem;
+      line-height: 1.55;
+      overflow-x: auto;
+    }
+    .math-body mjx-container[display="true"] { margin: .5rem 0; }
   </style>
 </head>
 <body>
@@ -118,6 +163,11 @@
   <section>
     <h2>Theorems</h2>
     <div id="theorems"></div>
+  </section>
+  <section>
+    <h2>All nodes</h2>
+    <div class="footnote">Every kind in KB — definitions, propositions, lemmas, theorems, external_theorem.</div>
+    <div id="nodes"></div>
   </section>
   <section>
     <h2>Recent rejections / failures</h2>
@@ -194,19 +244,28 @@ async function showNode(label) {
       ${stat("status", node.status ?? "—")}
     </div>
     <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Statement</h3>
-    <pre style="white-space:pre-wrap; background: var(--code-bg);
-                padding: .5rem .75rem; border-radius: 6px; margin: 0;
-                font-size: .85rem;">${escapeHtml(node.statement ?? "")}</pre>
+    <div class="math-body">${escapeHtml(node.statement ?? "")}</div>
     ${node.proof ? `
       <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Proof</h3>
-      <pre style="white-space:pre-wrap; background: var(--code-bg);
-                  padding: .5rem .75rem; border-radius: 6px; margin: 0;
-                  font-size: .85rem;">${escapeHtml(node.proof)}</pre>` : ``}
+      <div class="math-body">${escapeHtml(node.proof)}</div>` : ``}
     ${node.deps && node.deps.length ? `
       <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Dependencies</h3>
       <div>${node.deps.map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", ")}</div>` : ``}
   `;
+  renderMath(body);
   sec.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderMath(root) {
+  // MathJax v3: typeset only the subtree we just patched, never the
+  // whole document. Best-effort — if MathJax hasn't loaded yet (defer
+  // + slow CDN) the call is a no-op; the next detail-panel mount will
+  // pick it up. M12.D's SSE-patch path will reuse this helper so each
+  // verdict-driven badge update only re-typesets the one node card.
+  if (!window.MathJax || !window.MathJax.typesetPromise) return;
+  try {
+    window.MathJax.typesetPromise([root]).catch(() => {});
+  } catch (e) { /* swallow — render best-effort */ }
 }
 document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-node]");
@@ -225,6 +284,7 @@ async function refresh() {
   const active = await fetchJson("/api/active");
   const attention = await fetchJson("/api/attention");
   const theorems = await fetchJson("/api/theorems");
+  const nodes = await fetchJson("/api/nodes");
   const rejected = await fetchJson("/api/rejected");
   const events = await fetchJson("/api/events?limit=30");
   const updated = document.getElementById("updated_at");
@@ -243,9 +303,14 @@ async function refresh() {
   }
   const kb = document.getElementById("kb");
   if (overview.kb) {
+    const kinds = overview.kb.kind_counts || {};
+    const orderedKinds = ["theorem", "proposition", "lemma", "definition", "external_theorem"];
+    const kindStats = orderedKinds
+      .filter(k => (kinds[k] || 0) > 0)
+      .map(k => stat(k, kinds[k]));
     kb.innerHTML = [
       stat("nodes", overview.kb.node_count),
-      stat("theorems", overview.kb.theorem_count),
+      ...kindStats,
       stat("done", overview.kb.done_count),
       stat("unfinished", overview.kb.unfinished_count),
       stat("in-flight targets", overview.in_flight_target_count ?? 0),
@@ -268,6 +333,15 @@ async function refresh() {
       label: `<a href="#" data-node="${escapeHtml(t.label)}">${escapeHtml(t.label)}</a>`,
       status: t.status, pass_count: t.pass_count, repair_count: t.repair_count,
       deps: (t.deps || []).map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", "),
+    }))
+  );
+  document.getElementById("nodes").innerHTML = rowsToTable(
+    ["kind", "label", "status", "pass_count", "repair_count", "deps"],
+    (nodes.nodes ?? []).map(n => ({
+      kind: n.kind,
+      label: `<a href="#" data-node="${escapeHtml(n.label)}">${escapeHtml(n.label)}</a>`,
+      status: n.status, pass_count: n.pass_count, repair_count: n.repair_count,
+      deps: (n.deps || []).map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", "),
     }))
   );
   // Recent rejections / apply failures / drift alerts (most recent first).

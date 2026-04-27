@@ -193,6 +193,69 @@ def test_node_detail_returns_full_record(tmp_path: Path) -> None:
         assert detail["status"] in {STATUS_NEEDS_VERIFICATION}
 
 
+def test_nodes_endpoint_returns_every_kind(tmp_path: Path) -> None:
+    """``/api/nodes`` surfaces every kind in KB, not just theorems.
+
+    After H29 the generator routinely admits new helpers (definitions,
+    propositions, lemmas) alongside its target theorem, and the
+    dashboard's "All nodes" panel needs to show them so the operator
+    can see what's been planted in KB."""
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
+        "--statement", "Define X.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "lem:base_step", "--kind", "lemma",
+        "--statement", r"Helper about \ref{def:x}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "thm:t", "--kind", "theorem",
+        "--statement", r"Theorem about \ref{lem:base_step}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        core = DashboardCore(tmp_path)
+        result = core.nodes()
+        assert result["count"] == 3
+        kinds = {n["kind"] for n in result["nodes"]}
+        assert kinds == {"definition", "lemma", "theorem"}
+        labels = [n["label"] for n in result["nodes"]]
+        # Sorted by (kind, label).
+        assert labels == ["def:x", "lem:base_step", "thm:t"]
+
+
+def test_overview_kind_counts_breakdown(tmp_path: Path) -> None:
+    """``/api/overview`` exposes a per-kind breakdown so the dashboard
+    summary row can show '2 lemmas, 1 theorem' instead of just a flat
+    'theorems: N' alongside 'nodes: M'."""
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
+        "--statement", "Define X.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "lem:a", "--kind", "lemma",
+        "--statement", r"A about \ref{def:x}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "lem:b", "--kind", "lemma",
+        "--statement", r"B about \ref{def:x}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        core = DashboardCore(tmp_path)
+        overview = core.overview()
+        kind_counts = overview["kb"]["kind_counts"]
+        assert kind_counts == {"definition": 1, "lemma": 2}
+
+
 def test_node_detail_includes_dependents(tmp_path: Path) -> None:
     """ARCHITECTURE §6.7 per-node detail must list dependents."""
     _init_ws(tmp_path)

@@ -11,6 +11,7 @@ Endpoint inventory (read-only):
 - ``GET /api/active``        in-flight ``runtime/jobs/*.json`` records
 - ``GET /api/overview``      runtime + Kuzu summary
 - ``GET /api/theorems``      ``kind=theorem`` nodes with status
+- ``GET /api/nodes``         every kind of node with status
 - ``GET /api/node/{label}``  full node info
 - ``GET /api/rejected``      rejected_writes + apply_failed + drift_alerts
 - ``GET /api/events?limit=N`` reverse-chronological event filenames
@@ -188,7 +189,9 @@ class DashboardCore:
         theorem_count = 0
         done_count = 0
         unfinished_count = 0
+        kind_counts: dict[str, int] = {}
         for n in nodes:
+            kind_counts[n.kind] = kind_counts.get(n.kind, 0) + 1
             if n.kind == "theorem":
                 theorem_count += 1
             if n.pass_count >= self.desired_pass_count:
@@ -214,11 +217,26 @@ class DashboardCore:
                 "theorem_count": theorem_count,
                 "done_count": done_count,
                 "unfinished_count": unfinished_count,
+                "kind_counts": kind_counts,
             },
             "in_flight_target_count": len(in_flight_targets),
         }
 
     def theorems(self) -> dict[str, Any]:
+        return self._collect_nodes(kinds={"theorem"}, key="theorems")
+
+    def nodes(self) -> dict[str, Any]:
+        """Return every node in KB grouped by kind with status classification.
+
+        Used by the dashboard's "All nodes" panel so users can watch
+        propositions, lemmas, and definitions land alongside theorems —
+        especially important after H29, when generator batches routinely
+        admit new helper nodes that aren't theorems."""
+        return self._collect_nodes(kinds=None, key="nodes")
+
+    def _collect_nodes(
+        self, *, kinds: set[str] | None, key: str
+    ) -> dict[str, Any]:
         nodes = list_nodes(self.ws_root)
         in_flight_targets = {
             j.target for j in list_jobs(self.jobs_dir)
@@ -228,7 +246,7 @@ class DashboardCore:
 
         out: list[dict[str, Any]] = []
         for n in nodes:
-            if n.kind != "theorem":
+            if kinds is not None and n.kind not in kinds:
                 continue
             status = classify_theorem(
                 label=n.label,
@@ -250,8 +268,8 @@ class DashboardCore:
                     "status": status,
                 }
             )
-        out.sort(key=lambda d: d["label"])
-        return {"theorems": out, "count": len(out)}
+        out.sort(key=lambda d: (d["kind"], d["label"]))
+        return {key: out, "count": len(out)}
 
     def node_detail(self, label: str) -> dict[str, Any] | None:
         coord = _safe_read_json(self.coordinator_path) or {}
@@ -729,13 +747,16 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
 
             # Kuzu-dependent endpoints — gate on rebuild flag.
             if path in (
-                "/api/overview", "/api/theorems", "/api/rejected", "/api/attention"
+                "/api/overview", "/api/theorems", "/api/nodes",
+                "/api/rejected", "/api/attention",
             ) or path.startswith("/api/node/"):
                 try:
                     if path == "/api/overview":
                         return self._send_json(200, core.overview())
                     if path == "/api/theorems":
                         return self._send_json(200, core.theorems())
+                    if path == "/api/nodes":
+                        return self._send_json(200, core.nodes())
                     if path == "/api/attention":
                         return self._send_json(200, core.attention())
                     if path == "/api/rejected":

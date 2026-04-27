@@ -2899,6 +2899,11 @@ Pages:
   coordinator runtime state with KB enrichment
 - `GET /api/theorems` — enriched view: all `kind=theorem` nodes with
   dashboard-derived status and links back to the relevant coordinator state
+- `GET /api/nodes` — every kind of node (definition / proposition /
+  lemma / theorem / external_theorem) with the same status
+  classification as `/api/theorems`. Added so operators can see the
+  helper nodes the H29 boundary (§3.1.6) routinely admits alongside
+  the dispatched theorem. Sort key: `(kind, label)`.
 - `GET /api/active` — JSON: currently in-flight runtime jobs
 - `GET /api/attention` — JSON: nodes / runtime alerts that need human attention
 - `GET /api/rejected` — JSON: recent runtime admission failures
@@ -2908,7 +2913,24 @@ Pages:
 - `GET /api/node/{label}` — JSON: full node info
 - `GET /events/stream` — SSE: push new events to connected browsers
 
-Frontend: vanilla HTML + minimal JS. No React / Vue / Cytoscape.
+`/api/overview` carries a `kb.kind_counts` field — a flat
+`{<kind>: <count>}` map — so the dashboard summary row can show "2
+lemmas, 1 theorem" instead of just a flat "theorems: N" alongside
+"nodes: M". The same counts drive the Phase II proof-tree section's
+header chips.
+
+Frontend: vanilla HTML + minimal JS, plus **MathJax v3** for LaTeX
+typesetting in the per-node detail panel and (Phase II) the
+proof-tree statement previews. MathJax was chosen over KaTeX
+because Codex-generated math is unconstrained (custom `\def`,
+arbitrary `\begin{...}` environments, `\overset` chains, etc.)
+and MathJax has wider package coverage; equally important, MathJax
+v3's `typesetPromise([root])` API maps cleanly onto the M12.D
+SSE-patch model where each verdict-driven badge update only
+re-typesets one node card. Phase II.5 (M13) will add Cytoscape.js
++ cytoscape-dagre for the DAG view; both bundles are vendored
+under `dashboard/templates/static/` in M13.C so supervise works
+air-gapped. No React / Vue.
 
 **Must prominently surface (so user doesn't miss):**
 - Definitions / external_theorems at `pass_count=-1` (user must
@@ -2954,8 +2976,15 @@ This follows the useful part of the old dashboard design: show both proof
 progress and operational health in one place, but do it from read-only state
 and without coupling scheduler correctness to UI-only concepts.
 
-Phase II will add interactive DAG visualization (Cytoscape.js) and Blueprint
-LaTeX export.
+Phase II — see `docs/PHASE2.md`. M12 ships a dynamic foldable
+proof-tree outline (HTML `<details>` driven by `/api/tree` + SSE
+patches via MathJax `typesetPromise`); M13 / Phase II.5 then adds
+the complementary Cytoscape.js + dagre DAG view sharing the same
+status / kind visual tokens. Static blueprint LaTeX export is no
+longer planned for Phase II — the dynamic dashboard subsumes its
+read-only role; if a static export is later wanted, it becomes a
+separate exporter that consumes `/api/graph` rather than a parallel
+dashboard surface.
 
 ### 6.7.1 Runtime interface contract
 
