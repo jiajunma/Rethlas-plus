@@ -49,5 +49,38 @@ def run_init(workspace: str | None, *, force: bool = False) -> int:
             "the workspace is initialized but generator/verifier worker dispatches will fail\n"
         )
 
+    # H24: the generator-side MCP server runs under the same Python that
+    # ships the rethlas CLI. If fastmcp / requests aren't importable in
+    # that env, every codex MCP call comes back as ``user cancelled MCP
+    # tool call`` and the agent runs without scratch memory. Surface
+    # this loudly at init time so the operator can `pip install` the
+    # missing pieces before kicking off a generator dispatch.
+    _warn_if_mcp_deps_missing()
+
     sys.stdout.write(f"initialized workspace at {ws.root}\n")
     return 0
+
+
+def _warn_if_mcp_deps_missing() -> None:
+    missing: list[str] = []
+    try:
+        import fastmcp  # noqa: F401
+    except Exception:
+        missing.append("fastmcp")
+    try:
+        import requests  # noqa: F401
+    except Exception:
+        missing.append("requests")
+    if missing:
+        sys.stderr.write(
+            "warning: the generator MCP server needs "
+            + ", ".join(missing)
+            + " in this Python env (`"
+            + sys.executable
+            + "`). Install with:\n"
+            + f"    {sys.executable} -m pip install "
+            + " ".join(missing)
+            + "\n"
+            + "Without these, codex MCP calls will fail and the agent "
+            + "loses scratch memory + arXiv search.\n"
+        )

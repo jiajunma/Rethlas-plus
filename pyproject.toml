@@ -14,6 +14,15 @@ dependencies = [
   # tomli only needed on <3.11; stdlib `tomllib` is used on 3.11+.
   "kuzu>=0.11,<0.12",
   "PyYAML>=6.0",
+  # H24: the generator-side MCP server (agents/generation/mcp/server.py)
+  # is spawned by codex with the same Python the rethlas CLI was
+  # installed under. Listing its runtime deps here means a single
+  # `pip install rethlas` is sufficient to dispatch generator workers.
+  # Without these, codex sees every MCP call fail with `user cancelled
+  # MCP tool call` and the agent loses access to scratch memory + arXiv
+  # search.
+  "fastmcp>=2.0.0",
+  "requests>=2.31.0",
 ]
 
 [project.scripts]

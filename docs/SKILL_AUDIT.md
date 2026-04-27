@@ -385,6 +385,25 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H24 — MCP server has unmet runtime deps under the rethlas CLI's Python
+- After H22+H23 the generator dispatched cleanly and codex emitted a
+  real ``<node>`` block (decoder caught a YAML colon-in-string error
+  and rejected with ``reason="malformed_node"``, exactly as ARCH §6.2
+  intends). But every MCP tool call inside that codex session came
+  back as ``user cancelled MCP tool call`` — the agent ran without
+  scratch memory and without arXiv search. The cause: codex spawns
+  ``python3 ./mcp/server.py`` using the same Python that runs the
+  rethlas CLI, but the CLI's env (``~/myenv``) didn't have
+  ``fastmcp`` / ``requests`` installed because they were only listed
+  in ``agents/generation/mcp/requirements.txt``, never in the rethlas
+  package's own ``pyproject.toml`` dependencies.
+- **Status**: resolved. ``pyproject.toml`` now declares
+  ``fastmcp>=2.0.0`` and ``requests>=2.31.0`` as runtime deps, so a
+  single ``pip install rethlas`` is enough to dispatch generator
+  workers. ``rethlas init`` also runs an import preflight and emits
+  a loud warning (with the exact ``pip install`` command) if either
+  module is missing in the active Python env.
+
 ### H23 — Default ``-m auto`` flag fails on ChatGPT-account login
 - After H22 the workers correctly loaded the Phase I agent dir, but
   every dispatch still failed with ``ERROR: {"detail":"The 'auto'
