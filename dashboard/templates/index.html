@@ -119,6 +119,19 @@
     <h2>Theorems</h2>
     <div id="theorems"></div>
   </section>
+  <section>
+    <h2>Recent rejections / failures</h2>
+    <div id="rejected"></div>
+  </section>
+  <section>
+    <h2>Recent truth events</h2>
+    <div id="events"></div>
+  </section>
+  <section id="node_detail_section" hidden>
+    <h2>Node detail <span id="node_detail_label" class="footnote"></span>
+        <a href="#" id="node_detail_close" class="footnote">close</a></h2>
+    <div id="node_detail"></div>
+  </section>
 </main>
 <script>
 async function fetchJson(path) {
@@ -145,11 +158,75 @@ function rowsToTable(headers, rows) {
   }</tr>`).join("");
   return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
+function shortHash(h) {
+  if (!h || typeof h !== "string") return "—";
+  return h.length > 14 ? h.slice(0, 14) + "…" : h;
+}
+function ellipsize(s, n) {
+  if (!s) return "";
+  s = String(s).replace(/\s+/g, " ");
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+async function showNode(label) {
+  const sec = document.getElementById("node_detail_section");
+  const lbl = document.getElementById("node_detail_label");
+  const body = document.getElementById("node_detail");
+  sec.hidden = false;
+  lbl.textContent = label;
+  body.innerHTML = `<div class="empty">loading…</div>`;
+  const node = await fetchJson("/api/node/" + encodeURIComponent(label));
+  if (node.__error) {
+    body.innerHTML = `<div class="empty">load error: ${node.__error}</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="grid">
+      ${stat("kind", node.kind ?? "—")}
+      ${stat("pass_count", node.pass_count ?? "—")}
+      ${stat("repair_count", node.repair_count ?? "—")}
+      ${stat("statement_hash", `<code>${shortHash(node.statement_hash)}</code>`)}
+      ${stat("verification_hash", `<code>${shortHash(node.verification_hash)}</code>`)}
+      ${stat("status", node.status ?? "—")}
+    </div>
+    <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Statement</h3>
+    <pre style="white-space:pre-wrap; background: var(--code-bg);
+                padding: .5rem .75rem; border-radius: 6px; margin: 0;
+                font-size: .85rem;">${escapeHtml(node.statement ?? "")}</pre>
+    ${node.proof ? `
+      <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Proof</h3>
+      <pre style="white-space:pre-wrap; background: var(--code-bg);
+                  padding: .5rem .75rem; border-radius: 6px; margin: 0;
+                  font-size: .85rem;">${escapeHtml(node.proof)}</pre>` : ``}
+    ${node.deps && node.deps.length ? `
+      <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Dependencies</h3>
+      <div>${node.deps.map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", ")}</div>` : ``}
+  `;
+  sec.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-node]");
+  if (a) {
+    e.preventDefault();
+    showNode(a.dataset.node);
+  }
+  if (e.target.id === "node_detail_close") {
+    e.preventDefault();
+    document.getElementById("node_detail_section").hidden = true;
+  }
+});
+
 async function refresh() {
   const overview = await fetchJson("/api/overview");
   const active = await fetchJson("/api/active");
   const attention = await fetchJson("/api/attention");
   const theorems = await fetchJson("/api/theorems");
+  const rejected = await fetchJson("/api/rejected");
+  const events = await fetchJson("/api/events?limit=30");
   const updated = document.getElementById("updated_at");
   updated.textContent = "refreshed " + new Date().toLocaleTimeString();
 
@@ -188,10 +265,52 @@ async function refresh() {
   document.getElementById("theorems").innerHTML = rowsToTable(
     ["label", "status", "pass_count", "repair_count", "deps"],
     (theorems.theorems ?? []).map(t => ({
-      label: `<a href="/api/node/${encodeURIComponent(t.label)}">${t.label}</a>`,
+      label: `<a href="#" data-node="${escapeHtml(t.label)}">${escapeHtml(t.label)}</a>`,
       status: t.status, pass_count: t.pass_count, repair_count: t.repair_count,
-      deps: (t.deps || []).join(", "),
+      deps: (t.deps || []).map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", "),
     }))
+  );
+  // Recent rejections / apply failures / drift alerts (most recent first).
+  const allRej = []
+    .concat((rejected.rejected_writes ?? []).map(r => ({
+      ts: r.ts, kind: "rejected_write", actor: r.actor,
+      target: r.target, reason: r.reason,
+      detail: ellipsize(r.detail, 200),
+    })))
+    .concat((rejected.apply_failed ?? []).map(r => ({
+      ts: r.ts, kind: "apply_failed", actor: r.actor ?? "librarian",
+      target: r.target, reason: r.reason,
+      detail: ellipsize(r.detail, 200),
+    })))
+    .concat((rejected.drift_alerts ?? []).map(r => ({
+      ts: r.ts, kind: "drift_alert", actor: r.actor,
+      target: r.target, reason: r.reason,
+      detail: ellipsize(r.detail, 200),
+    })))
+    .sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+  document.getElementById("rejected").innerHTML = rowsToTable(
+    ["ts", "kind", "target", "reason", "detail"],
+    allRej.map(r => ({
+      ts: `<code>${escapeHtml(r.ts || "")}</code>`,
+      kind: escapeHtml(r.kind),
+      target: r.target ? `<a href="#" data-node="${escapeHtml(r.target)}">${escapeHtml(r.target)}</a>` : "—",
+      reason: `<code>${escapeHtml(r.reason || "")}</code>`,
+      detail: `<code style="white-space:pre-wrap;">${escapeHtml(r.detail || "")}</code>`,
+    }))
+  );
+  // Recent truth events (most recent first per /api/events default).
+  document.getElementById("events").innerHTML = rowsToTable(
+    ["ts", "type", "target", "actor", "event_id"],
+    (events.events ?? []).map(e => {
+      const ts = (e.event_id || "").split("-")[0] || "";
+      return {
+        ts: `<code>${escapeHtml(ts)}</code>`,
+        type: `<code>${escapeHtml(e.type || "")}</code>`,
+        target: e.target ? `<a href="#" data-node="${escapeHtml(e.target)}">${escapeHtml(e.target)}</a>` : "—",
+        actor: escapeHtml(e.actor || ""),
+        event_id: `<code>${escapeHtml((e.event_id || "").slice(-16))}</code>`,
+      };
+    })
   );
 }
 refresh();
