@@ -248,7 +248,20 @@ def decode_codex_stdout(
 # Parsing helpers
 # ---------------------------------------------------------------------------
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_NODE_BLOCK_RE = re.compile(r"<node>\s*(.*?)\s*</node>", re.DOTALL)
+# H25: anchor ``<node>`` and ``</node>`` to their own lines so the regex
+# does NOT match inline backtick-quoted occurrences (e.g. skill prose
+# saying "assemble candidate ``<node>`` blocks for the batch"). The
+# valid Phase I batch format always puts the tags on bare lines, so
+# this is an honest semantic anchor, not a workaround.
+#
+# ``re.MULTILINE`` makes ``^`` match after every newline (and at start
+# of string), so ``^<node>`` rejects an inline backtick-quoted
+# occurrence but accepts the bare-line form used by every well-formed
+# emission.
+_NODE_BLOCK_RE = re.compile(
+    r"^<node>[ \t]*\n(.*?)\n^</node>[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
 
 
 def _strip_ansi(text: str) -> str:

@@ -385,6 +385,26 @@ Snapshot of where the agent skills under `agents/{generation,verification}/.agen
   `agents/generation/mcp/server.py` so there is one canonical
   source.
 
+### H25 — Decoder regex matched inline ``<node>`` text in skill prose
+- After H22+H23+H24 codex began emitting real ``<node>`` blocks, but
+  the decoder regex ``<node>\s*(.*?)\s*</node>`` (no anchors) also
+  matched the literal text ``<node>`` that appears inside skill
+  prose. Skill files like ``direct-proving/SKILL.md`` say "assemble
+  candidate ``<node>`` blocks for the batch" — surrounded by
+  backticks. When codex echoed any of that prose into its log, the
+  regex grabbed the backtick-wrapped ``<node>`` as the opening tag
+  and matched up through the next ``</node>`` (which was usually
+  the agent's actual emission), producing a malformed first match
+  whose content was a mixture of prose and the real node body.
+  Decoder rejected the batch with ``reason="malformed_node"`` and
+  ``YAML error: found character '\`' that cannot start any token``.
+- **Status**: resolved. ``_NODE_BLOCK_RE`` now uses
+  ``re.MULTILINE`` and ``^`` / ``$`` anchors so ``<node>`` and
+  ``</node>`` only match when on their own bare lines. Skill prose
+  with backtick-quoted ``<node>`` text is correctly ignored. New
+  regression test ``test_inline_backtick_node_text_is_skipped`` in
+  ``tests/unit/test_m6_decoder.py`` pins the behavior.
+
 ### H24 — MCP server has unmet runtime deps under the rethlas CLI's Python
 - After H22+H23 the generator dispatched cleanly and codex emitted a
   real ``<node>`` block (decoder caught a YAML colon-in-string error

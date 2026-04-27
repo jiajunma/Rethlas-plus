@@ -165,6 +165,34 @@ def test_failure_no_nodes() -> None:
     _expect(REASON_NO_NODES, "no node blocks here")
 
 
+def test_inline_backtick_node_text_is_skipped() -> None:
+    """H25 regression: skill prose echoed by codex contains the literal
+    text "``<node>``" surrounded by backticks. The decoder must not
+    match this as the start of a node block — only bare-line
+    ``<node>``/``</node>`` tags count. Without this anchor the prose
+    swallowed the real batch and produced ``malformed_node`` even when
+    the agent emitted a perfectly valid block later."""
+    raw = (
+        "Here are my plan steps:\n"
+        "8. Assemble candidate `<node>` blocks for the batch.\n"
+        "   The blocks must satisfy the §6.2 batch contract: every \n"
+        "   reference must resolve inside the batch or to an existing \n"
+        "   verified node; intra-batch references form a DAG.\n"
+        "\n"
+        + block("thm:goal", "theorem", "S1", "P1")
+        + "\n"
+    )
+    batch = decode_codex_stdout(
+        raw,
+        target="thm:goal",
+        mode="fresh",
+        existing_label_present=lambda x: False,
+        existing_dep_hash=lambda x: None,
+    )
+    assert len(batch.nodes) == 1
+    assert batch.nodes[0].label == "thm:goal"
+
+
 def test_failure_malformed_yaml() -> None:
     raw = "<node>\n!!!!:::: not yaml\n---\n**Statement.**\nx\n</node>"
     _expect(REASON_MALFORMED_NODE, raw)
