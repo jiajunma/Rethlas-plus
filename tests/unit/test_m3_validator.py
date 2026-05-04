@@ -57,3 +57,52 @@ def test_uppercase_slug_rejected() -> None:
         validate_admission(
             _body(label="thm:Main_Result", kind="theorem", proof="p")
         )
+
+
+def test_phase3_learner_batch_admission_rejects_missing_span_hash() -> None:
+    body = {
+        "event_id": "20260425T120000.000-0001-aaaaaaaaaaaaaaaa",
+        "type": "learner.batch_proposed",
+        "actor": "learner:alice",
+        "ts": "2026-04-25T12:00:00.000+08:00",
+        "payload": {
+            "source_id": "src:toy",
+            "learner_run": "learn_toy_001",
+            "source_spans": [{"span_id": "span:toy:1", "span_hash": "sha256:x"}],
+            "candidate_nodes": [
+                {
+                    "label": "def:toy",
+                    "kind": "definition",
+                    "statement": "Toy.",
+                    "source_refs": [{"span_id": "span:toy:1"}],
+                }
+            ],
+            "verification_requests": [{"target": "def:toy", "kind": "verify_definition"}],
+        },
+    }
+    with pytest.raises(AdmissionError, match="missing_source_span_hash"):
+        validate_admission(body)
+
+
+def test_phase3_referee_requested_detail_blocks_acceptance() -> None:
+    report = {
+        "output_schema": "referee_report_v1",
+        "review_id": "review_toy_001",
+        "target": "thm:toy",
+        "workspace_path": "reviews/review_toy_001",
+        "target_hashes": {},
+        "verdict": "accepted",
+        "requested_details": [
+            {"requested_detail": "State the missing lemma.", "blocks_verdict": True}
+        ],
+    }
+    body = {
+        "event_id": "20260425T120000.000-0001-aaaaaaaaaaaaaaaa",
+        "type": "referee.review_completed",
+        "actor": "referee:alice",
+        "ts": "2026-04-25T12:00:00.000+08:00",
+        "target": "thm:toy",
+        "payload": {"report": report},
+    }
+    with pytest.raises(AdmissionError, match="requested_detail_blocks_acceptance"):
+        validate_admission(body)

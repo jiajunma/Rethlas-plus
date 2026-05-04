@@ -56,8 +56,12 @@ class CoordinatorHeartbeat:
     codex_silent_timeout_seconds: int = 1800
     active_generator_jobs: int = 0
     active_verifier_jobs: int = 0
+    active_learner_jobs: int = 0
+    active_referee_jobs: int = 0
     dispatchable_generator_count: int = 0
     dispatchable_verifier_count: int = 0
+    dispatchable_learner_count: int = 0
+    dispatchable_referee_count: int = 0
     unfinished_node_count: int = 0
     idle_reason_code: str = ""
     idle_reason_detail: str = ""
@@ -67,11 +71,14 @@ class CoordinatorHeartbeat:
     repair_spinning_count: int = 0
     recent_hash_mismatch_count: int = 0
     children: dict[str, dict[str, Any]] = field(default_factory=dict)
-    # Per-target "3x consecutive failure" entries (ARCHITECTURE §6.7
-    # "Must prominently surface"). Each item has the keys:
-    #   - kind:    "generator" | "verifier"
+    # Per-target "3x consecutive failure" or Phase II search-guard entries
+    # (ARCHITECTURE §6.7 "Must prominently surface"). Each item has keys:
+    #   - kind:    "generator" | "verifier" | "search_branch_stuck"
+    #              | "generic_background_stuck"
     #   - target:  node label
     #   - trigger: "crashed" | "timed_out" | "apply_failed"
+    #              | "repair_budget_exhausted"
+    #              | "generic_background_expansion"
     #   - reason:  apply_failed reason ("" for crashed/timed_out)
     #   - message: human-readable label per §6.7
     #   - count:   consecutive count (>= 3)

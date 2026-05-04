@@ -7,7 +7,7 @@ sits in an arbitrary workspace, none of those files are reachable
 and the agent runs with default-Codex behavior (no Phase I MCP, no
 Phase I skills, no Phase I prompt contract). H22 fixed that by
 copying the agent tree into the workspace at ``rethlas init`` time:
-``<workspace>/agents/{generation,verification}/`` becomes the
+``<workspace>/agents/{generation,verification,learner,referee}/`` becomes the
 worker-side cwd, so the agent only ever sees workspace-resident
 files (no risk of escaping into the user's home dir or into a
 sibling project's old result artifacts).
@@ -52,7 +52,7 @@ _SKIP_DIRS: frozenset[str] = frozenset(
 # Files that are noise under the materialized agent dir (editor / OS state).
 _SKIP_FILES: frozenset[str] = frozenset({".DS_Store"})
 
-_AGENT_KINDS: tuple[str, ...] = ("generation", "verification")
+_AGENT_KINDS: tuple[str, ...] = ("generation", "verification", "learner", "referee")
 
 
 def source_repo_root() -> Path:
@@ -88,7 +88,7 @@ def _ignore(directory: str, names: Iterable[str]) -> set[str]:
             skipped.add(name)
             continue
         if full.is_dir():
-            if name in _SKIP_DIRS:
+            if name in _SKIP_DIRS and not _is_skill_support_dir(full):
                 skipped.add(name)
             elif name.startswith(".venv") or name.startswith(".pytest"):
                 # Catch hand-named virtualenvs (.venv, .venv-verifier,
@@ -97,13 +97,24 @@ def _ignore(directory: str, names: Iterable[str]) -> set[str]:
     return skipped
 
 
+def _is_skill_support_dir(path: Path) -> bool:
+    """Return true for support folders inside ``.agents/skills``.
+
+    Agent-root ``scripts/`` directories are historical runtime tooling and
+    should not be copied into workspaces. Skill-local ``scripts/`` folders are
+    part of the Codex-facing skill contract and must be materialized.
+    """
+    parts = path.parts
+    return ".agents" in parts and "skills" in parts
+
+
 def materialize_agents(
     *,
     workspace_root: Path,
     repo_root: Path | None = None,
     overwrite: bool = True,
 ) -> list[Path]:
-    """Copy ``<repo>/agents/{generation,verification}/`` into the workspace.
+    """Copy ``<repo>/agents/{generation,verification,learner,referee}/`` into the workspace.
 
     Returns the list of materialized agent dirs (one per kind). Idempotent:
     when ``overwrite=True`` (the default), an existing ``<workspace>/agents``

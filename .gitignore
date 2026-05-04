@@ -8,9 +8,19 @@ dist/
 .venv/
 myenv/
 .DS_Store
+=
+
+# Agent/runtime scratch.
+agents/**/.bin/
+agents/**/.obsidian/
+agents/**/.vendor/
+agents/**/downloads/
+agents/**/logs/
+agents/**/memory/
+agents/**/results/
+coordination/
 
 /events/
 /knowledge_base/
 /runtime/
 /rethlas.toml
-

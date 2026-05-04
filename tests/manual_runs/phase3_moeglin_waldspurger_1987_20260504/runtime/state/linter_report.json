@@ -1,0 +1,29 @@
+{
+  "schema": "rethlas-linter-report-v1",
+  "ts": "2026-05-04T15:32:30.153Z",
+  "a": {
+    "violations": [],
+    "count": 0
+  },
+  "b": {
+    "violations": [],
+    "count": 0
+  },
+  "c": {
+    "violations": [],
+    "count": 0
+  },
+  "d": {
+    "violations": [],
+    "count": 0
+  },
+  "e": {
+    "violations": [],
+    "count": 0
+  },
+  "f": {
+    "violations": [],
+    "count": 0
+  },
+  "summary": "0 violations"
+}

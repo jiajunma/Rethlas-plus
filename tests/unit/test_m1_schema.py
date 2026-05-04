@@ -48,6 +48,26 @@ def test_unknown_event_type() -> None:
         validate_event_schema(body)
 
 
+@pytest.mark.parametrize(
+    ("etype", "actor"),
+    [
+        ("source.artifact_registered", "source:cli"),
+        ("source.spans_extracted", "source:cli"),
+        ("learner.batch_proposed", "learner:cli"),
+        ("learner.issue_reported", "learner:cli"),
+        ("referee.review_completed", "referee:cli"),
+        ("referee.citation_checked", "referee:cli"),
+    ],
+)
+def test_phase3_event_types_pass_envelope(etype: str, actor: str) -> None:
+    body = _valid_user_added()
+    body["type"] = etype
+    body["actor"] = actor
+    body["target"] = "thm:toy"
+    body["payload"] = {}
+    validate_event_schema(body)
+
+
 def test_bad_actor() -> None:
     body = _valid_user_added()
     body["actor"] = "alice"  # missing kind:

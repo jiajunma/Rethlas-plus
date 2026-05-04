@@ -10,6 +10,7 @@ Endpoint inventory (read-only):
 - ``GET /api/librarian``     raw ``runtime/state/librarian.json``
 - ``GET /api/active``        in-flight ``runtime/jobs/*.json`` records
 - ``GET /api/overview``      runtime + Kuzu summary
+- ``GET /api/tree``          foldable proof-tree roots + dependency children
 - ``GET /api/theorems``      ``kind=theorem`` nodes with status
 - ``GET /api/nodes``         every kind of node with status
 - ``GET /api/node/{label}``  full node info
@@ -18,9 +19,9 @@ Endpoint inventory (read-only):
 - ``GET /events/stream``     SSE stream (typed envelope)
 
 While ``librarian.json.rebuild_in_progress = true`` the Kuzu-dependent
-endpoints (``/api/overview``, ``/api/theorems``, ``/api/node/{label}``,
-``/api/rejected``) return HTTP 503 + ``Retry-After: 5``. Non-Kuzu
-endpoints keep serving (§6.7.1).
+endpoints (``/api/overview``, ``/api/tree``, ``/api/theorems``,
+``/api/node/{label}``, ``/api/rejected``) return HTTP 503 +
+``Retry-After: 5``. Non-Kuzu endpoints keep serving (§6.7.1).
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 import time
 import urllib.parse
@@ -38,7 +40,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from common.events.filenames import FilenameError, parse_filename
+from common.phase3.artifacts import list_learner_batches, list_reviews
 from common.runtime.jobs import TERMINAL_STATUSES, list_jobs
+from common.runtime.jobs_v2 import list_role_jobs
 from coordinator.heartbeat import read_heartbeat as read_coordinator_hb
 from dashboard.kb_client import (
     KBUnavailable,
@@ -50,6 +54,10 @@ from dashboard.kb_client import (
 )
 from dashboard.state import (
     HEALTHY_S,
+    STATUS_DONE,
+    STATUS_GENERIC_BACKGROUND_STUCK,
+    STATUS_IN_FLIGHT,
+    STATUS_SEARCH_BRANCH_STUCK,
     classify_theorem,
     liveness_label,
 )
@@ -64,6 +72,11 @@ _RETRY_AFTER_S: int = 5
 _EVENTS_LIMIT_MAX: int = 500
 _EVENTS_LIMIT_DEFAULT: int = 50
 _NORMAL_APPLY_FAILED_ATTENTION_REASONS = {"hash_mismatch", "label_conflict"}
+_REF_RE = re.compile(r"\\ref\{([^}]+)\}")
+_PHASE2_ATTENTION_STATUS_BY_KIND = {
+    "search_branch_stuck": STATUS_SEARCH_BRANCH_STUCK,
+    "generic_background_stuck": STATUS_GENERIC_BACKGROUND_STUCK,
+}
 
 
 def _utc_now_iso() -> str:
@@ -90,6 +103,16 @@ def _safe_parse_verification_report(raw: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_ref_labels(text: str) -> list[str]:
+    """Extract ``\\ref{label}`` labels in first-appearance order."""
+    seen: list[str] = []
+    for m in _REF_RE.finditer(text or ""):
+        label = m.group(1).strip()
+        if label and label not in seen:
+            seen.append(label)
+    return seen
 
 
 def _summarize_event(body: dict[str, Any]) -> dict[str, Any]:
@@ -145,6 +168,27 @@ def _summarize_event(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _shared_theorem_parents(
+    theorem_roots: list[str],
+    deps_by_label: dict[str, list[str]],
+) -> dict[str, set[str]]:
+    """Map each reachable label to theorem roots that depend on it."""
+    out: dict[str, set[str]] = {}
+
+    def visit(label: str, *, root: str, path: set[str]) -> None:
+        if label in path:
+            return
+        next_path = set(path)
+        next_path.add(label)
+        for dep in deps_by_label.get(label, []):
+            out.setdefault(dep, set()).add(root)
+            visit(dep, root=root, path=next_path)
+
+    for root in theorem_roots:
+        visit(root, root=root, path=set())
+    return out
+
+
 def _safe_read_json(path: Path) -> dict[str, Any] | None:
     """Read a JSON file. ``None`` on any failure (missing / parse error).
 
@@ -167,6 +211,35 @@ def _safe_read_json(path: Path) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+def _phase2_attention_by_target(coord: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return Phase II attention entries keyed by target label."""
+    out: dict[str, dict[str, Any]] = {}
+    for entry in coord.get("attention_targets", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        target = entry.get("target", "")
+        kind = entry.get("kind", "")
+        if not isinstance(target, str) or not target:
+            continue
+        if kind in _PHASE2_ATTENTION_STATUS_BY_KIND:
+            out[target] = entry
+    return out
+
+
+def _status_with_attention(
+    status: str,
+    *,
+    label: str,
+    attention_by_target: dict[str, dict[str, Any]],
+) -> str:
+    entry = attention_by_target.get(label)
+    if not entry:
+        return status
+    if status in {STATUS_DONE, STATUS_IN_FLIGHT}:
+        return status
+    return _PHASE2_ATTENTION_STATUS_BY_KIND.get(entry.get("kind", ""), status)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +319,17 @@ class DashboardCore:
                 j.updated_at, now=now
             )
             jobs.append(d)
+        for j in list_role_jobs(self.jobs_dir):
+            if j.status in TERMINAL_STATUSES:
+                continue
+            d = j.to_dict()
+            log_age = _log_age_seconds(j.log_path, ws_root=self.ws_root)
+            d["codex_log_age_seconds"] = log_age
+            d["codex_log_age_color"] = _log_age_color(log_age, timeout_s)
+            d["wrapper_heartbeat_age_seconds"] = _heartbeat_age_seconds(
+                j.updated_at, now=now
+            )
+            jobs.append(d)
         return {"jobs": jobs, "count": len(jobs)}
 
     def overview(self) -> dict[str, Any]:
@@ -305,6 +389,119 @@ class DashboardCore:
         admit new helper nodes that aren't theorems."""
         return self._collect_nodes(kinds=None, key="nodes")
 
+    def tree(self, root: str | None = None) -> dict[str, Any]:
+        """Return theorem-rooted dependency trees for the Phase II dashboard.
+
+        The graph structure primarily follows the projected Kuzu
+        ``DependsOn`` edges, but we also re-scan node text for ``\\ref{}``
+        labels so references admitted under H29 but still missing from
+        ``Node`` appear as explicit ``missing_from_nodes`` children.
+        """
+        nodes = list_nodes(self.ws_root)
+        by_label = {n.label: n for n in nodes}
+        passes_by_label = {n.label: n.pass_count for n in nodes}
+        in_flight_targets = {
+            j.target for j in list_jobs(self.jobs_dir)
+            if j.status not in TERMINAL_STATUSES
+        }
+        coord = _safe_read_json(self.coordinator_path) or {}
+        attention_by_target = _phase2_attention_by_target(coord)
+        deps_by_label: dict[str, list[str]] = {}
+        for n in nodes:
+            deps: list[str] = []
+            for dep in list(n.deps) + _extract_ref_labels(n.statement + "\n" + n.proof):
+                if dep and dep not in deps:
+                    deps.append(dep)
+            deps_by_label[n.label] = deps
+
+        all_theorem_roots = sorted(n.label for n in nodes if n.kind == "theorem")
+        if root is None:
+            roots = all_theorem_roots
+        elif root in by_label:
+            roots = [root]
+        else:
+            return {"ts": _utc_now_iso(), "trees": [], "node_count": 0, "edge_count": 0}
+
+        shared_parent_map = _shared_theorem_parents(
+            all_theorem_roots, deps_by_label
+        )
+        seen_nodes: set[str] = set()
+        seen_edges: set[tuple[str, str]] = set()
+
+        def build(label: str, path: set[str], *, root_label: str) -> dict[str, Any]:
+            seen_nodes.add(label)
+            row = by_label.get(label)
+            shared_parents = (
+                []
+                if label == root_label
+                else sorted(shared_parent_map.get(label, set()) - {root_label})
+            )
+            if row is None:
+                return {
+                    "label": label,
+                    "kind": None,
+                    "status": "missing_from_nodes",
+                    "pass_count": None,
+                    "repair_count": None,
+                    "desired_pass_count": self.desired_pass_count,
+                    "in_flight": False,
+                    "shared_parents": shared_parents,
+                    "children": [],
+                }
+
+            node_status = classify_theorem(
+                label=row.label,
+                kind=row.kind,
+                pass_count=row.pass_count,
+                desired=self.desired_pass_count,
+                deps=list(deps_by_label.get(row.label, [])),
+                deps_pass_counts={
+                    d: passes_by_label.get(d, -1)
+                    for d in deps_by_label.get(row.label, [])
+                },
+                in_flight=row.label in in_flight_targets,
+                repair_hint=row.repair_hint,
+                repair_count=row.repair_count,
+                introduced_by_actor=row.introduced_by_actor,
+            )
+            node_attention = attention_by_target.get(row.label)
+            node_status = _status_with_attention(
+                node_status,
+                label=row.label,
+                attention_by_target=attention_by_target,
+            )
+            out = {
+                "label": row.label,
+                "kind": row.kind,
+                "status": node_status,
+                "attention": node_attention,
+                "pass_count": row.pass_count,
+                "repair_count": row.repair_count,
+                "desired_pass_count": self.desired_pass_count,
+                "in_flight": row.label in in_flight_targets,
+                "shared_parents": shared_parents,
+                "children": [],
+            }
+            if label in path:
+                out["cycle_detected"] = True
+                return out
+            child_path = set(path)
+            child_path.add(label)
+            children: list[dict[str, Any]] = []
+            for dep in deps_by_label.get(label, []):
+                seen_edges.add((label, dep))
+                children.append(build(dep, child_path, root_label=root_label))
+            out["children"] = children
+            return out
+
+        trees = [build(label, set(), root_label=label) for label in roots]
+        return {
+            "ts": _utc_now_iso(),
+            "trees": trees,
+            "node_count": len(seen_nodes),
+            "edge_count": len(seen_edges),
+        }
+
     def _collect_nodes(
         self, *, kinds: set[str] | None, key: str
     ) -> dict[str, Any]:
@@ -314,6 +511,8 @@ class DashboardCore:
             if j.status not in TERMINAL_STATUSES
         }
         passes_by_label = {n.label: n.pass_count for n in nodes}
+        coord = _safe_read_json(self.coordinator_path) or {}
+        attention_by_target = _phase2_attention_by_target(coord)
 
         out: list[dict[str, Any]] = []
         for n in nodes:
@@ -331,6 +530,12 @@ class DashboardCore:
                 repair_count=n.repair_count,
                 introduced_by_actor=n.introduced_by_actor,
             )
+            attention = attention_by_target.get(n.label)
+            status = _status_with_attention(
+                status,
+                label=n.label,
+                attention_by_target=attention_by_target,
+            )
             out.append(
                 {
                     "label": n.label,
@@ -339,6 +544,7 @@ class DashboardCore:
                     "repair_count": n.repair_count,
                     "deps": list(n.deps),
                     "status": status,
+                    "attention": attention,
                     "introduced_by_actor": n.introduced_by_actor,
                 }
             )
@@ -348,6 +554,7 @@ class DashboardCore:
     def node_detail(self, label: str) -> dict[str, Any] | None:
         coord = _safe_read_json(self.coordinator_path) or {}
         timeout_s = float(coord.get("codex_silent_timeout_seconds", 1800.0) or 1800.0)
+        attention_by_target = _phase2_attention_by_target(coord)
         now = datetime.now(tz=timezone.utc)
         nodes = list_nodes(self.ws_root)
         passes_by_label = {n.label: n.pass_count for n in nodes}
@@ -370,6 +577,12 @@ class DashboardCore:
                 repair_hint=n.repair_hint,
                 repair_count=n.repair_count,
                 introduced_by_actor=n.introduced_by_actor,
+            )
+            attention = attention_by_target.get(n.label)
+            status = _status_with_attention(
+                status,
+                label=n.label,
+                attention_by_target=attention_by_target,
             )
             # ARCHITECTURE §6.7 per-node detail surface.
             active_job: dict[str, Any] | None = None
@@ -435,9 +648,11 @@ class DashboardCore:
                 "deps": list(n.deps),
                 "dependents": dependents_of(self.ws_root, label),
                 "status": status,
+                "attention": attention,
                 "active_job": active_job,
                 "recent_events": recent_events,
                 "introduced_by_actor": n.introduced_by_actor,
+                "desired_pass_count": self.desired_pass_count,
             }
         return None
 
@@ -643,6 +858,135 @@ class DashboardCore:
                 )
         return {"events": out, "count": len(out), "limit": limit}
 
+    def learner_runs(self) -> dict[str, Any]:
+        jobs = [j.to_dict() for j in list_role_jobs(self.jobs_dir) if j.kind == "learner"]
+        batches = list_learner_batches(self.ws_root)
+        runs = []
+        for batch in batches:
+            payload = batch.get("payload", {}) if isinstance(batch.get("payload"), dict) else {}
+            runs.append(
+                {
+                    "event_id": batch.get("event_id", ""),
+                    "source_id": batch.get("source_id", ""),
+                    "learner_run": batch.get("learner_run", ""),
+                    "context_hash": batch.get("context_hash", ""),
+                    "status": batch.get("status", ""),
+                    "candidate_count": len(payload.get("candidate_nodes", []) or []),
+                    "issue_count": len(payload.get("issues", []) or []),
+                    "hash": batch.get("hash", ""),
+                    "ts": batch.get("ts", ""),
+                }
+            )
+        return {"runs": runs, "jobs": jobs, "count": len(runs)}
+
+    def learner_run(self, run_id: str) -> dict[str, Any] | None:
+        for batch in list_learner_batches(self.ws_root):
+            if run_id in {batch.get("learner_run", ""), batch.get("event_id", "")}:
+                return batch
+        for job in list_role_jobs(self.jobs_dir):
+            if job.kind == "learner" and job.job_id == run_id:
+                return job.to_dict()
+        return None
+
+    def study_kb(self) -> dict[str, Any]:
+        """Flatten Phase 3 learner proposals into a read-only study KB view.
+
+        Learner artifacts are intentionally separate from projected Kuzu nodes:
+        they are source-backed study proposals, not referee-approved KB facts.
+        This endpoint gives operators a browsable surface without promoting
+        those proposals into the verified knowledge graph.
+        """
+        batches = list_learner_batches(self.ws_root)
+        nodes: list[dict[str, Any]] = []
+        kind_counts: dict[str, int] = {}
+        source_counts: dict[str, int] = {}
+        issue_counts_by_type: dict[str, int] = {}
+
+        for batch in batches:
+            payload = batch.get("payload", {})
+            if not isinstance(payload, dict):
+                payload = {}
+            source_id = batch.get("source_id", "") or payload.get("source_id", "")
+            learner_run = batch.get("learner_run", "") or payload.get("learner_run", "")
+            issues = payload.get("issues", []) or []
+            batch_issue_count = len(issues) if isinstance(issues, list) else 0
+            if isinstance(issues, list):
+                for issue in issues:
+                    if not isinstance(issue, dict):
+                        continue
+                    issue_type = str(issue.get("issue_type", "") or "unknown")
+                    issue_counts_by_type[issue_type] = issue_counts_by_type.get(issue_type, 0) + 1
+
+            for node in payload.get("candidate_nodes", []) or []:
+                if not isinstance(node, dict):
+                    continue
+                kind = str(node.get("kind", "") or "")
+                label = str(node.get("label", "") or "")
+                refs = node.get("source_refs", []) or []
+                span_ids: list[str] = []
+                if isinstance(refs, list):
+                    for ref in refs:
+                        if isinstance(ref, dict) and ref.get("span_id"):
+                            span_ids.append(str(ref.get("span_id")))
+                kind_counts[kind] = kind_counts.get(kind, 0) + 1
+                source_counts[source_id] = source_counts.get(source_id, 0) + 1
+                nodes.append(
+                    {
+                        "label": label,
+                        "kind": kind,
+                        "statement": node.get("statement", ""),
+                        "proof": node.get("proof", ""),
+                        "proof_status": node.get("proof_status", ""),
+                        "proof_steps": node.get("proof_steps", []) or [],
+                        "depends_on": node.get("depends_on", []) or [],
+                        "remark": node.get("remark", ""),
+                        "source_note": node.get("source_note", ""),
+                        "source_id": source_id,
+                        "source_refs": refs,
+                        "span_ids": span_ids,
+                        "learner_run": learner_run,
+                        "event_id": batch.get("event_id", ""),
+                        "status": batch.get("status", ""),
+                        "ts": batch.get("ts", ""),
+                        "batch_issue_count": batch_issue_count,
+                    }
+                )
+
+        nodes.sort(key=lambda d: (d["source_id"], d["kind"], d["label"]))
+        return {
+            "nodes": nodes,
+            "count": len(nodes),
+            "batch_count": len(batches),
+            "kind_counts": kind_counts,
+            "source_counts": source_counts,
+            "issue_counts_by_type": issue_counts_by_type,
+        }
+
+    def reviews(self) -> dict[str, Any]:
+        rows = []
+        for review in list_reviews(self.ws_root):
+            payload = review.get("payload", {}) if isinstance(review.get("payload"), dict) else {}
+            rows.append(
+                {
+                    "event_id": review.get("event_id", ""),
+                    "review_id": payload.get("review_id", ""),
+                    "target": review.get("target", ""),
+                    "verdict": payload.get("verdict", ""),
+                    "issue_summary": payload.get("issue_summary", {}),
+                    "hash": review.get("hash", ""),
+                    "ts": review.get("ts", ""),
+                    "artifact_path": review.get("artifact_path", ""),
+                }
+            )
+        return {"reviews": rows, "count": len(rows)}
+
+    def review(self, review_id: str) -> dict[str, Any] | None:
+        for review in list_reviews(self.ws_root):
+            payload = review.get("payload", {}) if isinstance(review.get("payload"), dict) else {}
+            if review_id in {payload.get("review_id", ""), review.get("event_id", "")}:
+                return review
+        return None
+
 
 def _heartbeat_age_seconds(
     updated_at: str, *, now: datetime | None = None
@@ -830,6 +1174,28 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
                 return self._send_json(200, core.active())
             if path == "/api/events":
                 return self._handle_events(qs)
+            if path == "/api/learner/runs":
+                return self._send_json(200, core.learner_runs())
+            if path.startswith("/api/learner/run/"):
+                run_id = urllib.parse.unquote(path[len("/api/learner/run/"):])
+                if not run_id:
+                    return self._send_400("missing run id")
+                detail = core.learner_run(run_id)
+                if detail is None:
+                    return self._send_404()
+                return self._send_json(200, detail)
+            if path == "/api/study/kb":
+                return self._send_json(200, core.study_kb())
+            if path == "/api/reviews":
+                return self._send_json(200, core.reviews())
+            if path.startswith("/api/review/"):
+                review_id = urllib.parse.unquote(path[len("/api/review/"):])
+                if not review_id:
+                    return self._send_400("missing review id")
+                detail = core.review(review_id)
+                if detail is None:
+                    return self._send_404()
+                return self._send_json(200, detail)
             if path == "/events/stream":
                 return self._handle_sse()
             if path in ("/", "/index.html"):
@@ -837,12 +1203,16 @@ def make_handler(core: DashboardCore, broker: SseBroker | None = None):
 
             # Kuzu-dependent endpoints — gate on rebuild flag.
             if path in (
-                "/api/overview", "/api/theorems", "/api/nodes",
+                "/api/overview", "/api/tree", "/api/theorems", "/api/nodes",
                 "/api/rejected", "/api/attention",
             ) or path.startswith("/api/node/"):
                 try:
                     if path == "/api/overview":
                         return self._send_json(200, core.overview())
+                    if path == "/api/tree":
+                        root_raw = qs.get("root", [None])[0]
+                        root = root_raw if root_raw else None
+                        return self._send_json(200, core.tree(root))
                     if path == "/api/theorems":
                         return self._send_json(200, core.theorems())
                     if path == "/api/nodes":

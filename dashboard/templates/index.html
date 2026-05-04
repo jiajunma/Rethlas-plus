@@ -50,6 +50,33 @@
       --warn: #d97706;
       --bad: #dc2626;
       --code-bg: #f8fafc;
+      --pt-kind-definition: oklch(58% 0.02 255);
+      --pt-kind-proposition: oklch(50% 0.13 285);
+      --pt-kind-lemma: oklch(52% 0.11 185);
+      --pt-kind-theorem: oklch(61% 0.16 55);
+      --pt-kind-external-theorem: oklch(67% 0.09 65);
+      --pt-status-done-bg: oklch(50% 0.16 145);
+      --pt-status-done-fg: oklch(100% 0 0);
+      --pt-status-verified-bg: oklch(82% 0.12 145);
+      --pt-status-verified-fg: oklch(28% 0.09 145);
+      --pt-status-needs-verification-bg: oklch(88% 0.15 93);
+      --pt-status-needs-verification-fg: oklch(22% 0.02 260);
+      --pt-status-blocked-on-dependency-bg: oklch(74% 0.17 55);
+      --pt-status-blocked-on-dependency-fg: oklch(22% 0.02 260);
+      --pt-status-needs-generation-bg: oklch(85% 0.02 255);
+      --pt-status-needs-generation-fg: oklch(22% 0.02 260);
+      --pt-status-generation-blocked-on-dependency-bg: oklch(57% 0.02 255);
+      --pt-status-generation-blocked-on-dependency-fg: oklch(100% 0 0);
+      --pt-status-user-blocked-bg: oklch(64% 0.18 25);
+      --pt-status-user-blocked-fg: oklch(100% 0 0);
+      --pt-status-in-flight-bg: oklch(65% 0.15 250);
+      --pt-status-in-flight-fg: oklch(100% 0 0);
+      --pt-status-missing-from-nodes-bg: oklch(72% 0.11 72);
+      --pt-status-missing-from-nodes-fg: oklch(20% 0.03 70);
+      --pt-status-search-branch-stuck-bg: oklch(52% 0.17 28);
+      --pt-status-search-branch-stuck-fg: oklch(100% 0 0);
+      --pt-status-generic-background-stuck-bg: oklch(58% 0.09 235);
+      --pt-status-generic-background-stuck-fg: oklch(100% 0 0);
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -215,6 +242,414 @@
       flex-wrap: wrap;
       margin-bottom: .25rem;
     }
+    .proof-tree-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .75rem;
+      margin-bottom: .75rem;
+    }
+    .proof-tree-header h2 { margin: 0; }
+    .proof-tree-live {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.45rem;
+      padding: .12rem .55rem;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: .72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .proof-tree-live.reconnecting {
+      border-color: var(--warn);
+      color: var(--warn);
+      background: rgba(217,119,6,0.08);
+    }
+    .proof-tree-controls {
+      display: grid;
+      gap: .65rem;
+      margin-bottom: .75rem;
+    }
+    .proof-tree-search {
+      width: min(100%, 28rem);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: .45rem .6rem;
+      background: var(--bg);
+      color: var(--fg);
+      font: inherit;
+    }
+    .status-filter-row {
+      display: flex;
+      gap: .35rem;
+      flex-wrap: wrap;
+    }
+    .status-filter-chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--bg);
+      color: var(--muted);
+      padding: .22rem .55rem;
+      font: inherit;
+      font-size: .76rem;
+      cursor: pointer;
+    }
+    .status-filter-chip[aria-pressed="true"] {
+      color: var(--fg);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(37,99,235,.2);
+    }
+    .proof-tree-meta {
+      color: var(--muted);
+      font-size: .8rem;
+      margin-bottom: .5rem;
+    }
+    .proof-tree-body {
+      display: grid;
+      gap: .35rem;
+    }
+    .proof-tree-node {
+      margin: .25rem 0 .25rem .9rem;
+      border-left: 2px solid var(--line);
+      padding-left: .6rem;
+    }
+    .proof-tree-body > .proof-tree-node {
+      margin-left: 0;
+      border-left-width: 0;
+      padding-left: 0;
+    }
+    .study-browser {
+      display: grid;
+      gap: .75rem;
+    }
+    .study-controls {
+      display: grid;
+      grid-template-columns: minmax(16rem, 2fr) repeat(3, minmax(9rem, 1fr));
+      gap: .5rem;
+      align-items: center;
+    }
+    .study-controls input,
+    .study-controls select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: .42rem .55rem;
+      background: var(--bg);
+      color: var(--fg);
+      font: inherit;
+    }
+    .study-layout {
+      display: grid;
+      grid-template-columns: minmax(18rem, .95fr) minmax(22rem, 1.35fr);
+      gap: .75rem;
+      align-items: start;
+    }
+    .study-list {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      max-height: 44rem;
+      overflow-y: auto;
+    }
+    .study-row {
+      width: 100%;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--fg);
+      padding: .55rem .7rem;
+      cursor: pointer;
+      font: inherit;
+    }
+    .study-row:last-child { border-bottom: 0; }
+    .study-row:hover,
+    .study-row:focus {
+      background: color-mix(in oklab, var(--accent) 6%, var(--bg));
+      outline: none;
+    }
+    .study-row[aria-selected="true"] {
+      border-left: 3px solid var(--accent);
+      background: color-mix(in oklab, var(--accent) 9%, var(--bg));
+      padding-left: calc(.7rem - 3px);
+    }
+    .study-row-head {
+      display: flex;
+      gap: .45rem;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: .18rem;
+    }
+    .study-kind {
+      border-radius: 4px;
+      padding: .05rem .35rem;
+      font-size: .7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: white;
+      background: var(--muted);
+    }
+    .study-kind.definition { background: var(--pt-kind-definition); }
+    .study-kind.external_theorem { background: var(--pt-kind-external-theorem); color: #1f2937; }
+    .study-kind.lemma { background: var(--pt-kind-lemma); }
+    .study-kind.proposition { background: var(--pt-kind-proposition); }
+    .study-kind.theorem { background: var(--pt-kind-theorem); color: #1f2937; }
+    .study-label {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: .82rem;
+      overflow-wrap: anywhere;
+    }
+    .study-row-statement {
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.35;
+    }
+    .study-detail {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: .85rem 1rem;
+      min-height: 22rem;
+    }
+    .study-detail h3 {
+      margin: 0 0 .35rem 0;
+      font-size: 1rem;
+      overflow-wrap: anywhere;
+    }
+    .study-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem .5rem;
+      margin: .4rem 0 .7rem;
+    }
+    .study-meta code { font-size: .78rem; }
+    .study-detail-grid {
+      display: grid;
+      gap: .7rem;
+    }
+    .study-detail-block h4 {
+      margin: 0 0 .25rem;
+      color: var(--muted);
+      font-size: .74rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .study-ref-list {
+      display: grid;
+      gap: .25rem;
+      margin: .25rem 0 0;
+    }
+    @media (max-width: 860px) {
+      .study-controls,
+      .study-layout {
+        grid-template-columns: 1fr;
+      }
+      .study-list { max-height: 24rem; }
+    }
+    .proof-tree-node > summary {
+      display: flex;
+      align-items: center;
+      gap: .45rem;
+      min-height: 2.15rem;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: .32rem .5rem;
+      cursor: pointer;
+      list-style: none;
+      background: var(--bg);
+      transition: border-color .15s, background .15s, transform .15s;
+    }
+    .proof-tree-node > summary::-webkit-details-marker { display: none; }
+    .proof-tree-node > summary::before {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 2.35rem;
+      min-width: 2.35rem;
+      height: 1.25rem;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      font-size: .66rem;
+      font-weight: 700;
+      letter-spacing: 0;
+      color: var(--muted);
+    }
+    .proof-tree-node > summary:hover,
+    .proof-tree-node > summary:focus {
+      border-color: var(--accent);
+      background: color-mix(in oklab, var(--accent) 6%, var(--bg));
+      outline: none;
+    }
+    .proof-tree-node[open] > summary {
+      border-bottom-left-radius: 4px;
+      border-bottom-right-radius: 4px;
+    }
+    .proof-tree-node[data-node-kind="definition"] > summary {
+      border-left: 4px solid var(--pt-kind-definition);
+    }
+    .proof-tree-node[data-node-kind="definition"] > summary::before {
+      content: "def";
+      border-radius: 2px;
+      color: var(--pt-kind-definition);
+    }
+    .proof-tree-node[data-node-kind="proposition"] > summary {
+      border-left: 4px solid var(--pt-kind-proposition);
+    }
+    .proof-tree-node[data-node-kind="proposition"] > summary::before {
+      content: "prop";
+      color: var(--pt-kind-proposition);
+    }
+    .proof-tree-node[data-node-kind="lemma"] > summary {
+      border-left: 4px solid var(--pt-kind-lemma);
+    }
+    .proof-tree-node[data-node-kind="lemma"] > summary::before {
+      content: "lem";
+      color: var(--pt-kind-lemma);
+    }
+    .proof-tree-node[data-node-kind="theorem"] > summary {
+      border-left: 4px solid var(--pt-kind-theorem);
+    }
+    .proof-tree-node[data-node-kind="theorem"] > summary::before {
+      content: "thm";
+      clip-path: polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%);
+      color: var(--pt-kind-theorem);
+    }
+    .proof-tree-node[data-node-kind="external_theorem"] > summary {
+      border-left: 4px dashed var(--pt-kind-external-theorem);
+    }
+    .proof-tree-node[data-node-kind="external_theorem"] > summary::before {
+      content: "ext";
+      border-style: dashed;
+      clip-path: polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%);
+      color: var(--pt-kind-external-theorem);
+    }
+    .proof-tree-node[data-node-kind="missing"] > summary::before,
+    .proof-tree-node[data-node-kind=""] > summary::before {
+      content: "?";
+    }
+    .tree-node-label {
+      font-weight: 600;
+      min-width: 9rem;
+      overflow-wrap: anywhere;
+    }
+    .tree-badges {
+      display: inline-flex;
+      align-items: center;
+      gap: .3rem;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+    .status-pill,
+    .pass-badge,
+    .repair-badge,
+    .in-flight-badge,
+    .shared-parents-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.35rem;
+      border-radius: 999px;
+      padding: .08rem .45rem;
+      font-size: .7rem;
+      font-weight: 650;
+      letter-spacing: .02em;
+      white-space: nowrap;
+    }
+    .pass-badge {
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: var(--code-bg);
+    }
+    .repair-badge {
+      color: var(--bad);
+      background: rgba(220,38,38,0.1);
+    }
+    .in-flight-badge {
+      color: var(--pt-status-in-flight-fg);
+      background: var(--pt-status-in-flight-bg);
+    }
+    .in-flight-badge.pulse {
+      animation: proof-tree-pulse 1.2s ease-in-out infinite;
+    }
+    .shared-parents-chip {
+      color: var(--accent);
+      border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
+      background: color-mix(in oklab, var(--accent) 8%, var(--bg));
+      cursor: pointer;
+    }
+    .proof-tree-node[data-node-status="done"] .status-pill {
+      background: var(--pt-status-done-bg);
+      color: var(--pt-status-done-fg);
+    }
+    .proof-tree-node[data-node-status="verified"] .status-pill {
+      background: var(--pt-status-verified-bg);
+      color: var(--pt-status-verified-fg);
+    }
+    .proof-tree-node[data-node-status="needs_verification"] .status-pill {
+      background: var(--pt-status-needs-verification-bg);
+      color: var(--pt-status-needs-verification-fg);
+    }
+    .proof-tree-node[data-node-status="blocked_on_dependency"] .status-pill {
+      background: var(--pt-status-blocked-on-dependency-bg);
+      color: var(--pt-status-blocked-on-dependency-fg);
+    }
+    .proof-tree-node[data-node-status="needs_generation"] .status-pill {
+      background: var(--pt-status-needs-generation-bg);
+      color: var(--pt-status-needs-generation-fg);
+    }
+    .proof-tree-node[data-node-status="generation_blocked_on_dependency"] .status-pill {
+      background: var(--pt-status-generation-blocked-on-dependency-bg);
+      color: var(--pt-status-generation-blocked-on-dependency-fg);
+    }
+    .proof-tree-node[data-node-status="user_blocked"] .status-pill {
+      background: var(--pt-status-user-blocked-bg);
+      color: var(--pt-status-user-blocked-fg);
+    }
+    .proof-tree-node[data-node-status="in_flight"] .status-pill {
+      background: var(--pt-status-in-flight-bg);
+      color: var(--pt-status-in-flight-fg);
+      animation: proof-tree-pulse 1.2s ease-in-out infinite;
+    }
+    .proof-tree-node[data-node-status="missing_from_nodes"] .status-pill {
+      background: var(--pt-status-missing-from-nodes-bg);
+      color: var(--pt-status-missing-from-nodes-fg);
+    }
+    .proof-tree-node[data-node-status="search_branch_stuck"] .status-pill {
+      background: var(--pt-status-search-branch-stuck-bg);
+      color: var(--pt-status-search-branch-stuck-fg);
+    }
+    .proof-tree-node[data-node-status="generic_background_stuck"] .status-pill {
+      background: var(--pt-status-generic-background-stuck-bg);
+      color: var(--pt-status-generic-background-stuck-fg);
+    }
+    .proof-tree-node.cycle-detected > summary {
+      border-style: dashed;
+      border-color: var(--bad);
+    }
+    .proof-tree-node.search-match > summary {
+      box-shadow: inset 0 0 0 2px var(--pt-status-needs-verification-bg);
+    }
+    .proof-tree-node.filtered-out {
+      display: none;
+    }
+    @keyframes proof-tree-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: .62; }
+    }
+    @media (max-width: 700px) {
+      main { padding: .75rem; }
+      .proof-tree-node {
+        margin-left: .3rem;
+        padding-left: .35rem;
+      }
+      .proof-tree-node > summary {
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+      .tree-node-label { min-width: 0; width: calc(100% - 3rem); }
+      .tree-badges { margin-left: 2.8rem; }
+    }
   </style>
 </head>
 <body>
@@ -231,9 +666,49 @@
     <h2>Knowledge base</h2>
     <div class="grid" id="kb"></div>
   </section>
+  <section id="proof_tree">
+    <div class="proof-tree-header">
+      <h2>Proof tree</h2>
+      <span id="proof_tree_live" class="proof-tree-live">live</span>
+    </div>
+    <div class="proof-tree-controls">
+      <input id="proof_tree_search" class="proof-tree-search" type="search" placeholder="Filter labels" autocomplete="off" />
+      <div id="proof_tree_filters" class="status-filter-row"></div>
+    </div>
+    <div id="proof_tree_meta" class="proof-tree-meta"></div>
+    <div id="proof_tree_body" class="proof-tree-body"></div>
+  </section>
   <section>
     <h2>Active jobs</h2>
     <div id="active"></div>
+  </section>
+  <section>
+    <h2>Phase 3 learner</h2>
+    <div id="learner_runs"></div>
+  </section>
+  <section>
+    <h2>Study KB</h2>
+    <div class="footnote">Learner-proposed source-backed candidates. These are not referee-approved KB nodes. Citations from published sources are treated as provisional premises; the main check is whether the extracted statement matches the local context.</div>
+    <div class="grid" id="study_kb_summary"></div>
+    <div class="study-browser">
+      <div class="study-controls">
+        <input id="study_search" type="search" placeholder="Search labels and statements" autocomplete="off" />
+        <select id="study_kind_filter" aria-label="Filter by kind"></select>
+        <select id="study_source_filter" aria-label="Filter by source"></select>
+        <select id="study_run_filter" aria-label="Filter by learner run"></select>
+      </div>
+      <div class="study-layout">
+        <div>
+          <div id="study_kb_meta" class="footnote"></div>
+          <div id="study_kb"></div>
+        </div>
+        <div id="study_kb_detail" class="study-detail"></div>
+      </div>
+    </div>
+  </section>
+  <section>
+    <h2>Phase 3 referee</h2>
+    <div id="reviews"></div>
   </section>
   <section>
     <h2>Human attention</h2>
@@ -310,6 +785,174 @@ function escapeHtml(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
+function isKbLabel(s) {
+  return /^(def|ext|lem|prop|thm):[a-z0-9_]+$/.test(String(s || ""));
+}
+const studyKbState = {
+  nodes: [],
+  selectedLabel: "",
+  query: "",
+  kind: "",
+  source: "",
+  run: "",
+  controlsBound: false,
+};
+function optionList(values, current, label) {
+  const opts = [`<option value="">All ${escapeHtml(label)}</option>`]
+    .concat(values.map(v => `<option value="${escapeHtml(v)}"${v === current ? " selected" : ""}>${escapeHtml(v)}</option>`));
+  return opts.join("");
+}
+function studyNodeKey(n) {
+  return `${n.event_id || ""}:${n.label || ""}`;
+}
+function selectedStudyNode() {
+  return studyKbState.nodes.find(n => studyNodeKey(n) === studyKbState.selectedLabel)
+    || studyKbState.nodes.find(n => n.label === studyKbState.selectedLabel)
+    || studyKbState.nodes[0]
+    || null;
+}
+function filteredStudyNodes() {
+  const q = studyKbState.query.trim().toLowerCase();
+  return studyKbState.nodes.filter(n => {
+    if (studyKbState.kind && n.kind !== studyKbState.kind) return false;
+    if (studyKbState.source && n.source_id !== studyKbState.source) return false;
+    if (studyKbState.run && n.learner_run !== studyKbState.run) return false;
+    if (!q) return true;
+    const hay = [
+      n.kind, n.label, n.statement, n.remark, n.source_note,
+      n.source_id, n.learner_run, ...(n.span_ids || []),
+    ].join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+}
+function bindStudyKbControls() {
+  if (studyKbState.controlsBound) return;
+  studyKbState.controlsBound = true;
+  const search = document.getElementById("study_search");
+  const kind = document.getElementById("study_kind_filter");
+  const source = document.getElementById("study_source_filter");
+  const run = document.getElementById("study_run_filter");
+  if (search) search.addEventListener("input", () => {
+    studyKbState.query = search.value || "";
+    renderStudyKbBrowser();
+  });
+  if (kind) kind.addEventListener("change", () => {
+    studyKbState.kind = kind.value || "";
+    renderStudyKbBrowser();
+  });
+  if (source) source.addEventListener("change", () => {
+    studyKbState.source = source.value || "";
+    renderStudyKbBrowser();
+  });
+  if (run) run.addEventListener("change", () => {
+    studyKbState.run = run.value || "";
+    renderStudyKbBrowser();
+  });
+  document.addEventListener("click", (e) => {
+    const row = e.target.closest("[data-study-key]");
+    if (!row) return;
+    e.preventDefault();
+    studyKbState.selectedLabel = row.dataset.studyKey || "";
+    renderStudyKbBrowser();
+  });
+}
+function renderStudyKbSummary(payload) {
+  const kinds = payload.kind_counts || {};
+  const issues = payload.issue_counts_by_type || {};
+  const sourceCount = Object.keys(payload.source_counts || {}).length;
+  document.getElementById("study_kb_summary").innerHTML = [
+    stat("candidates", payload.count ?? 0),
+    stat("batches", payload.batch_count ?? 0),
+    stat("sources", sourceCount),
+    ...Object.keys(kinds).sort().map(k => stat(k, kinds[k])),
+    stat("issues", Object.values(issues).reduce((a, b) => a + Number(b || 0), 0)),
+  ].join("");
+}
+function syncStudyKbControls() {
+  const kinds = [...new Set(studyKbState.nodes.map(n => n.kind).filter(Boolean))].sort();
+  const sources = [...new Set(studyKbState.nodes.map(n => n.source_id).filter(Boolean))].sort();
+  const runs = [...new Set(studyKbState.nodes.map(n => n.learner_run).filter(Boolean))].sort();
+  const kind = document.getElementById("study_kind_filter");
+  const source = document.getElementById("study_source_filter");
+  const run = document.getElementById("study_run_filter");
+  if (kind) kind.innerHTML = optionList(kinds, studyKbState.kind, "kinds");
+  if (source) source.innerHTML = optionList(sources, studyKbState.source, "sources");
+  if (run) run.innerHTML = optionList(runs, studyKbState.run, "runs");
+}
+function renderStudyKbBrowser() {
+  const list = document.getElementById("study_kb");
+  const detail = document.getElementById("study_kb_detail");
+  const meta = document.getElementById("study_kb_meta");
+  if (!list || !detail || !meta) return;
+  const rows = filteredStudyNodes();
+  const current = selectedStudyNode();
+  if (!studyKbState.selectedLabel && current) {
+    studyKbState.selectedLabel = studyNodeKey(current);
+  }
+  meta.textContent = `${rows.length} of ${studyKbState.nodes.length} candidates`;
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty">no matching study candidates</div>`;
+    detail.innerHTML = `<div class="empty">select a candidate</div>`;
+    return;
+  }
+  const selectedKey = current ? studyNodeKey(current) : "";
+  list.innerHTML = `<div class="study-list" role="listbox">${
+    rows.map(n => {
+      const key = studyNodeKey(n);
+      return `<button class="study-row" type="button" role="option" data-study-key="${escapeHtml(key)}" aria-selected="${key === selectedKey ? "true" : "false"}">
+        <div class="study-row-head">
+          <span class="study-kind ${escapeHtml(n.kind || "")}">${escapeHtml(n.kind || "unknown")}</span>
+          <span class="footnote">${escapeHtml(n.proof_status || "—")} · ${escapeHtml((n.span_ids || []).length)} ref${(n.span_ids || []).length === 1 ? "" : "s"}</span>
+        </div>
+        <div class="study-label">${escapeHtml(n.label || "")}</div>
+        <div class="study-row-statement">${escapeHtml(ellipsize(n.statement || "", 160))}</div>
+      </button>`;
+    }).join("")
+  }</div>`;
+  renderStudyKbDetail(current);
+}
+function renderStudyKbDetail(n) {
+  const detail = document.getElementById("study_kb_detail");
+  if (!detail) return;
+  if (!n) {
+    detail.innerHTML = `<div class="empty">select a candidate</div>`;
+    return;
+  }
+  const refs = (n.source_refs || []).map(ref => {
+    if (!ref || typeof ref !== "object") return "";
+    return `<div><code>${escapeHtml(ref.span_id || "")}</code><br><code>${escapeHtml(shortHash(ref.span_hash || ""))}</code></div>`;
+  }).filter(Boolean).join("");
+  detail.innerHTML = `
+    <h3><code>${escapeHtml(n.label || "")}</code></h3>
+    <div class="study-meta">
+      <span class="study-kind ${escapeHtml(n.kind || "")}">${escapeHtml(n.kind || "unknown")}</span>
+      <code>${escapeHtml(n.status || "proposed")}</code>
+      <code>${escapeHtml(n.proof_status || "no_proof_status")}</code>
+      <code>${escapeHtml(n.source_id || "")}</code>
+      <a href="/api/learner/run/${encodeURIComponent(n.learner_run || n.event_id || "")}"><code>${escapeHtml(n.learner_run || n.event_id || "")}</code></a>
+    </div>
+    <div class="study-detail-grid">
+      <div class="study-detail-block">
+        <h4>Statement</h4>
+        <div class="math-body">${linkifyRefs(n.statement || "")}</div>
+      </div>
+      ${n.proof ? `<div class="study-detail-block"><h4>Proof Skeleton</h4><div class="math-body">${linkifyRefs(n.proof)}</div></div>` : ""}
+      ${(n.proof_steps || []).length ? `<div class="study-detail-block"><h4>Proof Steps</h4><ol>${(n.proof_steps || []).map(s => `<li>${linkifyRefs(s.step || "")}</li>`).join("")}</ol></div>` : ""}
+      ${(n.depends_on || []).length ? `<div class="study-detail-block"><h4>Depends On</h4><div>${(n.depends_on || []).map(d => isKbLabel(d) ? `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>` : `<code>${escapeHtml(d)}</code>`).join(", ")}</div></div>` : ""}
+      ${n.remark ? `<div class="study-detail-block"><h4>Remark</h4><div class="math-body">${linkifyRefs(n.remark)}</div></div>` : ""}
+      ${n.source_note ? `<div class="study-detail-block"><h4>Source Note</h4><div class="math-body">${linkifyRefs(n.source_note)}</div></div>` : ""}
+      <div class="study-detail-block">
+        <h4>Source Refs</h4>
+        <div class="study-ref-list">${refs || `<div class="empty">none</div>`}</div>
+      </div>
+      <div class="study-detail-block">
+        <h4>Batch</h4>
+        <div class="footnote">event <code>${escapeHtml(n.event_id || "")}</code> · batch issues ${escapeHtml(n.batch_issue_count ?? 0)}</div>
+      </div>
+    </div>
+  `;
+  renderMath(detail);
+}
 // Why: agents write internal references as `\ref{lem:foo}` (LaTeX style)
 // and sometimes as bare `lem:foo` (verifier external_reference_checks).
 // Both should open the corresponding node detail panel — the existing
@@ -363,6 +1006,7 @@ async function showNode(label) {
       ${stat("verification_hash", `<code>${shortHash(node.verification_hash)}</code>`)}
       ${stat("status", node.status ?? "—")}
     </div>
+    ${renderAttentionNotice(node)}
     <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Statement</h3>
     <div class="math-body">${linkifyRefs(node.statement)}</div>
     ${node.proof ? `
@@ -383,6 +1027,14 @@ function verdictPill(verdict) {
   const cls = `verdict-pill verdict-${escapeHtml(verdict || "unknown")}`;
   const label = verdict || "unknown";
   return `<span class="${cls}">${escapeHtml(label)}</span>`;
+}
+
+function renderAttentionNotice(node) {
+  const attention = node.attention;
+  if (!attention || !attention.message) return ``;
+  return `
+    <h3 class="footnote" style="margin:.75rem 0 .25rem 0;">Attention</h3>
+    <div class="math-body repair-hint">${linkifyRefs(attention.message)}</div>`;
 }
 
 function renderVerifierSection(node) {
@@ -472,6 +1124,419 @@ function renderMath(root) {
     window.MathJax.typesetPromise([root]).catch(() => {});
   } catch (e) { /* swallow — render best-effort */ }
 }
+
+const PROOF_TREE_STATUSES = [
+  "done",
+  "verified",
+  "needs_verification",
+  "blocked_on_dependency",
+  "needs_generation",
+  "generation_blocked_on_dependency",
+  "user_blocked",
+  "in_flight",
+  "missing_from_nodes",
+  "search_branch_stuck",
+  "generic_background_stuck",
+];
+const PROOF_TREE_ATTENTION_STATUSES = new Set([
+  "needs_verification",
+  "blocked_on_dependency",
+  "needs_generation",
+  "generation_blocked_on_dependency",
+  "user_blocked",
+  "in_flight",
+  "missing_from_nodes",
+  "search_branch_stuck",
+  "generic_background_stuck",
+]);
+const proofTreeState = {
+  loaded: false,
+  activeFilters: new Set(),
+  search: "",
+  patchTimers: new Map(),
+  sse: null,
+  retryAttempt: 0,
+  reconnectTimer: null,
+};
+
+function treeNodesByLabel(label) {
+  return [...document.querySelectorAll(".proof-tree-node")]
+    .filter(el => el.dataset.nodeLabel === label);
+}
+
+function captureOpenTreeLabels() {
+  return new Set(
+    [...document.querySelectorAll(".proof-tree-node[open]")]
+      .map(el => el.dataset.nodeLabel)
+      .filter(Boolean)
+  );
+}
+
+function isAttentionTreeNode(node) {
+  return PROOF_TREE_ATTENTION_STATUSES.has(node.status || "") || !!node.in_flight;
+}
+
+function statusLabel(status) {
+  return String(status || "unknown").replace(/_/g, " ");
+}
+
+function renderProofTreeBadges(node, summary) {
+  const badges = document.createElement("span");
+  badges.className = "tree-badges";
+  const status = document.createElement("span");
+  status.className = "status-pill";
+  status.textContent = statusLabel(node.status);
+  badges.append(status);
+
+  const pass = document.createElement("span");
+  pass.className = "pass-badge";
+  const pc = node.pass_count == null ? "—" : node.pass_count;
+  const desired = node.desired_pass_count == null ? "—" : node.desired_pass_count;
+  pass.textContent = `${pc}/${desired}`;
+  badges.append(pass);
+
+  if ((node.repair_count || 0) > 0) {
+    const repair = document.createElement("span");
+    repair.className = "repair-badge";
+    repair.textContent = `repair ${node.repair_count}`;
+    badges.append(repair);
+  }
+  if (node.in_flight) {
+    const flight = document.createElement("span");
+    flight.className = "in-flight-badge pulse";
+    flight.textContent = "in flight";
+    badges.append(flight);
+  }
+  if (node.cycle_detected) {
+    const cycle = document.createElement("span");
+    cycle.className = "repair-badge";
+    cycle.textContent = "cycle";
+    badges.append(cycle);
+  }
+  const shared = node.shared_parents || [];
+  if (shared.length) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "shared-parents-chip";
+    chip.dataset.sharedParents = shared.join(",");
+    chip.title = `Also under ${shared.join(", ")}`;
+    chip.textContent = `↗ ${shared.length}`;
+    badges.append(chip);
+  }
+  summary.append(badges);
+}
+
+function renderTreeNode(node, parentEl, depth = 0, rootLabel = node.label, openLabels = null) {
+  const details = document.createElement("details");
+  details.className = "proof-tree-node";
+  details.dataset.nodeLabel = node.label || "";
+  details.dataset.nodeKind = node.kind || "missing";
+  details.dataset.nodeStatus = node.status || "";
+  details.dataset.depth = String(depth);
+  details.dataset.rootLabel = rootLabel;
+  details._treeNode = node;
+  if (node.cycle_detected) details.classList.add("cycle-detected");
+  if (depth < 2 || (openLabels && openLabels.has(node.label)) || isAttentionTreeNode(node)) {
+    details.open = true;
+  }
+
+  const summary = document.createElement("summary");
+  const link = document.createElement("a");
+  link.href = "#";
+  link.className = "tree-node-label";
+  link.dataset.node = node.label || "";
+  link.textContent = node.label || "missing";
+  summary.append(link);
+  renderProofTreeBadges(node, summary);
+  details.append(summary);
+
+  for (const child of node.children || []) {
+    renderTreeNode(child, details, depth + 1, rootLabel, openLabels);
+  }
+  parentEl.append(details);
+  return details;
+}
+
+function expandToDepth(n, root = document.getElementById("proof_tree_body")) {
+  root.querySelectorAll(".proof-tree-node").forEach(el => {
+    el.open = Number(el.dataset.depth || "0") < n;
+  });
+}
+
+function expandAttentionPaths() {
+  document.querySelectorAll(".proof-tree-node").forEach(el => {
+    if (!PROOF_TREE_ATTENTION_STATUSES.has(el.dataset.nodeStatus || "")) return;
+    let cur = el;
+    while (cur) {
+      if (cur.matches && cur.matches(".proof-tree-node")) cur.open = true;
+      cur = cur.parentElement ? cur.parentElement.closest(".proof-tree-node") : null;
+    }
+  });
+}
+
+function renderStatusFilterChips() {
+  const root = document.getElementById("proof_tree_filters");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const status of PROOF_TREE_STATUSES) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "status-filter-chip";
+    btn.dataset.statusFilter = status;
+    btn.setAttribute("aria-pressed", proofTreeState.activeFilters.has(status) ? "true" : "false");
+    btn.textContent = statusLabel(status);
+    btn.addEventListener("click", () => {
+      if (proofTreeState.activeFilters.has(status)) {
+        proofTreeState.activeFilters.delete(status);
+      } else {
+        proofTreeState.activeFilters.add(status);
+      }
+      updateFilterHash();
+      renderStatusFilterChips();
+      applyProofTreeFilters();
+    });
+    root.append(btn);
+  }
+}
+
+function loadFiltersFromHash() {
+  const m = location.hash.match(/(?:^#|&)filters=([^&]+)/);
+  if (!m) return;
+  proofTreeState.activeFilters = new Set(
+    decodeURIComponent(m[1]).split(",").filter(s => PROOF_TREE_STATUSES.includes(s))
+  );
+}
+
+function updateFilterHash() {
+  const filters = [...proofTreeState.activeFilters].sort();
+  const nextHash = filters.length ? `#filters=${encodeURIComponent(filters.join(","))}` : "";
+  history.replaceState(null, "", location.pathname + location.search + nextHash);
+}
+
+function applyProofTreeFilters() {
+  const query = proofTreeState.search.trim().toLowerCase();
+  const hiddenStatuses = proofTreeState.activeFilters;
+  const visit = (el) => {
+    const children = [...el.children].filter(c => c.matches && c.matches(".proof-tree-node"));
+    const childVisible = children.map(visit).some(Boolean);
+    const selfMatch = !query || (el.dataset.nodeLabel || "").toLowerCase().includes(query);
+    const statusAllowed = !hiddenStatuses.has(el.dataset.nodeStatus || "");
+    const visible = (selfMatch || childVisible) && (statusAllowed || childVisible);
+    el.classList.toggle("search-match", !!query && selfMatch);
+    el.classList.toggle("filtered-out", !visible);
+    if ((query && childVisible) || (!!query && selfMatch)) {
+      el.open = true;
+      let parent = el.parentElement ? el.parentElement.closest(".proof-tree-node") : null;
+      while (parent) {
+        parent.open = true;
+        parent = parent.parentElement ? parent.parentElement.closest(".proof-tree-node") : null;
+      }
+    }
+    return visible;
+  };
+  document.querySelectorAll("#proof_tree_body > .proof-tree-node").forEach(visit);
+}
+
+async function loadProofTree(root = null, options = {}) {
+  const body = document.getElementById("proof_tree_body");
+  const meta = document.getElementById("proof_tree_meta");
+  if (!body || !meta) return;
+  const openLabels = options.preserveOpen ? captureOpenTreeLabels() : null;
+  const path = root ? "/api/tree?root=" + encodeURIComponent(root) : "/api/tree";
+  if (!options.splice) {
+    body.innerHTML = `<div class="empty">loading…</div>`;
+  }
+  const payload = await fetchJson(path);
+  if (payload.__error) {
+    body.innerHTML = `<div class="empty">proof tree unavailable: ${escapeHtml(payload.__error)}</div>`;
+    return;
+  }
+  if (options.splice && root) {
+    spliceProofTreeRoot(root, payload, openLabels);
+  } else {
+    body.innerHTML = "";
+    for (const tree of payload.trees || []) {
+      renderTreeNode(tree, body, 0, tree.label, openLabels);
+    }
+    if (!(payload.trees || []).length) {
+      body.innerHTML = `<div class="empty">no theorem roots</div>`;
+    }
+  }
+  meta.textContent = `${payload.node_count || 0} nodes · ${payload.edge_count || 0} dependencies`;
+  proofTreeState.loaded = true;
+  expandAttentionPaths();
+  applyProofTreeFilters();
+}
+
+function spliceProofTreeRoot(root, payload, openLabels) {
+  const body = document.getElementById("proof_tree_body");
+  if (!body) return;
+  const tree = (payload.trees || [])[0];
+  if (!tree) return;
+  const host = document.createElement("div");
+  renderTreeNode(tree, host, 0, tree.label, openLabels);
+  const next = host.firstElementChild;
+  const existing = [...body.children].find(el => el.dataset && el.dataset.nodeLabel === root);
+  if (existing && next) {
+    existing.replaceWith(next);
+  } else if (next) {
+    body.append(next);
+  }
+}
+
+function setProofTreeLiveState(state) {
+  const chip = document.getElementById("proof_tree_live");
+  if (!chip) return;
+  chip.classList.toggle("reconnecting", state === "reconnecting");
+  chip.textContent = state === "reconnecting" ? "reconnecting" : "live";
+}
+
+async function patchProofTreeNode(label) {
+  if (!label) return;
+  const targets = treeNodesByLabel(label);
+  if (!targets.length) {
+    await loadProofTree(null, { preserveOpen: true });
+    return;
+  }
+  const node = await fetchJson("/api/node/" + encodeURIComponent(label));
+  if (node.__error) {
+    await loadProofTree(null, { preserveOpen: true });
+    return;
+  }
+  for (const el of targets) {
+    const merged = Object.assign({}, el._treeNode || {}, node, {
+      desired_pass_count: node.desired_pass_count ?? (el._treeNode || {}).desired_pass_count,
+      children: (el._treeNode || {}).children || [],
+      shared_parents: (el._treeNode || {}).shared_parents || [],
+      in_flight: !!node.active_job || node.status === "in_flight",
+    });
+    el._treeNode = merged;
+    el.dataset.nodeKind = merged.kind || "missing";
+    el.dataset.nodeStatus = merged.status || "";
+    const summary = el.querySelector(":scope > summary");
+    if (!summary) continue;
+    const old = summary.querySelector(".tree-badges");
+    if (old) old.remove();
+    renderProofTreeBadges(merged, summary);
+    if (PROOF_TREE_ATTENTION_STATUSES.has(merged.status || "")) {
+      let cur = el;
+      while (cur) {
+        if (cur.matches && cur.matches(".proof-tree-node")) cur.open = true;
+        cur = cur.parentElement ? cur.parentElement.closest(".proof-tree-node") : null;
+      }
+    }
+  }
+  applyProofTreeFilters();
+}
+
+function queueProofTreePatch(label) {
+  if (!label) return;
+  const old = proofTreeState.patchTimers.get(label);
+  if (old) clearTimeout(old);
+  const timer = setTimeout(() => {
+    proofTreeState.patchTimers.delete(label);
+    patchProofTreeNode(label);
+  }, 300);
+  proofTreeState.patchTimers.set(label, timer);
+}
+
+function handleProofTreeSseEnvelope(env) {
+  if (!env || !env.type) return;
+  if (env.type === "applied_event") {
+    queueProofTreePatch(env.payload && env.payload.target);
+    return;
+  }
+  if (env.type === "truth_event") {
+    const body = env.payload && env.payload.body;
+    if (!body) return;
+    if (body.type === "generator.batch_committed") {
+      const target = (body.payload && body.payload.target) || body.target;
+      if (target) loadProofTree(target, { splice: true, preserveOpen: true });
+      for (const n of (body.payload && body.payload.nodes) || []) {
+        if (n && n.label) queueProofTreePatch(n.label);
+      }
+      return;
+    }
+    if (body.target) queueProofTreePatch(body.target);
+    return;
+  }
+  if (env.type === "coordinator_tick") {
+    loadProofTree(null, { preserveOpen: true });
+  }
+}
+
+function scheduleProofTreeReconnect(subscribeFn) {
+  if (proofTreeState.reconnectTimer) return;
+  setProofTreeLiveState("reconnecting");
+  const delays = [1000, 2000, 5000, 10000];
+  const delay = delays[Math.min(proofTreeState.retryAttempt, delays.length - 1)];
+  proofTreeState.retryAttempt += 1;
+  proofTreeState.reconnectTimer = setTimeout(() => {
+    proofTreeState.reconnectTimer = null;
+    subscribeFn();
+  }, delay);
+}
+
+function subscribeProofTree(patchOneNode = patchProofTreeNode) {
+  if (!window.EventSource) return;
+  if (proofTreeState.sse) {
+    try { proofTreeState.sse.close(); } catch (e) {}
+  }
+  const source = new EventSource("/events/stream");
+  proofTreeState.sse = source;
+  const onEnvelope = (ev) => {
+    proofTreeState.retryAttempt = 0;
+    setProofTreeLiveState("live");
+    try {
+      handleProofTreeSseEnvelope(JSON.parse(ev.data));
+    } catch (e) {}
+  };
+  source.addEventListener("applied_event", onEnvelope);
+  source.addEventListener("truth_event", onEnvelope);
+  source.addEventListener("coordinator_tick", onEnvelope);
+  source.addEventListener("librarian_tick", () => setProofTreeLiveState("live"));
+  source.onerror = () => {
+    try { source.close(); } catch (e) {}
+    if (patchOneNode !== patchProofTreeNode) {
+      // Tests can inject a callback and still exercise the same reconnect path.
+      proofTreeState._patchOneNode = patchOneNode;
+    }
+    scheduleProofTreeReconnect(() => subscribeProofTree(patchOneNode));
+  };
+}
+
+function initProofTreeControls() {
+  loadFiltersFromHash();
+  renderStatusFilterChips();
+  const search = document.getElementById("proof_tree_search");
+  if (search) {
+    search.addEventListener("input", () => {
+      proofTreeState.search = search.value || "";
+      applyProofTreeFilters();
+    });
+  }
+  document.addEventListener("click", (e) => {
+    const chip = e.target.closest(".shared-parents-chip");
+    if (!chip) return;
+    e.preventDefault();
+    const label = chip.closest(".proof-tree-node")?.dataset.nodeLabel;
+    const parents = (chip.dataset.sharedParents || "").split(",").filter(Boolean);
+    for (const parent of parents) {
+      const target = treeNodesByLabel(label).find(el => el.dataset.rootLabel === parent);
+      if (target) {
+        let cur = target;
+        while (cur) {
+          if (cur.matches && cur.matches(".proof-tree-node")) cur.open = true;
+          cur = cur.parentElement ? cur.parentElement.closest(".proof-tree-node") : null;
+        }
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.classList.add("search-match");
+        setTimeout(() => target.classList.remove("search-match"), 1200);
+        return;
+      }
+    }
+  });
+}
 document.addEventListener("click", (e) => {
   const a = e.target.closest("[data-node]");
   if (a) {
@@ -491,7 +1556,9 @@ async function renderActiveSection(active, overview, nodes) {
   const summary = `<div class="grid">
     ${stat("generator", `${co.active_generator_jobs ?? 0} active`)}
     ${stat("verifier",  `${co.active_verifier_jobs  ?? 0} active`)}
-    ${stat("dispatchable", `gen ${co.dispatchable_generator_count ?? 0} · ver ${co.dispatchable_verifier_count ?? 0}`)}
+    ${stat("learner", `${co.active_learner_jobs ?? 0} active`)}
+    ${stat("referee", `${co.active_referee_jobs ?? 0} active`)}
+    ${stat("dispatchable", `gen ${co.dispatchable_generator_count ?? 0} · ver ${co.dispatchable_verifier_count ?? 0} · learn ${co.dispatchable_learner_count ?? 0} · ref ${co.dispatchable_referee_count ?? 0}`)}
     ${stat("idle reason", `<code>${escapeHtml(co.idle_reason_code || "—")}</code>`)}
     ${stat("detail", escapeHtml(co.idle_reason_detail || ""))}
   </div>`;
@@ -533,9 +1600,9 @@ async function renderActiveSection(active, overview, nodes) {
     const modeLabel = j.mode === "repair"
       ? `${j.mode} #${node.repair_count ?? "?"}`
       : (j.mode || "");
-    const targetLink = j.target
+    const targetLink = j.target && isKbLabel(j.target)
       ? `<a href="#" data-node="${escapeHtml(j.target)}" style="font-weight:600;">${escapeHtml(j.target)}</a>`
-      : "—";
+      : (j.target ? `<code>${escapeHtml(j.target)}</code>` : "—");
     return `<div class="active-job" style="border:1px solid var(--surface-border,#888);border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;">
       <div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:baseline;">
         <span class="pill">${escapeHtml(j.kind || "?")}</span>
@@ -559,6 +1626,9 @@ async function refresh() {
   const nodes = await fetchJson("/api/nodes");
   const rejected = await fetchJson("/api/rejected");
   const events = await fetchJson("/api/events?limit=30");
+  const learnerRuns = await fetchJson("/api/learner/runs");
+  const studyKb = await fetchJson("/api/study/kb");
+  const reviews = await fetchJson("/api/reviews");
   const updated = document.getElementById("updated_at");
   updated.textContent = "refreshed " + new Date().toLocaleTimeString();
 
@@ -589,6 +1659,37 @@ async function refresh() {
     ].join("");
   }
   await renderActiveSection(active, overview, nodes);
+  document.getElementById("learner_runs").innerHTML = rowsToTable(
+    ["source_id", "learner_run", "status", "candidates", "issues", "hash"],
+    (learnerRuns.runs ?? []).map(r => ({
+      source_id: `<code>${escapeHtml(r.source_id || "")}</code>`,
+      learner_run: `<a href="/api/learner/run/${encodeURIComponent(r.learner_run || r.event_id || "")}"><code>${escapeHtml(r.learner_run || r.event_id || "")}</code></a>`,
+      status: escapeHtml(r.status || ""),
+      candidates: r.candidate_count ?? 0,
+      issues: r.issue_count ?? 0,
+      hash: `<code>${escapeHtml(shortHash(r.hash || ""))}</code>`,
+    }))
+  );
+  renderStudyKbSummary(studyKb);
+  studyKbState.nodes = studyKb.nodes ?? [];
+  bindStudyKbControls();
+  syncStudyKbControls();
+  renderStudyKbBrowser();
+  document.getElementById("reviews").innerHTML = rowsToTable(
+    ["review_id", "target", "verdict", "issues", "blocks", "hash"],
+    (reviews.reviews ?? []).map(r => {
+      const s = r.issue_summary || {};
+      const reviewId = r.review_id || r.event_id || "";
+      return {
+        review_id: `<a href="/api/review/${encodeURIComponent(reviewId)}"><code>${escapeHtml(reviewId)}</code></a>`,
+        target: r.target ? `<code>${escapeHtml(r.target)}</code>` : "—",
+        verdict: escapeHtml(r.verdict || ""),
+        issues: s.issue_count ?? 0,
+        blocks: s.blocks_acceptance ? "yes" : "no",
+        hash: `<code>${escapeHtml(shortHash(r.hash || ""))}</code>`,
+      };
+    })
+  );
   document.getElementById("attention").innerHTML = rowsToTable(
     ["kind", "message"],
     (attention.items ?? []).map(i => ({ kind: i.kind, message: i.message }))
@@ -633,7 +1734,9 @@ async function refresh() {
     allRej.map(r => ({
       ts: `<code>${escapeHtml(r.ts || "")}</code>`,
       kind: escapeHtml(r.kind),
-      target: r.target ? `<a href="#" data-node="${escapeHtml(r.target)}">${escapeHtml(r.target)}</a>` : "—",
+      target: r.target
+        ? (isKbLabel(r.target) ? `<a href="#" data-node="${escapeHtml(r.target)}">${escapeHtml(r.target)}</a>` : `<code>${escapeHtml(r.target)}</code>`)
+        : "—",
       reason: `<code>${escapeHtml(r.reason || "")}</code>`,
       detail: `<code style="white-space:pre-wrap;">${escapeHtml(r.detail || "")}</code>`,
     }))
@@ -646,7 +1749,9 @@ async function refresh() {
       return {
         ts: `<code>${escapeHtml(ts)}</code>`,
         type: `<code>${escapeHtml(e.type || "")}</code>`,
-        target: e.target ? `<a href="#" data-node="${escapeHtml(e.target)}">${escapeHtml(e.target)}</a>` : "—",
+        target: e.target
+          ? (isKbLabel(e.target) ? `<a href="#" data-node="${escapeHtml(e.target)}">${escapeHtml(e.target)}</a>` : `<code>${escapeHtml(e.target)}</code>`)
+          : "—",
         actor: escapeHtml(e.actor || ""),
         event_id: `<code>${escapeHtml((e.event_id || "").slice(-16))}</code>`,
       };
@@ -654,6 +1759,9 @@ async function refresh() {
   );
 }
 refresh();
+initProofTreeControls();
+loadProofTree();
+subscribeProofTree();
 setInterval(refresh, 5000);
 </script>
 </body>

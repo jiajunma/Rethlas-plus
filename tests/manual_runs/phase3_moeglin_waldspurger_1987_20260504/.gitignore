@@ -1,0 +1,9 @@
+# Rethlas — derived / runtime state.
+/agents/
+/knowledge_base/dag.kz/
+/knowledge_base/dag.kz
+/knowledge_base/nodes/
+/runtime/*
+!/runtime/state/
+!/runtime/state/linter_report.json
+/sources/**/*.pdf

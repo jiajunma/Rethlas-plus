@@ -46,8 +46,10 @@ include = [
   "coordinator*",
   "dashboard*",
   "generator*",
+  "learner*",
   "librarian*",
   "linter*",
+  "referee*",
   "verifier*",
 ]
 exclude = ["tests*", "agents*", "docs*", "coordination*", "formalization*"]

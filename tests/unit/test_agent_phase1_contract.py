@@ -142,8 +142,12 @@ def test_init_materializes_agents_into_workspace(tmp_path) -> None:
 
     gen_dir = tmp_path / "agents" / "generation"
     ver_dir = tmp_path / "agents" / "verification"
+    learner_dir = tmp_path / "agents" / "learner"
+    referee_dir = tmp_path / "agents" / "referee"
     assert gen_dir.is_dir(), "generation agent dir not materialized"
     assert ver_dir.is_dir(), "verification agent dir not materialized"
+    assert learner_dir.is_dir(), "learner agent dir not materialized"
+    assert referee_dir.is_dir(), "referee agent dir not materialized"
 
     for marker in (
         gen_dir / "AGENTS.md",
@@ -153,6 +157,12 @@ def test_init_materializes_agents_into_workspace(tmp_path) -> None:
         ver_dir / "AGENTS.md",
         ver_dir / ".codex" / "config.toml",
         ver_dir / ".agents" / "skills",
+        learner_dir / "AGENTS.md",
+        learner_dir / ".codex" / "config.toml",
+        learner_dir / ".agents" / "skills" / "rethlas-learner",
+        referee_dir / "AGENTS.md",
+        referee_dir / ".codex" / "config.toml",
+        referee_dir / ".agents" / "skills" / "rethlas-referee",
     ):
         assert marker.exists(), f"materialized agent tree missing {marker}"
 

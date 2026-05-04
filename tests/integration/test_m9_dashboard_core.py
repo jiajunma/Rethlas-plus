@@ -540,9 +540,112 @@ def test_rebuild_in_progress_raises(tmp_path: Path) -> None:
         core.overview()
     with pytest.raises(RebuildInProgress):
         core.theorems()
+    with pytest.raises(RebuildInProgress):
+        core.tree()
     # Non-Kuzu still serves.
     assert core.coordinator() is not None
     assert core.librarian()["liveness"] in {"healthy", "degraded", "down"}
+
+
+def test_tree_endpoint_contract_on_nested_dependency_chain(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
+        "--statement", "Define X.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "lem:base", "--kind", "lemma",
+        "--statement", r"Base uses \ref{def:x}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "thm:t", "--kind", "theorem",
+        "--statement", r"T uses \ref{lem:base}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        tree = DashboardCore(tmp_path).tree()
+
+    assert tree["node_count"] == 3
+    assert tree["edge_count"] == 2
+    root = tree["trees"][0]
+    assert root["label"] == "thm:t"
+    assert root["kind"] == "theorem"
+    lem = root["children"][0]
+    assert lem["label"] == "lem:base"
+    assert lem["kind"] == "lemma"
+    definition = lem["children"][0]
+    assert definition["label"] == "def:x"
+    assert definition["kind"] == "definition"
+
+
+def test_tree_root_filter_and_unknown_root(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "thm:a", "--kind", "theorem",
+        "--statement", "A.", "--proof", "p.", "--actor", "user:alice",
+    )
+    _publish(
+        tmp_path, "add-node", "--label", "thm:b", "--kind", "theorem",
+        "--statement", "B.", "--proof", "p.", "--actor", "user:alice",
+    )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        core = DashboardCore(tmp_path)
+        only_a = core.tree("thm:a")
+        unknown = core.tree("thm:nope")
+
+    assert [t["label"] for t in only_a["trees"]] == ["thm:a"]
+    assert unknown["trees"] == []
+    assert unknown["node_count"] == 0
+    assert unknown["edge_count"] == 0
+
+
+def test_tree_shared_dependency_lists_other_theorem_parent(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "lem:shared", "--kind", "lemma",
+        "--statement", "Shared helper.", "--proof", "p.", "--actor", "user:alice",
+    )
+    for label in ("thm:a", "thm:b"):
+        _publish(
+            tmp_path, "add-node", "--label", label, "--kind", "theorem",
+            "--statement", rf"{label} uses \ref{{lem:shared}}.",
+            "--proof", "p.", "--actor", "user:alice",
+        )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        tree = DashboardCore(tmp_path).tree()
+
+    by_root = {t["label"]: t for t in tree["trees"]}
+    shared_under_a = by_root["thm:a"]["children"][0]
+    shared_under_b = by_root["thm:b"]["children"][0]
+    assert shared_under_a["label"] == "lem:shared"
+    assert shared_under_a["shared_parents"] == ["thm:b"]
+    assert shared_under_b["shared_parents"] == ["thm:a"]
+
+
+def test_tree_surfaces_dangling_ref_as_missing_from_nodes(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    _publish(
+        tmp_path, "add-node", "--label", "thm:t", "--kind", "theorem",
+        "--statement", r"T uses \ref{lem:missing}.",
+        "--proof", "p.", "--actor", "user:alice",
+    )
+
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        tree = DashboardCore(tmp_path).tree("thm:t")
+
+    missing = tree["trees"][0]["children"][0]
+    assert missing["label"] == "lem:missing"
+    assert missing["kind"] is None
+    assert missing["status"] == "missing_from_nodes"
+    assert missing["children"] == []
 
 
 def test_events_reverse_chronological(tmp_path: Path) -> None:

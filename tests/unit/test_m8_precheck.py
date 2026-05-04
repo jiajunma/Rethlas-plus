@@ -46,6 +46,43 @@ def test_generator_rejects_pool_mismatch() -> None:
     assert fail.reason == "pool_mismatch"
 
 
+def test_generator_allows_phase2_reroute_from_verifier_band() -> None:
+    vh = "cd" * 32
+    cand = _gen_cand(
+        pass_count=0,
+        repair_count=1,
+        verification_hash=vh,
+        last_rejected_verification_hash=vh,
+        dep_pass_counts={"def:x": -1},
+    )
+    ctx, fail = precheck_generator(
+        cand,
+        in_flight_targets=(),
+        allow_reroute=True,
+    )
+    assert fail is None
+    assert ctx is not None
+    assert ctx.h_rejected == vh
+
+
+def test_generator_reroute_still_rejects_in_flight_target() -> None:
+    vh = "cd" * 32
+    cand = _gen_cand(
+        pass_count=0,
+        repair_count=1,
+        verification_hash=vh,
+        last_rejected_verification_hash=vh,
+    )
+    ctx, fail = precheck_generator(
+        cand,
+        in_flight_targets=("thm:goal",),
+        allow_reroute=True,
+    )
+    assert ctx is None
+    assert fail is not None
+    assert fail.reason == "in_flight"
+
+
 def test_generator_rejects_when_target_in_flight() -> None:
     cand = _gen_cand()
     ctx, fail = precheck_generator(cand, in_flight_targets=("thm:goal",))

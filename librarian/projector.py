@@ -26,6 +26,7 @@ walks dependents in BFS order.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +44,8 @@ from common.kb.types import (
     PLACEHOLDER_LABELS,
     PROOF_REQUIRING_KINDS,
 )
+from learner.decoder import LearnerDecodeError, parse_learner_batch
+from referee.decoder import RefereeDecodeError, parse_referee_report
 from librarian.validator import (
     AdmissionError,
     validate_producer_registration,
@@ -198,9 +201,85 @@ class Projector:
             return self._apply_generator_batch(payload, actor=actor)
         if etype == "verifier.run_completed":
             return self._apply_verifier_run(event, payload)
+        if etype in {"source.artifact_registered", "source.spans_extracted"}:
+            return self._apply_source_event(etype, payload)
+        if etype in {"learner.batch_proposed", "learner.issue_reported"}:
+            return self._apply_learner_event(etype, payload)
+        if etype in {"referee.review_completed", "referee.citation_checked"}:
+            return self._apply_referee_event(event, etype, payload)
         raise ProjectionRejection(
             "unknown_event_type", f"type {etype!r} has no projector handler"
         )
+
+    # -- Phase 3 source/learner/referee events --
+    def _apply_source_event(self, etype: str, payload: dict[str, Any]) -> None:
+        if not isinstance(payload.get("source_id"), str) or not payload["source_id"]:
+            raise ProjectionRejection("schema", f"{etype} requires payload.source_id")
+        if etype == "source.artifact_registered":
+            artifacts = payload.get("artifacts")
+            if not isinstance(artifacts, list):
+                raise ProjectionRejection("schema", "source.artifact_registered requires artifacts[]")
+            for artifact in artifacts:
+                if not isinstance(artifact, dict):
+                    raise ProjectionRejection("schema", "artifacts[] must be objects")
+                if not artifact.get("content_hash"):
+                    raise ProjectionRejection("schema", "artifacts[] requires content_hash")
+        if etype == "source.spans_extracted":
+            if not isinstance(payload.get("spans_manifest_hash"), str):
+                raise ProjectionRejection("schema", "source.spans_extracted requires spans_manifest_hash")
+        return None
+
+    def _apply_learner_event(self, etype: str, payload: dict[str, Any]) -> None:
+        if etype == "learner.issue_reported":
+            if not isinstance(payload.get("source_id"), str):
+                raise ProjectionRejection("schema", "learner.issue_reported requires source_id")
+            issues = payload.get("issues")
+            if not isinstance(issues, list) or not issues:
+                raise ProjectionRejection("schema", "learner.issue_reported requires non-empty issues[]")
+            return None
+        try:
+            # Reuse the worker decoder at apply time by validating the
+            # event-payload shape after restoring its output_schema/run_id names.
+            parse_learner_batch(
+                json.dumps(
+                    {
+                        "output_schema": "learner_batch_v1",
+                        "source_id": payload.get("source_id", ""),
+                        "run_id": payload.get("learner_run", ""),
+                        "context_hash": payload.get("context_hash", ""),
+                        "source_spans": payload.get("source_spans", []),
+                        "notation_contexts": payload.get("notation_contexts", []),
+                        "candidate_nodes": payload.get("candidate_nodes", []),
+                        "dependency_edges": payload.get("dependency_edges", []),
+                        "bridge_requests": payload.get("bridge_requests", []),
+                        "verification_requests": payload.get("verification_requests", []),
+                        "issues": payload.get("issues", []),
+                        "summary": payload.get("summary", ""),
+                    },
+                    sort_keys=True,
+                )
+            )
+        except LearnerDecodeError as exc:
+            raise ProjectionRejection(exc.reason, exc.detail) from exc
+        return None
+
+    def _apply_referee_event(
+        self, event: dict[str, Any], etype: str, payload: dict[str, Any]
+    ) -> str | None:
+        if etype == "referee.citation_checked":
+            if not isinstance(payload.get("citation_check_id"), str):
+                raise ProjectionRejection("schema", "referee.citation_checked requires citation_check_id")
+            if not isinstance(payload.get("evidence_hash"), str) or not payload.get("evidence_hash"):
+                raise ProjectionRejection("citation_evidence_required", "citation_checked requires evidence_hash")
+            return event.get("target")
+        report = payload.get("report")
+        if not isinstance(report, dict):
+            raise ProjectionRejection("schema", "referee.review_completed requires report object")
+        try:
+            parse_referee_report(json.dumps(report, sort_keys=True))
+        except RefereeDecodeError as exc:
+            raise ProjectionRejection(exc.reason, exc.detail) from exc
+        return event.get("target")
 
     # -- user.node_added --
     def _apply_node_added(

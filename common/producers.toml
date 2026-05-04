@@ -21,3 +21,27 @@ allowed_event_types  = ["generator.batch_committed"]
 kind                 = "verifier"
 actor_pattern        = "^verifier:[a-zA-Z0-9_.-]+$"
 allowed_event_types  = ["verifier.run_completed"]
+
+[[producer]]
+kind                 = "source"
+actor_pattern        = "^source:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = [
+  "source.artifact_registered",
+  "source.spans_extracted",
+]
+
+[[producer]]
+kind                 = "learner"
+actor_pattern        = "^learner:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = [
+  "learner.batch_proposed",
+  "learner.issue_reported",
+]
+
+[[producer]]
+kind                 = "referee"
+actor_pattern        = "^referee:[a-zA-Z0-9_.-]+$"
+allowed_event_types  = [
+  "referee.review_completed",
+  "referee.citation_checked",
+]

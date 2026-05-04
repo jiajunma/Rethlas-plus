@@ -57,6 +57,9 @@ SUBCOMMANDS: dict[str, str] = {
     "librarian": "internal librarian daemon entry (M4)",
     "generator": "run a generator attempt against the workspace (M6)",
     "verifier": "run a verifier attempt against the workspace (M7)",
+    "learner": "run a learner source-ingestion attempt (Phase 3)",
+    "referee": "run a referee review attempt (Phase 3)",
+    "review": "list or show Phase 3 referee review artifacts",
 }
 
 
@@ -128,6 +131,37 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--codex-argv", default="")
     sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
     sp.add_argument("--actor", default="verifier:cli")
+
+    # learner (Phase 3 — standalone CLI form)
+    sp = sub.add_parser(
+        "learner", help=SUBCOMMANDS["learner"], description=SUBCOMMANDS["learner"]
+    )
+    sp.add_argument("--source", default="")
+    sp.add_argument("--context-json", default="")
+    sp.add_argument("--max-nodes", type=int, default=30)
+    sp.add_argument("--queue", action="store_true")
+    sp.add_argument("--codex-argv", default="")
+    sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
+    sp.add_argument("--actor", default="learner:cli")
+
+    # referee (Phase 3 — standalone CLI form)
+    sp = sub.add_parser(
+        "referee", help=SUBCOMMANDS["referee"], description=SUBCOMMANDS["referee"]
+    )
+    sp.add_argument("--target", default="")
+    sp.add_argument("--source", default="")
+    sp.add_argument("--context-json", default="")
+    sp.add_argument("--queue", action="store_true")
+    sp.add_argument("--codex-argv", default="")
+    sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
+    sp.add_argument("--actor", default="referee:cli")
+
+    # review (Phase 3 — read-only review artifacts)
+    sp = sub.add_parser("review", help=SUBCOMMANDS["review"], description=SUBCOMMANDS["review"])
+    review_sub = sp.add_subparsers(dest="review_command", metavar="<review-command>")
+    review_sub.add_parser("list", help="list review artifacts")
+    rsp = review_sub.add_parser("show", help="show one review artifact as JSON")
+    rsp.add_argument("review_id")
 
     # supervise (M8)
     sp = sub.add_parser(
@@ -240,6 +274,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "verifier":
         from verifier.cli import run_verifier
         return run_verifier(ws, args)
+
+    if args.command == "learner":
+        from learner.cli import run_learner
+        return run_learner(ws, args)
+
+    if args.command == "referee":
+        from referee.cli import run_referee
+        return run_referee(ws, args)
+
+    if args.command == "review":
+        from cli.review import run_review
+        return run_review(ws, args)
 
     if args.command == "supervise":
         from coordinator.main import run_supervise

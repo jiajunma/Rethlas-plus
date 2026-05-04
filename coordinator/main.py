@@ -34,12 +34,12 @@ from common.config.loader import RethlasConfig, load_config
 from common.kb.types import PROOF_REQUIRING_KINDS
 from common.runtime.jobs import (
     JobRecord,
-    STATUS_APPLIED,
-    STATUS_APPLY_FAILED,
-    STATUS_CRASHED,
-    STATUS_PUBLISHING,
-    STATUS_STARTING,
-    STATUS_TIMED_OUT,
+    STATUS_APPLIED as JOB_STATUS_APPLIED,
+    STATUS_APPLY_FAILED as JOB_STATUS_APPLY_FAILED,
+    STATUS_CRASHED as JOB_STATUS_CRASHED,
+    STATUS_PUBLISHING as JOB_STATUS_PUBLISHING,
+    STATUS_STARTING as JOB_STATUS_STARTING,
+    STATUS_TIMED_OUT as JOB_STATUS_TIMED_OUT,
     TERMINAL_STATUSES,
     delete_job_file,
     job_file_path,
@@ -50,7 +50,20 @@ from common.runtime.jobs import (
     utc_now_iso,
     write_job_file,
 )
+from common.runtime.jobs_v2 import (
+    RoleJobRecord,
+    list_role_jobs,
+    make_role_job_id,
+    read_role_job_file,
+    update_role_job_file,
+    write_role_job_file,
+)
 from common.runtime.reaper import OutcomeWindow, reap_orphans
+from common.runtime.role_queue import (
+    RoleQueueItem,
+    delete_role_queue_item,
+    list_role_queue,
+)
 from common.runtime.spawn import spawn_wrapper
 from common.runtime.startup import cleanup_runtime
 from coordinator.applied_poller import reconcile_publishing_jobs
@@ -77,10 +90,10 @@ from coordinator.heartbeat import (
     IDLE_NONE,
     IDLE_USER_BLOCKED,
     IDLE_VER_DEP_BLOCKED,
-    STATUS_DEGRADED,
-    STATUS_IDLE,
-    STATUS_RUNNING,
-    STATUS_STOPPING,
+    STATUS_DEGRADED as COORD_STATUS_DEGRADED,
+    STATUS_IDLE as COORD_STATUS_IDLE,
+    STATUS_RUNNING as COORD_STATUS_RUNNING,
+    STATUS_STOPPING as COORD_STATUS_STOPPING,
     write_heartbeat,
 )
 from coordinator.lock import SuperviseLock, SuperviseLockError
@@ -92,6 +105,40 @@ from coordinator.precheck import (
     precheck_verifier,
 )
 from librarian.heartbeat import PHASE_READY, read_heartbeat as read_librarian_hb
+
+_PHASE2_MAX_AUTOMATIC_REPAIR_COUNT: int = 2
+_PHASE2_GENERIC_BACKGROUND_LABEL_FRAGMENTS: tuple[str, ...] = (
+    "algebraic_group_orbit",
+    "constant_rank_morphism",
+    "differential_basis",
+    "etale",
+    "finite_locally_free",
+    "formally_smooth",
+    "jacobian",
+    "local_ring",
+    "locally_closed",
+    "monic_polynomial",
+    "power_series",
+    "regular_parameters",
+    "smooth_k_",
+    "subvariet",
+)
+_PHASE2_BACKGROUND_BRIDGE_LABEL_FRAGMENTS: tuple[str, ...] = (
+    "algebraic_group_orbit",
+    "equal_dimension_local_field_orbit_closures_are_equal",
+    "local_field_orbit",
+)
+_PHASE2_USER_BRANCH_OVERRIDE = "phase2:allow_problem_specific_branch"
+_PHASE2_USER_HINT_MARKER = "[user @"
+_PHASE2_REROUTE_HINT_MARKER = "phase2:reroute_around_stuck_background"
+_COORDINATOR_HEARTBEAT_STATUSES = frozenset(
+    {
+        COORD_STATUS_RUNNING,
+        COORD_STATUS_IDLE,
+        COORD_STATUS_DEGRADED,
+        COORD_STATUS_STOPPING,
+    }
+)
 
 
 # Tick cadence — production default 1s, tests can shorten via env.
@@ -194,16 +241,29 @@ def _write_heartbeat(
     idle_reason_detail: str = "",
     dispatchable_gen: int = 0,
     dispatchable_ver: int = 0,
+    dispatchable_learner: int = 0,
+    dispatchable_referee: int = 0,
     unfinished: int = 0,
     user_blocked: int = 0,
     gen_blocked: int = 0,
     ver_blocked: int = 0,
+    search_stuck_targets: list[dict[str, Any]] | None = None,
 ) -> None:
+    if status not in _COORDINATOR_HEARTBEAT_STATUSES:
+        invalid_status = status
+        status = COORD_STATUS_DEGRADED
+        detail = f"invalid coordinator heartbeat status {invalid_status!r}"
+        idle_reason_detail = (
+            f"{idle_reason_detail}; {detail}" if idle_reason_detail else detail
+        )
     lib_pid = state.librarian.pid if state.librarian.is_alive() else 0
     lib_status = "running" if state.librarian.is_alive() else "down"
     in_flight = list_jobs(state.ws.runtime_jobs)
+    role_jobs = list_role_jobs(state.ws.runtime_jobs)
     active_gen = sum(1 for r in in_flight if r.kind == "generator" and r.status not in TERMINAL_STATUSES)
     active_ver = sum(1 for r in in_flight if r.kind == "verifier" and r.status not in TERMINAL_STATUSES)
+    active_learner = sum(1 for r in role_jobs if r.kind == "learner" and r.status not in TERMINAL_STATUSES)
+    active_referee = sum(1 for r in role_jobs if r.kind == "referee" and r.status not in TERMINAL_STATUSES)
 
     # ARCHITECTURE §6.4.2 / §7.4 / §7.5 / §6.7: surface (target, kind)
     # pairs whose recent outcomes hit the 3x consecutive trigger, and
@@ -256,6 +316,9 @@ def _write_heartbeat(
                     }
                 )
                 break
+
+    for item in search_stuck_targets or []:
+        attention_targets.append(item)
     repair_spinning = len(attention_targets)
 
     # Recent hash_mismatch count (§6.4.2). Counts apply_failed entries in
@@ -265,8 +328,8 @@ def _write_heartbeat(
     # panel.
     recent_hash_mismatch = 0
     for dq in state.outcome_window._buf.values():
-        for status, reason in dq:
-            if status == "apply_failed" and reason == "hash_mismatch":
+        for outcome_status, reason in dq:
+            if outcome_status == "apply_failed" and reason == "hash_mismatch":
                 recent_hash_mismatch += 1
 
     hb = CoordinatorHeartbeat(
@@ -279,8 +342,12 @@ def _write_heartbeat(
         codex_silent_timeout_seconds=state.config.scheduling.codex_silent_timeout_seconds,
         active_generator_jobs=active_gen,
         active_verifier_jobs=active_ver,
+        active_learner_jobs=active_learner,
+        active_referee_jobs=active_referee,
         dispatchable_generator_count=dispatchable_gen,
         dispatchable_verifier_count=dispatchable_ver,
+        dispatchable_learner_count=dispatchable_learner,
+        dispatchable_referee_count=dispatchable_referee,
         unfinished_node_count=unfinished,
         idle_reason_code=idle_reason_code,
         idle_reason_detail=idle_reason_detail,
@@ -342,6 +409,253 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
             )
         )
     return _KBSnapshot(candidates=out)
+
+
+def _is_search_branch_stuck(cand: CandidateInput) -> bool:
+    """Return true once automatic proof repair for a branch is exhausted.
+
+    Phase II keeps one high-repair generator attempt at repair_count=2 so
+    the prompt can ask for a materially different strategy. If that still
+    comes back rejected, the next snapshot has repair_count>2 and the
+    coordinator stops dispatching the same target automatically.
+    """
+
+    if _PHASE2_USER_BRANCH_OVERRIDE in cand.repair_hint.lower():
+        return False
+    proof_kinds = {k.value for k in PROOF_REQUIRING_KINDS}
+    return (
+        cand.pass_count == -1
+        and cand.target_kind in proof_kinds
+        and cand.repair_count > _PHASE2_MAX_AUTOMATIC_REPAIR_COUNT
+    )
+
+
+def _is_generic_background_stuck(cand: CandidateInput) -> bool:
+    """Stop generator-created background-library expansion after one rejection.
+
+    The induced-orbit toy run showed a different failure mode from a single
+    target repair spiral: the generator started building a generic
+    algebraic-geometry library (smooth/etale/Zariski/local-ring facts) and
+    then repaired those helpers instead of returning to the orbit problem.
+    We only apply this to generator-introduced helpers after the verifier
+    has rejected them at least once; user-authored nodes and
+    problem-specific generator lemmas keep the normal repair budget.
+    """
+
+    repair_hint_lower = cand.repair_hint.lower()
+    if (
+        _PHASE2_USER_BRANCH_OVERRIDE in repair_hint_lower
+        or _PHASE2_USER_HINT_MARKER in repair_hint_lower
+    ):
+        return False
+    generator_repairable_kinds = {k.value for k in PROOF_REQUIRING_KINDS} | {
+        "definition",
+        "external_theorem",
+    }
+    if (
+        cand.pass_count != -1
+        or cand.repair_count < 1
+        or cand.target_kind not in generator_repairable_kinds
+        or not cand.introduced_by_generator
+    ):
+        return False
+    # Do not classify by label alone. Some real problem-specific targets
+    # necessarily contain words like "smooth", "etale", or "Zariski"; the
+    # guard should fire on the rejected content/report, not on a namespace
+    # slug that happens to use background vocabulary.
+    text = "\n".join(
+        (
+            cand.statement[:1000],
+            cand.verification_report[:1000],
+            cand.repair_hint[:1000],
+        )
+    ).lower()
+    return any(fragment in text for fragment in _PHASE2_GENERIC_BACKGROUND_LABEL_FRAGMENTS)
+
+
+def _search_branch_stuck_targets(candidates: list[CandidateInput]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for c in candidates:
+        if _is_search_branch_stuck(c):
+            out.append(
+                {
+                    "kind": "search_branch_stuck",
+                    "target": c.target,
+                    "trigger": "repair_budget_exhausted",
+                    "reason": "max_automatic_repairs",
+                    "count": c.repair_count,
+                    "message": (
+                        f"search branch stuck on {c.target}: repair_count={c.repair_count}; "
+                        "spawn a sibling branch or add a strategy hint"
+                    ),
+                }
+            )
+            continue
+        if _is_generic_background_stuck(c):
+            out.append(
+                {
+                    "kind": "generic_background_stuck",
+                    "target": c.target,
+                    "trigger": "generic_background_expansion",
+                    "reason": "generator_background_helper_rejected",
+                    "count": c.repair_count,
+                    "message": (
+                        f"generic background helper stuck on {c.target}: verifier rejected "
+                        "a generator-introduced background lemma; return to a "
+                        "problem-specific branch or add an explicit external theorem"
+                    ),
+                }
+            )
+    return out
+
+
+def _phase2_reroute_parent_labels(
+    candidates: list[CandidateInput],
+    stuck_labels: set[str],
+) -> set[str]:
+    """Return proof nodes that should be regenerated around stuck helpers.
+
+    A generic-background helper often sits below a pass_count=0 parent whose
+    proof currently cites that helper, so ordinary verifier scheduling waits
+    forever for the helper to reach pass_count=1. Phase II should instead
+    send a problem-facing ancestor back to the generator with an explicit
+    "reroute" hint. We deliberately skip generator-introduced background
+    ancestors (e.g. Jacobian/etale/local-ring helpers); dispatching those
+    just asks the agent to repair the same background library one level up.
+    """
+
+    proof_kinds = {k.value for k in PROOF_REQUIRING_KINDS}
+    by_label = {c.target: c for c in candidates}
+    parents_by_dep: dict[str, list[str]] = {}
+    for cand in candidates:
+        for dep in cand.dep_statement_hashes:
+            parents_by_dep.setdefault(dep, []).append(cand.target)
+
+    out: set[str] = set()
+    queue = list(stuck_labels)
+    seen: set[str] = set(queue)
+    while queue:
+        dep = queue.pop(0)
+        for parent_label in sorted(parents_by_dep.get(dep, [])):
+            if parent_label in seen:
+                continue
+            seen.add(parent_label)
+            cand = by_label.get(parent_label)
+            if cand is None:
+                continue
+            if cand.pass_count != 0 or cand.target_kind not in proof_kinds:
+                queue.append(parent_label)
+                continue
+            if (
+                _phase2_is_background_bridge(cand)
+                or (
+                    _phase2_is_generic_background_like(cand)
+                    and cand.introduced_by_generator
+                )
+            ):
+                queue.append(parent_label)
+                continue
+            out.add(parent_label)
+    return out
+
+
+def _phase2_is_background_bridge(cand: CandidateInput) -> bool:
+    """Return true for broad bridge nodes that still keep search in background.
+
+    These nodes may be problem-adjacent in the dependency graph, but they ask
+    the generator to solve generic orbit/topology facts. In inducedorbittoy
+    that still sends the search into local-field topology and algebraic-orbit
+    background, so Phase II should continue rerouting upward to the theorem.
+    """
+
+    label = cand.target.lower()
+    return any(
+        fragment in label for fragment in _PHASE2_BACKGROUND_BRIDGE_LABEL_FRAGMENTS
+    )
+
+
+def _phase2_is_generic_background_like(cand: CandidateInput) -> bool:
+    text = "\n".join(
+        (
+            cand.target,
+            cand.statement[:1000],
+            cand.proof[:1000],
+            cand.verification_report[:1000],
+            cand.repair_hint[:1000],
+        )
+    ).lower()
+    return any(fragment in text for fragment in _PHASE2_GENERIC_BACKGROUND_LABEL_FRAGMENTS)
+
+
+def _phase2_blocked_dependencies_reachable(
+    cand: CandidateInput,
+    by_label: dict[str, CandidateInput],
+    stuck_labels: set[str],
+) -> list[str]:
+    found: set[str] = set()
+    queue = list(cand.dep_statement_hashes)
+    seen: set[str] = set()
+    while queue:
+        dep = queue.pop(0)
+        if dep in seen:
+            continue
+        seen.add(dep)
+        if dep in stuck_labels:
+            found.add(dep)
+            continue
+        row = by_label.get(dep)
+        if row is not None:
+            if _phase2_is_background_bridge(row) or (
+                _phase2_is_generic_background_like(row)
+                and row.introduced_by_generator
+            ):
+                found.add(dep)
+            queue.extend(row.dep_statement_hashes)
+    return sorted(found)
+
+
+def _phase2_reroute_hint(cand: CandidateInput, blocked_deps: list[str]) -> str:
+    deps = ", ".join(blocked_deps) if blocked_deps else "(none found)"
+    prior = cand.repair_hint.strip()
+    body = (
+        f"{_PHASE2_REROUTE_HINT_MARKER}\n"
+        f"Dependencies in the blocked Phase II background chain: {deps}.\n"
+        "Do not repair or cite those blocked background or bridge nodes. Rewrite this "
+        "target by removing that dependency chain, replacing it with a "
+        "narrow problem-specific argument or with already accepted nodes. "
+        "The emitted batch must include this target label and should avoid "
+        "introducing broad algebraic-geometry background about smooth "
+        "varieties, etale morphisms, Jacobian criteria, local rings, power "
+        "series, local-field orbit topology, algebraic orbit closures, or "
+        "constant-rank theorems unless an already accepted node supplies it."
+    )
+    if prior:
+        return prior + "\n\n" + body
+    return body
+
+
+def _phase2_reroute_candidate(
+    cand: CandidateInput,
+    by_label: dict[str, CandidateInput],
+    stuck_labels: set[str],
+) -> CandidateInput:
+    blocked_deps = _phase2_blocked_dependencies_reachable(cand, by_label, stuck_labels)
+    return CandidateInput(
+        target=cand.target,
+        target_kind=cand.target_kind,
+        statement=cand.statement,
+        proof=cand.proof,
+        statement_hash=cand.statement_hash,
+        verification_hash=cand.verification_hash,
+        pass_count=-1,
+        repair_count=max(cand.repair_count, 1),
+        repair_hint=_phase2_reroute_hint(cand, blocked_deps),
+        verification_report=cand.verification_report,
+        dep_statement_hashes=dict(cand.dep_statement_hashes),
+        dep_pass_counts=dict(cand.dep_pass_counts),
+        last_rejected_verification_hash=cand.verification_hash,
+        introduced_by_actor=cand.introduced_by_actor,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +725,7 @@ def _dispatch_job(
         pgid=0,
         started_at=utc_now_iso(),
         updated_at=utc_now_iso(),
-        status=STATUS_STARTING,
+        status=JOB_STATUS_STARTING,
         log_path=log_rel,
         target_kind=ctx.target_kind,
         statement=ctx.statement,
@@ -444,13 +758,92 @@ def _dispatch_job(
     state.in_flight_workers[job_id] = proc
 
     # Patch pid/pgid via read-modify-write so a wrapper that already
-    # raced ahead and wrote ``STATUS_RUNNING`` between the initial
+    # raced ahead and wrote job status ``running`` between the initial
     # create and this patch is not clobbered. Spec §6.7.1 pins status
     # transitions to the wrapper; coordinator only owns pid/pgid.
     update_job_file(
         job_file_path(state.ws.runtime_jobs, job_id),
         extra={"pid": proc.pid, "pgid": proc.pid},
     )
+
+
+def _dispatch_role_job(
+    state: CoordinatorState,
+    *,
+    item: RoleQueueItem,
+    queue_path: Path,
+) -> None:
+    """Dispatch one Phase 3 role-queue item as a v2 job."""
+    from datetime import datetime, timezone
+    import secrets
+
+    now = datetime.now(tz=timezone.utc)
+    iso_ms = now.strftime("%Y%m%dT%H%M%S.") + f"{now.microsecond // 1000:03d}"
+    uid = secrets.token_hex(8)
+    job_id = make_role_job_id(item.kind, iso_ms=iso_ms, uid=uid)
+    log_rel = f"runtime/logs/{job_id}.codex.log"
+    started = utc_now_iso()
+
+    rec = RoleJobRecord(
+        job_id=job_id,
+        kind=item.kind,
+        mode=item.mode,
+        target=item.target,
+        context_hash=item.context_hash,
+        dispatch_hash=item.context_hash,
+        pid=0,
+        pgid=0,
+        started_at=started,
+        updated_at=started,
+        status=JOB_STATUS_STARTING,
+        log_path=log_rel,
+        input=dict(item.input),
+    )
+    write_role_job_file(job_file_path(state.ws.runtime_jobs, job_id), rec)
+
+    module = "learner.role" if item.kind == "learner" else "referee.role"
+    codex_argv = os.environ.get("RETHLAS_FAKE_CODEX_ARGV", "")
+    timeout_s = state.config.scheduling.codex_silent_timeout_seconds
+    wrapper_argv = [sys.executable, "-m", module]
+    if codex_argv:
+        wrapper_argv.extend(["--codex-argv", codex_argv])
+    wrapper_argv.extend(["--silent-timeout-s", str(timeout_s)])
+
+    proc = spawn_wrapper(
+        workspace=state.ws.root,
+        wrapper_argv=wrapper_argv,
+        job_id=job_id,
+    )
+    state.in_flight_workers[job_id] = proc
+    # Keep the wrapper-owned status if it raced ahead; pid/pgid are
+    # direct fields on v2, so patch via read-modify-write.
+    rec2 = read_role_job_file(job_file_path(state.ws.runtime_jobs, job_id))
+    if rec2 is not None:
+        rec2.pid = proc.pid
+        rec2.pgid = proc.pid
+        rec2.updated_at = utc_now_iso()
+        write_role_job_file(job_file_path(state.ws.runtime_jobs, job_id), rec2)
+    delete_role_queue_item(queue_path)
+
+
+def _dispatch_phase3_queues(state: CoordinatorState) -> tuple[int, int, int, int]:
+    active = [j for j in list_role_jobs(state.ws.runtime_jobs) if j.status not in TERMINAL_STATUSES]
+    active_learner = sum(1 for j in active if j.kind == "learner")
+    active_referee = sum(1 for j in active if j.kind == "referee")
+    learner_queue = list_role_queue(state.ws.root, "learner")
+    referee_queue = list_role_queue(state.ws.root, "referee")
+    learner_capacity = max(0, state.config.scheduling.learner_workers - active_learner)
+    referee_capacity = max(0, state.config.scheduling.referee_workers - active_referee)
+
+    dispatched_learner = 0
+    dispatched_referee = 0
+    for path, item in learner_queue[:learner_capacity]:
+        _dispatch_role_job(state, item=item, queue_path=path)
+        dispatched_learner += 1
+    for path, item in referee_queue[:referee_capacity]:
+        _dispatch_role_job(state, item=item, queue_path=path)
+        dispatched_referee += 1
+    return len(learner_queue), len(referee_queue), dispatched_learner, dispatched_referee
 
 
 # ---------------------------------------------------------------------------
@@ -475,13 +868,43 @@ def _reap_finished_workers(state: CoordinatorState) -> None:
         del state.in_flight_workers[jid]
         path = job_file_path(state.ws.runtime_jobs, jid)
         rec = read_job_file(path)
+        role_rec = None if rec is not None else read_role_job_file(path)
         if rec is None:
-            # File already gone (race with another reaper path).
+            if role_rec is None:
+                # File already gone (race with another reaper path).
+                continue
+            if role_rec.status == JOB_STATUS_PUBLISHING:
+                continue
+            if role_rec.status in (JOB_STATUS_APPLIED, JOB_STATUS_APPLY_FAILED):
+                delete_job_file(path)
+                continue
+            if proc.returncode == 124:
+                terminal_status = JOB_STATUS_TIMED_OUT
+                update_role_job_file(
+                    path,
+                    status=JOB_STATUS_TIMED_OUT,
+                    detail="codex silent-timeout (exit 124)",
+                )
+            else:
+                terminal_status = JOB_STATUS_CRASHED
+                if role_rec.status != JOB_STATUS_CRASHED:
+                    update_role_job_file(
+                        path,
+                        status=JOB_STATUS_CRASHED,
+                        detail=f"wrapper exit={proc.returncode}",
+                    )
+            state.outcome_window.record(
+                target=role_rec.target,
+                kind=role_rec.kind,
+                status=terminal_status,
+                reason=role_rec.reason or "",
+            )
+            delete_job_file(path)
             continue
-        if rec.status == STATUS_PUBLISHING:
+        if rec.status == JOB_STATUS_PUBLISHING:
             # Successful publish in flight — applied_poller owns terminal.
             continue
-        if rec.status in (STATUS_APPLIED, STATUS_APPLY_FAILED):
+        if rec.status in (JOB_STATUS_APPLIED, JOB_STATUS_APPLY_FAILED):
             # Already reconciled by applied_poller; just clean up.
             delete_job_file(path)
             continue
@@ -494,18 +917,18 @@ def _reap_finished_workers(state: CoordinatorState) -> None:
         # attention triggers never fire on decode-error spirals or
         # silent-timeout loops.
         if proc.returncode == 124:
-            terminal_status = STATUS_TIMED_OUT
+            terminal_status = JOB_STATUS_TIMED_OUT
             update_job_file(
                 path,
-                status=STATUS_TIMED_OUT,
+                status=JOB_STATUS_TIMED_OUT,
                 detail="codex silent-timeout (exit 124)",
             )
         else:
-            terminal_status = STATUS_CRASHED
-            if rec.status != STATUS_CRASHED:
+            terminal_status = JOB_STATUS_CRASHED
+            if rec.status != JOB_STATUS_CRASHED:
                 update_job_file(
                     path,
-                    status=STATUS_CRASHED,
+                    status=JOB_STATUS_CRASHED,
                     detail=f"wrapper exit={proc.returncode}",
                 )
         state.outcome_window.record(
@@ -531,7 +954,7 @@ def _wait_for_librarian_ready(state: CoordinatorState, timeout_s: float) -> bool
         # Update coordinator heartbeat with librarian_starting.
         _write_heartbeat(
             state,
-            status=STATUS_IDLE,
+            status=COORD_STATUS_IDLE,
             idle_reason_code=IDLE_LIBRARIAN_STARTING,
             idle_reason_detail="waiting for librarian startup",
         )
@@ -568,6 +991,8 @@ def _decide_idle_reason(
         c
         for c in nodes
         if c.pass_count == -1
+        and c.repair_count <= _PHASE2_MAX_AUTOMATIC_REPAIR_COUNT
+        and not _is_generic_background_stuck(c)
         and (
             c.target_kind in proof_kinds
             or (
@@ -580,6 +1005,16 @@ def _decide_idle_reason(
         not_ready = [c for c in gen_candidates if not c.deps_ready]
         if not_ready:
             return IDLE_GEN_DEP_BLOCKED, f"{len(not_ready)} generator candidates blocked on deps"
+    stuck_search = [
+        c
+        for c in nodes
+        if _is_search_branch_stuck(c) or _is_generic_background_stuck(c)
+    ]
+    if stuck_search:
+        return (
+            IDLE_USER_BLOCKED,
+            f"{len(stuck_search)} search branches exhausted automatic repair budget or background expansion guard",
+        )
     ver_candidates = [c for c in nodes if 0 <= c.pass_count < desired_pass_count]
     if ver_candidates:
         ver_unfinished = [c for c in ver_candidates if not c.verifier_deps_strictly_ahead]
@@ -662,7 +1097,7 @@ def run_supervise(workspace: str | None) -> int:
             state.dashboard = _make_dashboard_supervisor(state)
             state.dashboard.start()
 
-        _write_heartbeat(state, status=STATUS_RUNNING)
+        _write_heartbeat(state, status=COORD_STATUS_RUNNING)
 
         _install_signal_handlers(state)
 
@@ -681,7 +1116,7 @@ def run_supervise(workspace: str | None) -> int:
                 _log_supervise(state, f"librarian fatal: {exc}")
                 _write_heartbeat(
                     state,
-                    status=STATUS_DEGRADED,
+                    status=COORD_STATUS_DEGRADED,
                     idle_reason_code=IDLE_LIBRARIAN_STARTING,
                     idle_reason_detail=str(exc),
                 )
@@ -773,7 +1208,7 @@ def _tick(state: CoordinatorState) -> None:
     if state.pending_corruption:
         _write_heartbeat(
             state,
-            status=STATUS_DEGRADED,
+            status=COORD_STATUS_DEGRADED,
             idle_reason_code=IDLE_CORRUPTION,
             idle_reason_detail=state.last_corruption_detail or "librarian reported corruption",
         )
@@ -790,17 +1225,19 @@ def _tick(state: CoordinatorState) -> None:
     if state.pending_corruption:
         _write_heartbeat(
             state,
-            status=STATUS_DEGRADED,
+            status=COORD_STATUS_DEGRADED,
             idle_reason_code=IDLE_CORRUPTION,
             idle_reason_detail=state.last_corruption_detail or "librarian reported corruption",
         )
         return
 
+    dispatchable_learner, dispatchable_referee, dispatched_learner, dispatched_referee = _dispatch_phase3_queues(state)
+
     snapshot = _snapshot_kb(state.ws)
     if snapshot is None:
         _write_heartbeat(
             state,
-            status=STATUS_DEGRADED,
+            status=COORD_STATUS_DEGRADED,
             idle_reason_code=IDLE_CORRUPTION,
             idle_reason_detail="KB read failed",
         )
@@ -812,6 +1249,12 @@ def _tick(state: CoordinatorState) -> None:
         if rec.status not in {"applied", "apply_failed"}:
             in_flight_targets.add(rec.target)
 
+    search_stuck_targets = _search_branch_stuck_targets(snapshot.candidates)
+    search_stuck_labels = {item["target"] for item in search_stuck_targets}
+    reroute_parent_labels = _phase2_reroute_parent_labels(
+        snapshot.candidates, search_stuck_labels
+    )
+
     # Generator pool: proof-requiring kinds with no proof, OR axioms
     # that the generator originally introduced (its own helper
     # definitions). The verifier-reject router (§5.4.1) sets pass_count=-1
@@ -821,6 +1264,7 @@ def _tick(state: CoordinatorState) -> None:
         GeneratorCandidate(label=c.target)
         for c in snapshot.candidates
         if c.pass_count == -1
+        and c.target not in search_stuck_labels
         and (
             c.target_kind in {"lemma", "theorem", "proposition"}
             or (
@@ -830,6 +1274,11 @@ def _tick(state: CoordinatorState) -> None:
         )
         and c.deps_ready
     ]
+    gen_pool.extend(
+        GeneratorCandidate(label=c.target)
+        for c in snapshot.candidates
+        if c.target in reroute_parent_labels
+    )
     ver_pool = [
         VerifierCandidate(label=c.target, pass_count=c.pass_count)
         for c in snapshot.candidates
@@ -890,6 +1339,7 @@ def _tick(state: CoordinatorState) -> None:
         1
         for c in snapshot.candidates
         if c.pass_count == -1
+        and c.target not in search_stuck_labels
         and (
             c.target_kind in {"lemma", "theorem", "proposition"}
             or (
@@ -908,13 +1358,23 @@ def _tick(state: CoordinatorState) -> None:
 
     for lbl in gen_targets:
         cand = by_label[lbl]
-        ctx, fail = precheck_generator(cand, in_flight_targets=in_flight_targets)
+        allow_reroute = lbl in reroute_parent_labels and cand.pass_count == 0
+        gen_cand = (
+            _phase2_reroute_candidate(cand, by_label, search_stuck_labels)
+            if allow_reroute
+            else cand
+        )
+        ctx, fail = precheck_generator(
+            gen_cand,
+            in_flight_targets=in_flight_targets,
+            allow_reroute=allow_reroute,
+        )
         if fail is not None:
             _log_supervise(state, "generator precheck failed: %s -> %s: %s" % (
                 fail.target, fail.reason, fail.detail
             ))
             continue
-        mode = "fresh" if cand.repair_count == 0 else "repair"
+        mode = "fresh" if gen_cand.repair_count == 0 else "repair"
         _dispatch_job(state, kind="generator", mode=mode, ctx=ctx)
         in_flight_targets.add(lbl)
         dispatched_gen += 1
@@ -939,7 +1399,7 @@ def _tick(state: CoordinatorState) -> None:
         dispatched_gen=dispatched_gen,
         dispatched_ver=dispatched_ver,
     )
-    status = STATUS_RUNNING if (code == IDLE_NONE or in_flight or dispatched_gen or dispatched_ver) else STATUS_IDLE
+    status = COORD_STATUS_RUNNING if (code == IDLE_NONE or in_flight or dispatched_gen or dispatched_ver) else COORD_STATUS_IDLE
     _write_heartbeat(
         state,
         status=status,
@@ -951,6 +1411,9 @@ def _tick(state: CoordinatorState) -> None:
         user_blocked=user_blocked,
         gen_blocked=gen_blocked,
         ver_blocked=ver_blocked,
+        search_stuck_targets=search_stuck_targets,
+        dispatchable_learner=dispatchable_learner,
+        dispatchable_referee=dispatchable_referee,
     )
 
 
@@ -970,7 +1433,7 @@ def _install_signal_handlers(state: CoordinatorState) -> None:
 
 
 def _shutdown(state: CoordinatorState) -> None:
-    _write_heartbeat(state, status=STATUS_STOPPING)
+    _write_heartbeat(state, status=COORD_STATUS_STOPPING)
     # PHASE1 M9: graceful shutdown order — dashboard first (read-only,
     # fast to terminate), then drain workers, then librarian last so
     # any final apply on workers' truth events still has a writer.
@@ -991,7 +1454,7 @@ def _shutdown(state: CoordinatorState) -> None:
                 pass
     state.in_flight_workers.clear()
     state.librarian.shutdown(timeout=10.0)
-    _write_heartbeat(state, status=STATUS_STOPPING)
+    _write_heartbeat(state, status=COORD_STATUS_STOPPING)
 
 
 __all__ = ["run_supervise"]

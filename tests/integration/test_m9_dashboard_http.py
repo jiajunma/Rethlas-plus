@@ -163,7 +163,10 @@ def test_rebuild_in_progress_returns_503(tmp_path: Path) -> None:
     write_librarian_hb(tmp_path / "runtime" / "state" / "librarian.json", hb)
 
     with _ServerCtx(tmp_path) as ctx:
-        for path in ("/api/overview", "/api/theorems", "/api/rejected", "/api/node/lem:x"):
+        for path in (
+            "/api/overview", "/api/tree", "/api/theorems", "/api/rejected",
+            "/api/node/lem:x",
+        ):
             code, hdrs, body = ctx.get(path)
             assert code == 503, f"{path}: expected 503, got {code}"
             assert hdrs.get("Retry-After") == "5"
@@ -196,6 +199,37 @@ def test_overview_endpoint_works_while_librarian_alive(tmp_path: Path) -> None:
             assert code == 200
             parsed = json.loads(body)
             assert parsed["kb"]["node_count"] == 1
+
+
+def test_tree_endpoint_works_while_librarian_alive(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    subprocess.run(
+        [PYTHON, "-m", "cli.main", "--workspace", str(tmp_path), "add-node",
+         "--label", "def:x", "--kind", "definition",
+         "--statement", "Define X.", "--actor", "user:alice"],
+        capture_output=True, text=True, check=False,
+    )
+    subprocess.run(
+        [PYTHON, "-m", "cli.main", "--workspace", str(tmp_path), "add-node",
+         "--label", "thm:t", "--kind", "theorem",
+         "--statement", r"T uses \ref{def:x}.", "--proof", "p.",
+         "--actor", "user:alice"],
+        capture_output=True, text=True, check=False,
+    )
+    with librarian(tmp_path) as lp:
+        lp.wait_for_phase(PHASE_READY, timeout=20.0)
+        with _ServerCtx(tmp_path) as ctx:
+            code, _hdrs, body = ctx.get("/api/tree?root=thm%3At")
+            assert code == 200
+            parsed = json.loads(body)
+            assert parsed["node_count"] == 2
+            assert [t["label"] for t in parsed["trees"]] == ["thm:t"]
+            assert parsed["trees"][0]["children"][0]["label"] == "def:x"
+
+            code, _hdrs, body = ctx.get("/api/tree?root=")
+            assert code == 200
+            parsed = json.loads(body)
+            assert [t["label"] for t in parsed["trees"]] == ["thm:t"]
 
 
 def test_events_limit_validation(tmp_path: Path) -> None:
@@ -232,9 +266,12 @@ def test_index_root_serves_html(tmp_path: Path) -> None:
         # Minimal sanity: the JS must reference each Phase I endpoint.
         for endpoint in (
             "/api/overview", "/api/active", "/api/attention", "/api/theorems",
-            "/api/dashboard",
+            "/api/dashboard", "/api/tree",
         ):
             assert endpoint in text
+        assert 'id="proof_tree"' in text
+        assert "loadProofTree()" in text
+        assert "subscribeProofTree()" in text
 
 
 def test_dashboard_heartbeat_round_trip(tmp_path: Path) -> None:
@@ -287,6 +324,50 @@ def test_attention_includes_three_x_stuck_targets(tmp_path: Path) -> None:
         msgs = [i.get("message", "") for i in parsed["items"] if i.get("kind") == "stuck_target"]
         assert any("stuck on thm:t" in m for m in msgs)
         assert any("frozen on thm:u" in m for m in msgs)
+
+
+def test_attention_includes_phase2_search_guard_targets(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    hb = CoordinatorHeartbeat(
+        pid=1,
+        started_at=utc_now_iso(),
+        updated_at=utc_now_iso(),
+        status=STATUS_RUNNING,
+        attention_targets=[
+            {
+                "kind": "generic_background_stuck",
+                "target": "lem:smooth_k_variety_chart",
+                "trigger": "generic_background_expansion",
+                "reason": "generator_background_helper_rejected",
+                "count": 1,
+                "message": (
+                    "generic background helper stuck on "
+                    "lem:smooth_k_variety_chart"
+                ),
+            },
+            {
+                "kind": "search_branch_stuck",
+                "target": "thm:induced_orbit_toy",
+                "trigger": "repair_budget_exhausted",
+                "reason": "max_automatic_repairs",
+                "count": 3,
+                "message": "search branch stuck on thm:induced_orbit_toy",
+            },
+        ],
+    )
+    write_coordinator_hb(tmp_path / "runtime" / "state" / "coordinator.json", hb)
+
+    with _ServerCtx(tmp_path) as ctx:
+        code, _hdrs, body = ctx.get("/api/attention")
+        assert code == 200
+        parsed = json.loads(body)
+        node_kinds = {
+            i.get("node_kind")
+            for i in parsed["items"]
+            if i.get("kind") == "stuck_target"
+        }
+        assert "generic_background_stuck" in node_kinds
+        assert "search_branch_stuck" in node_kinds
 
 
 def test_attention_flags_dashboard_child_degraded(tmp_path: Path) -> None:

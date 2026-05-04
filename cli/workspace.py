@@ -22,6 +22,10 @@ desired_pass_count             = 3
 generator_workers              = 2
 # §10.3 — max concurrent verifier jobs per workspace.
 verifier_workers               = 4
+# Phase 3 — max concurrent learner jobs per workspace.
+learner_workers                = 1
+# Phase 3 — max concurrent referee jobs per workspace.
+referee_workers                = 1
 # §7.4 — kill threshold (seconds) for a Codex subprocess whose
 # log mtime has gone stale.
 codex_silent_timeout_seconds   = 1800
@@ -40,6 +44,9 @@ _WORKSPACE_DIRS: Final[tuple[str, ...]] = (
     "runtime/jobs",
     "runtime/logs",
     "runtime/locks",
+    "runtime/queues",
+    "runtime/queues/learner",
+    "runtime/queues/referee",
     "runtime/state",
 )
 

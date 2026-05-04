@@ -1,0 +1,46 @@
+{
+  "source_id": "src:moeglin_waldspurger_whittaker_1987",
+  "source_spans": [
+    {
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment",
+      "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+      "description": "I.11 proposition and I.12 lemma statements with proof computations; used to enrich old statement-only learner candidates with proof skeletons.",
+      "page_range": "436-437",
+      "line_start": 491,
+      "line_end": 570,
+      "text": "1.11. Proposition. Si ~tU:~O, alors il existe une orbite nilpotente de g, notbe (9,\nintervenant dans l'expression de tr z au voisinage de l'bldment neutre avec un\ncoefficient non nul et tel que Ye ~.\n   Gr$ce ~ 1.10, on suppose que W , + 0 pour n grand. On note ~p, l'616ment\nde c ~ ( G ) d6fini par cp,(y)=Z,(~ -1) si ~ G , et 0 sinon. C o m m e en [R1], on\na:\n                            dim W, = (mes G,)- 1(tr z (~o,)).\n\nPour n grand tr ~(~0n) se calcule ~ l'aide de 1.8. En particulier il faut d'abord\ncalculer ~,~\"eexp. Or on a, pour tout Z ~ g :\n\n                    ~poexp (Z) =          y         ~o, (exp X) @ (tr Z X ) d X\n                                       t~ ~L'\n\n                                  =       ~ @(tr-(~ -2\"Y-Z)X)dX\n                                       u_~L'\n\n                                  =0           si     ~       2\"Y-Z~(t~\"E)i\n                                  = measure a~\"E sinon.\n\nUne condition n6cessaire pour que tr~(~o,):#0 est donc qu'il existe (9 (avec\nc~ + 0) telle que l'on ait:\n                                (9 c~ o.'~-2\" y + (tO\"E)i:# ~.\n\nC o m m e (9 est stable par multiplication par a~a\", on obtient:\n                                (9 ~ Y + t~2n(t~n ]J) • + ~ .\n\nEn outre la d6finition de E assure que ta~Zn(cz~n/J) i e s t un voisinage de 0. C o m m e\nil n'y a qu'un n o m b r e fini d'orbites nilpotentes, cela entraine la proposition.\n\nModUles de Whittaker d6g6n6r~s pour des groupes p-adiques                                     437\n\n1.12. Lemme. On note (9=G. Y e t on suppose que cr est non nul dans 1.8 et\nque Y n'appartient pas 5 l'adh&ence d'une autre orbite (9 pour laquelle cr ~:0,\ni.e. (9 est un dl~ment maximal de ~tt,(n). Alors, on a: pour tout n grand dim IV,\nest finie et ind@endante de n dgale ~ c~.\n   O n reprend les notations et les rhsultats de la d h m o n s t r a t i o n de 1.11. Les\nhypothhses assurent alors que l'on a p o u r n g r a n d :\n\n                    dim W, = ( m e s G,) -1 tr ,(go,)\n                              = c~(mes G.) -1 ~ (qo.oexp)(X)drip(X)\n\n                              = e o ( m e s G . ) - l ( j \" dflo)    mesureu~\"E,\n\n\noff f = O c~ (u~- 2, y + (u~nE)• O n identifie (9 et G/G(Y) off G(Y) est le stabilisa-\nteur dans G de Y. O n v6rifie que t normalise G(Y) et on calcule\n\n                        Yf t - \" = {:~G/G(Y)I: yf~-i _ yeu~,E•\n\nSoit c ~ N , c > B . Clairement q u a n d n e s t g r a n d 32t -n est un voisinage de i\ndans G/G(Y). P o u r n suffisamment g r a n d on idenfifie d o n c Y ' t - \" fi un sous-\nensemble de exp ~Cm'. Soit X~u~Cm ' tel que exp X ~ 9 ? t n. O n dolt avoir p o u r\ntout Z~o~nE:\n                   0 (tr o~ - 2, (exp X) Y(exp -- X) Z) = 0 tr u~ - 2, YZ.\n\nCe qui revient fi dire que exp X normalise le caract~re )~, de G,. D'apr6s 1.6\n(iii) cela ~quivaut fi X e ~ \" m ' . O n a d o n c :\n\n                 dim W~ = c~ (mes ~ \" E) (mes G,)- 1                       ~           d :.\n                                                                    (Gn/G~:~G(Y ))t~\nOr, on a:\n                             j\"          dp=(           ~           d:)]detg/y.:I.\n                     (Gn/Gn :~ G(Y))tn          (G~/G~ :> G (Y))\n\n\nO n calcule [det~/y~ t\"[ en utilisant le fait que si 2 est une valeur propre de t\ndans g/y4,, l'espace p r o p r e 6tant de dimension r, alors 2 - 1 ~ -2 en est aussi\nune avec un espace p r o p r e de dimension r et si 2 = 2 - 1 u~-2 alors r e s t pair.\nO n obtient alors facilement:\n\n                                  [detg/r~ t'l = [a~-.dJ~(~/Y*)[.\n\nO n choisit n suffisamment g r a n d p o u r que la valeur absolue du Jacobien de\nl'application exponentielle de ~\"E sur G, soit 1 et on a grace aux normalisations\nfaites en 1.8:\n                                         d~=      ~     dX=l~.~ndim(a/Y*)].\n                        Gn/Gn t~ G (Y)         ~ nm'\n\nD'ofl dim Wn = ce."
+    }
+  ],
+  "existing_kb_matches": [
+    {
+      "kind": "proposition",
+      "label": "prop:mw_i_11_orbit_from_whittaker",
+      "statement": "If the degenerate Whittaker space attached to Y is nonzero, then there exists a nilpotent orbit O in g that occurs with nonzero coefficient in the local character expansion of tr pi near the identity and whose closure contains Y.",
+      "proof": "",
+      "remark": "The proof uses the finite-level spaces W_n together with the Fourier transform of the test functions phi_n; the displayed formulas are noisy but the proposition statement itself is legible."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_12_dimension_coefficient",
+      "statement": "Let O = G.Y and suppose its coefficient c_O in 1.8 is nonzero and Y does not lie in the closure of any other orbit with nonzero coefficient in 1.8. Then for all sufficiently large n, dim W_n is finite, independent of n, and equal to c_O.",
+      "proof": "",
+      "remark": "The orbit-integral computation is OCR-damaged, but the lemma statement and the final equality dim W_n = c_O are clearly stated."
+    }
+  ],
+  "notation_context": {
+    "article": "C. Moeglin and J.-L. Waldspurger, Modeles de Whittaker degeneres pour des groupes p-adiques, Math. Z. 196 (1987), 427-452.",
+    "batch_intent": "Proof-enrichment pass. Re-emit the two existing candidates with the same labels and statements if possible, but now include source-backed proof skeletons, proof_status, proof_steps, depends_on, and bridge_requests for unreconstructed jumps. Do not invent extra candidates.",
+    "target_labels": [
+      "prop:mw_i_11_orbit_from_whittaker",
+      "lem:mw_i_12_dimension_coefficient"
+    ],
+    "expected_conservatism": "The article is published; the goal is not to re-referee MW but to reconstruct the proof logic faithfully enough for downstream generator/verifier retrieval. Mark OCR-heavy formula details as proof_incomplete or issues when needed.",
+    "proof_status_required": true
+  },
+  "budgets": {
+    "max_nodes": 2,
+    "max_bridge_requests": 4,
+    "max_issues": 4
+  }
+}

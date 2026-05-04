@@ -1,0 +1,1358 @@
+Math. Z. 196, 427-452 (1987)                                           Mathematische
+                                                                          Zeitschrift
+                                                                       9 Springer-Verlag 1987
+
+
+
+
+ModUles de Whittaker d~g~n6r~s
+pour des groupes p-adiques
+C. M~eglin ~ et J.L. Waldspurger 2
+  Universit6 P. et M. Curie, L.M.F. Aile 45-46, 3~       4 place Jussieu, F-75230 Paris Cedex 05,
+France
+2 E.N.S. centre de Math~matiques, 45, rue d'Ulm, F-75005 Paris, France
+
+
+
+Soient F un corps p-adique de caractOristique rOsiduelle diff~rente de 2 et G
+un groupe algObrique rOductif d+fini sur F. On fixe un caractOre, not6 ~,, continu
+de F dans C*. En [R 1] Rodier a montr6 que l'existence d'un modOle de Whitta-
+ker pour une reprOsentation lisse irrOductible de G se voit sur l'expression du
+caractOre distribution de cette reprOsentation au voisinage de l'origine. Rappe-
+Ions (cf. [Hch]) que si (r~, W) est une reprOsentation lisse irrOductible de G,
+il existe un voisinage de 1, not~ ~ , isomorphe par l'application logarithme
+fi un voisinage de 0 de g l'alg~bre de Lie de G, sur lequel on a une 6galit6
+de distribution:
+                                     tr rc = ~ co(j" d/~o)^                                   (*)
+                                                    o
+
+off (9 parcourt l'ensemble des orbites nilpotentes de g, c o sont des constantes
+et (S d/~o)^ est la transformOe de Fourier de la mesure invariante d/~ (convena-
+     o
+blement normalisOe cf. 1.8) sur (9; i.e. fixons une forme bilinOaire symOtrique
+n o n dOgOnOrOeg-invariante, notOe trg ou plus simplement tr; notons ^ la transfor-
+mation de Fourier sur g relativement au caractOre ~otr; alors (*) s'Ocrit
+
+                  V~0e(g2 (~),       tr n(~0)=~ ce I(~ooexp)(X)dBdX).
+                                                o       o
+
+    Le rOsultat de Rodier (qui suppose G dOployO) s'exprime alors essentiellement
+de la fagon suivante: soit N u n sous-groupe unipotent maximal de G, T u n
+tore de G normalisant N e t 0 un caractOre non dOgOnOr6 de N, i.e. le stabilisateur
+de 0 dans Test le centre de G. La reprOsentation lisse irrOductible (re, W) admet
+un modOle de Whittaker relativement fi 0 si et seulement si c04=0, off (9 est
+l'orbite de g contenant l'616ment suivant, not6 f dOfini par:
+
+                        f0, si X est darts l'atg~bre, de Lie du Bore1 oppos6 ~i TN,
+        q)( t r j X ) = [0(exp X), si X est dans 1 alg~bre de Lie de N.
+428                                                         C. Moeglinet J.L. Waldspurger:
+
+Munissons l'ensemble des orbites nilpotentes de g de la relation d'ordre partielle
+d6finie par: (9 < (9'<=~(9 c (9', off - est la fermeture pour la topologie usuelle.
+    Le r6sultat de Rodier peut alors se r6exprimer en disant que (~z, W) admet
+un mod61e de Whittaker si et seulement si il existe une orbite nilpotente maxi-
+male, not6e (9, telle que ce =t=0.
+    Le but de ce travail est de g6n6raliser le th6or6me de Rodier en interpr6tant
+les coefficients co off (9 parcourt l'ensemble des orbites nilpotentes maximales
+pour la propri6t6 ce+ 0 comme 6tant la dimension d'un espace de formes de
+Whittaker d6g6n6r6es sur V. Pour avoir une telle interpr6tation, il faut d'abord
+d6finir ce que l'on entend par forme de Whittaker d6g6n6r6e. Fixons ici (9 une
+orbite nilpotente et choisissons un ~16ment de (9, not6 f On choisit aussi un
+sous-groupe fi un param6tre de G, not6 ~0, v6rifiant:
+
+                              Vs~F*,      (p(s).f =s-2f                             (**)
+
+L'existence d'un tel ~o est assur6e par la th6orie des S12-triplets ([13], w 11), mais
+remarquons qu'il y a bien d'autres choix possibles. On note U (resp. U') le
+sous-groupe unipotent de G dont l'alg6bre de Lie est form6e des 616ments, not6s
+X, v6rifiant: lim q)(s). S = 0 (resp. lim q0(s)s -1. X = 0). On note U" le sous-groupe
+             s~O                   s~O
+
+de U engendr6 par U' et par le stabilisateur dans U de f. On v6rifie que la
+fonction 7 -~ O t r J . log 7 est un caract~re de U", not6 Oy, et on pose:
+
+                              =                           ww.
+
+
+On dit que W admet un mod61e de Whittaker d6g6n6r6 relativement /t (f, q))
+si Wv-,y#:O. Si U"#: U, on remarque que U/U"nKerOf est un groupe de Hei-
+senberg de centre U"/U"chKer 0 f et on note 5~ la repr6sentation irr6ductible
+de ce groupe de caract6re central 0f- On pose:
+
+                      We,y= Wv,, f                  si U= U"
+                           = Horny (5P, Wv-,y)      si U :~ U".
+
+Et on appelle We,s l'espace des formes de Whittaker d6g6n6r6es sur Wrelative-
+ment fi (f, ~o). Cet espace d6pend en g6n6ral du choix de ~0 (par exemple si
+f = 0, on peut prendre ~o de telle sorte que soit U" = 1 soit U" est un sous-groupe
+unipotent maximal de G; dans le premier cas We,y= W e t darts le deuxi6me
+cas We,y est le module de Jacquet usuel relativement /t U"). On note ~tt~(7c)
+l'ensemble des orbites nilpotentes pour lesquelles c~ + 0 (cf. (*)) et ~Wh(TC)l'ensem-
+ble des orbites nilpotentes contenant un 616ment f pour lequel il existe un sous-
+groupe/t un param6tre not6 ~o, v6rifiant (, ,) et pour lesquels We.y + 0.
+     Le rbsultat principal de ce travail, objet du chapitre I, est de d6montrer
+que les 616merits maximaux de Wtt~(n) coincident avec les 616ments maximaux
+de SWh(~) et que si (9 est un 616ment maximal de l'un de ces ensembles, on
+a:
+c~=dim We,s, off f~(9 et ~o est n'importe quel sous-groupe fi un param6tre v6ri-
+fiant (, ,).
+     L'id6e de la d6monstration se trouve d6jfi darts [H ~] et [Rt], elle consiste
+/t remarquer que l'espace des coinvariants Wv-,s peut darts certains cas s'expri-
+ModUlesde Whittaker d6g6nfir+spour des groupes p-adiques                       429
+
+mer comme limite d'un syst6me inductif de semi-invariants pour une famille
+de sous-groupes compacts de G relativement fi certains caract&es de ces sous-
+groupes.
+     Dans le chapitre lI, on donne d'abord quelques exemples ot~ l'on sait d6crire
+les 616ments maximaux de ~tr(~) et calculer les constantes; c'est le cas des
+sous-quotients irr6ductibles des s6ries principales r6guli6res des groupes clas-
+siques d6ploy6s (la d6composition de ces s6ries principales est faites dans jR2])
+et le cas de G1, (on utilise alors les r6sultats de [Z]). Ces exemples sugg6rent
+que, notant F une cl6ture alg6brique de F, il existe une unique G(F)-orbite
+nilpotente dans g|          not6e g, telle que les 616merits maximaux de Jttr(rC)
+soient inclus dans (~ c~ g. Cette propri6t6 est vraie pour Ies corps archim6diens
+grace aux travaux de Barbasch-Vogan et de Joseph, mais nous ne savons pas
+la d6montrer dans le cas p-adique (saul pour G1,). A la fin du chapitre II, on
+utilise les m6thodes du chapitre I pour caract6riser les repr6sentations de petit
+rang introduites dans [H2], ~ l'aide de leur caract6re distribution.
+
+
+Chapitre I. Mod61e de Whittaker d6g6n6r6
+
+1.1. Soient F, G, g, 44 tr, comme dans l'introduction. On note !~ l'anneau des
+entiers de F et u~ une uniformisante de g). On suppose que ~ est non ramifi6,
+i.e. son conducteur est 9 . On fixe un sous-~-module libre de g, not6 L et
+v6rifiant:
+                                 9 g=L|
+                                           FL, L] c L.
+
+Rappclons ici quelques formules que l'on utilisera dans la suite:
+9 il existe A ~ N tel que exp soit d6finie, injective sur c~AL. On note log:
+
+                      exp u ~ a L ~ ~AL, l'application r6ciproque.             (1)
+
+9 soit c 6 N ; on peut choisir A, v6rifiant (1) et tel que l'on ait:
+
+                       9 Vn, m>A,           VXeu~"L,       VY~uW"L:            (2)
+
+log (exp X exp Y)--(X+ Y+I/2[X, Y])eu~"+"+CL,
+
+                     9 Vn>A,         Vm,      VXeu~"L,      VY6tM"L,           (3)
+
+(exp X) Y(exp - X ) ' ( Y +   IX, Y ] ) ~ n + " + C L .
+1.2. Soit Y~L; on suppose que Yest un 616ment nilpotent de g. On note y e
+le centralisateur de Ydans g. On a classiquement:
+
+                        y e = {XegIVZ~g,             tr(Y[X,Z])=O}.
+On fixe un sous-groupe a un param6tre de G d'image un tore d6ploy6 de rang
+un, (p: F* ~ G de telle sorte que l'on ait:
+                              VseF*: qo(s) Y~o(s)-1 = s -2 Y                   (2)
+430                                                                 C. Moeglin et ].L. Waldspurger:
+
+
+On d6compose g sous l'action adjointe de ~0, i.e.:
+
+             g= Y, 9i,      of9,={X~glVseF*,              q~(s)X~o(s)-~=-s~X}.
+
+L'existence d'un tel q) est assur6e par ([B], w 11), mais on peut donner bien
+d'autres exemples qui ne proviennent pas de la th6orie des S/2-triplets. Par
+exemples suppons que G soit simple d6ploy6 et admette un sous-groupe paraboli-
+que dont le radical unipotent, not6 U, soit ab61ien; on d6compose ce parabolique
+sous la forme MU, o6 M est un sous groupe de L6vi; le centre de M est
+un tore d6ploy6 de rang un, not6 C. On peut dans ce cas choisir un homorphisme
+q~: F* --, C tel quc p o u r tout X ~16ment de Lie U on ait:
+
+                                 ~o(s) X q~(s- ~)=s- 2 S.
+Ainsi si Yappartient fi Lie U, q0 convient mais en g~n~ral ~o(F*) et exp Y n'appar-
+tiennent p a s / t l'image d'un h o m o r p h i s m e de S12 dans G.
+    On pose:
+                                           t.-=q~(~).                                          (2)
+C o m m e q)(F*) laisse stable Y~, on fixe un suppl6mentaire stable par ~0(F*)
+de Y#, not6 m e t on a la d~composition:
+
+                             11l= ~, m i     o1.1 lTti:=m(-3g i.
+                                  ie~
+
+On pose m - := y ' m~ et m 2 : = ~ m i . I1 est clair que l'application:
+                 i_<O             i>__2
+
+                        (Z, X ) e g x gF-*By(Z, X):=tr (Y[Z, X]),
+
+est une forme altern6e fi valeurs dans F qui est non d6g6nOr6e quand on la
+restreint f i m . On peut donc choisir des bases Y1..... Y~ de m - , X , ..... X s de
+m 2 et Z1,..., Z2, de m 1 de tel sorte que l'on ait:
+
+
+                          tr(Y[Y~,Xj])=0      i~j si
+                                       = 1 si i=j
+                          tr(Y[Zi, Zj])=O si i 4 : 2 r - j + l
+                                           =1     si    i=2r-j+l.
+
+      On pose:
+
+                 1Tff:= 2      (~i+~Xl)+            2 (~Zi'4-~Z2r-i+l)
+                       l<--i<_s                   l<=i<=r
+                                E:=m'+~          Lc~ Y# c~9 i.
+                                             i
+On fixe un entier d, tel que l'on ait:
+
+                                   u~-aL~ E c ~aL.
+ModUles de Whittaker d6g6n6r6s pour des groupes p-adiques                              431
+
+1.3 Lemme. Soit e ~ N tel que e>2d. Il existe B ~ N tel que l'on ait B > 3 d et
+Ies propridtds suivantes:
+    (1) exp est dOfinite, injective sur c~BE d'inverse log et exp ~ " E est un sous-
+groupe de G pour tout n > B.
+    (2) Vn, m>B, V X e ~ " E , VZecc~"E"
+
+                   log (exp X exp Z ) - (X + Z + 1/2 IX, Z ] 6 c~" + m+ eL.
+
+    (3) Vn>B, VX~cc~nE, VmeZ, VZeu~mE,
+
+                    (exp X) Z (exp - X) - (Z + IX, Z]) e c~2" - 2a +,, L.
+
+On choisit A v6rifiant 1.1 (1), (2), (3) o/t c = 2 d + e et B v6rifiant B > s u p ((A+d),
+3 d). Le lemme r6sultant facilement de I. 1 et des hypothges sur d, nous ne v6rifions
+que le fait que e x p ~ " E est un sous-groupe de G si n>B. En effet soient X,
+Z~n"E. D'apr6s 1.1 (2), on a:
+
+                log (exp X exp Z ) - (X + Z + 1/2 IX, Z ] ) e c ~ 2"- 2a +eL.
+
+O r o n a aussi:
+
+                                   1/2IX, Z]e~~ 2n 2dL.
+Comme       c~2n-2aL~ O~n+B-2aLc Ct~n+dLc C~nE,                  on      a      6videmment
+log (exp X exp Z)eo~"E. D'ofi le r6sultat.
+1.4 Pour la suite, on fixe Y, E, M', B c o m m e en 1.2 et 1.3 et on pose'
+
+                                        n + := Z 9i,
+                                               i>0
+                                        rt- := 2 gi,
+                                              i<0
+
+                                        P-:=Z    gi
+                                             i<0
+
+P - le sous-groupe de G stabilisant n - ; il a pour alg6bre de Lie p - et c'est
+un sous-groupe parabolique de G,
+N § le sous-groupe unipotent de G d'alg6bre de Lie rt § ; c'est le radical unipotent
+du parabolique oppos6 de P - .
+Soit n>_B, on note G , : = e x p u~"E. D'apr~s 1.3 (1) c'est un sous-groupe compact
+ouvert de G. On pose (cf. 1.2 (2)):
+
+                                       G'.,=t-"G. t".                                   (1)
+Vdrifions que l'on a pour n grand:
+
+                      G,=(G, nP-)(G,c~N+)=(G, caN+)(G, n P - )                          (2)
+
+Les deux 6galit6s 6tant analogues, on ne v6rifie que la premi&e. De 1.3 (1)
+et (2), on tire facilement que exp (u~"E c~p-) et exp (~"Ec~n +) sont des sous-
+432                                                                   C. Moeglin el J.L. Waldspurger:
+
+groupes de G. qui coincident avec G. n P - et G. m N + respectivement. Le point
+i m p o r t a n t p o u r la d 6 m o n s t r a t i o n est que l'on a '
+
+                                     IJ=E~p-        @ E c ~ n +.
+
+Soient X E E et g = e x p ( u ~ " X ) . O n veut m o n t r e r que g E ( G . c ~ P - ) ( G . n N + ) .
+Soient Y E E c ~ p - , Z E E n n + tels que X = Y + Z ,          posons y . = e x p ( u ~ " Y ) , z.
+ = exp (u~" Z) et g. + ~ = (y.) - ~g (z.)- i O n a y. E G. c~ P - , z. E G. c~ N +, et il r&ulte
+de 1.3 (2) que g.+aEG.+~. U n e rbcurrence imm6diate m o n t r e alors que p o u r
+tout re>n, il existe y , . E G . m P - , z,.EG.c~N + tels que l'61ement gm+l
+= (y,.) - ~g (zm) - 1 vSrifie g,. + z a G,. + ~. Les groupes G,~c~ P - et G. c~ N + +tant c o m -
+pacts, on peut supposer que les suites (Ym) et (zm) convergent vers y e G . c ~ P - ,
+resp. z e G. ~ N +. Alors g = y z, ce q u ' o n voulait obtenir.
+1.5. Remarque. (i) D ' a p r & ce qui pr6cSde, on a aussi p o u r tout n g r a n d en
+posant P ' . , = t - ' ( G . c ~ P - ) t " et V.':=t-"(G.c~N+)t":
+                                                    !
+                                            G',=P. V,~.
+
+En outre c o m m e dans [ R t ] , P'. q u a n d n d6croit forment une suite d6croissante
+de sous-groupes c o m p a c t s ouverts de P - d6finissant une base de voisinage de
+l'element neutre de P - , alors que V.' forment une suite croissante de sous-groupes
+c o m p a c t s ouverts de N - . Mais contrairement fi ce qui se passe dans [ R a ] ,
+la pr6sence de gl emp~che d ' a v o i r N + = U v'.. Mais, en n o t a n t NZ..=exp ~ gl),
+                                                   n~O                                        i>2
+Oil a:
+
+           (exp ( ~ 1 0 E ) N 2 est un sous-groupe de N qui cofncide avec          U v:             (1)
+                                                                                  n>O
+
+
+(cela se v6rifie sur l'alg6bre de Lie en utilisant le fait que N e s t unipotent).
+    (ii) Soient B<n<_m; alors Gm est un sous-groupe distingu~ de G.. (cf. 1.3
+(3) et le fait que n > 3 d ) .
+1.6 Lemme. Soit n>=B. On a:
+    (i) EappIication X~--*~b tr u~-2" YX d~finit par restriction un earactOre de l'al-
+gObre de Lie o ~ lJ (Le. est nut sur t'atgObre de Lie d&ivde) ;
+    (ii) Z.: 7EG. ~ ~ tr ( ~ - 2 . Ylog 7) d~finit un caract&e de G..
+    (iii) Soient m e n tel que B<_m<<_n et 7EG,.. On suppose que 7 stabilise Z.
+alors 7 E G. exp u~ m(Y ~ c~ L).
+    (i) Soit X , X ' E ~ " E , il faut v&ifier que trc~ 2ny[X, X']EI~). Suivant la
+d6finition de E (cf. 1.2) on 6crit:
+
+          x= ~ a~"(yi~+x~Xi)+a~"z+ ~ a~"(ujZj+z~Z~r_j+l),
+                i <<_i<<_s                               l<j<r
+
+off
+                                 Z ~ ( Y * n L), Yi, x~, uj, zjE~.
+Mod61es de Whittaker d6g6n6r6s pour des groupes p-adiques                                                         433
+
+
+X' = une expression a n a l o g u e en remplaqant Z, Yi,..- p a r Z', Y'i..... On a:
+
+                tr ~ - 2, y IX, X ' ] =            Z     (Yi x'~- y'~ xz) +    ~       (uj z ) - u} x j).
+                                                l~i<_s                        l<=j<r
+
+D'ofi le r6sultat.
+     (ii) r6sulte de (i) et de 1.3 (2) (off l'on fait m = n), puisque e > d.
+     (iii) S oit ~ ~ Gm v6rifiant les hypotheses de (iii). On ehoisit X ' ~ m m ' §                ~'Z'
+off Z ' ~ Y ~ ~ L tel que 7 = e x p X ' . I1 est clair que ~ e x p - ~ m Z ' v~rifie aussi les
+hypotheses de (iii) et en utilisant 1.3 (2), on voit en it6rant ~ventuellement l'argu-
+m e n t qu'il suffit de d ~ m o n t r e r (i~i) en s u p p o s a n t aussi que Z ' = 0. I1 faut donc
+d 6 m o n t r e r que p o u r 1 < i < s et 1 < j < r on a y~, x'~, u), z ) ~ u ~ " - m ~ si X ' est 6crit
+c o m m e dans la d 6 m o n s t r a t i o n de (i) (off l'on fait n = m). S i m = n, il n'y a rien
+fi d6montrer. Sinon on utilise d ' a b o r d l'hypoth6se:
+
+                  V X E c ~ 2n-m- ~E, Zn (exp X ' exp X exp - X ' ) = z,(exp X),
+
+et grace fi 1.3 (3), elle est 6quivalente fi:
+
+                             tr c~ - 2, y [X', X ] ~ 9 , p o u r tout X ~ u~2" - '~ - 1/~.
+
+P a r un ealcul a n a l o g u e fi celui fait p o u r p r o u v e r (i) on voit que cela est encore
+6quivalent/t:
+                                                               r
+
+
+
+S i m = n - 1, on a termin6 sinon on r e c o m m e n c e en faisant p a r c o u r i r fi X l'ensem-
+ble ~ 2 , -,, - 2 E. On obtient finalement le r6sultat.
+1.7. G a r d o n s la n o t a t i o n N 2 , = e x p ( ~      gi) de 1.5 et posons N'..=exp (gi c~ Ye)N2.
+                                                       i>2
+
+I1 est clair que N' est un sous-groupe distingu6 de N § a d m e t t a n t N 2 c o m m e
+sous-groupe distingu& On d6finit une fonction sur N', not6e Z, en p o s a n t :
+
+                                          vyeg',       X ( 7 ) = 0 tr(YlogT).
+
+Puisque Y s 9 - 2 , il est clair que l a restriction de X fi N 2 est un caract6re de
+N 2"
+     M o n t r o n s que Z e s t un caractkre de N' normalis~ par N +.             (1)
+     Soit X = ~ X~, X ' = ~ X'i des 616ments de Lie N', ofl X~, X'~ sont des 616merits
+                   i                  i
+
+de (Lie N') c~ 9~ (en particulier X~, X'~ e y e c~ g~). A l'aide de la formule de C a m p -
+bell-Hausdorf, on v6rifie que l'on a:
+
+            log(expXexpX')=X+X'+l/2[X1,                               X'~]+Z,          off     Ze~          9~.
+                                                                                                    2<i
+
+
+La premi6re assertion de (1) r6sulte alors de ce que X ~ , X ' ~ e Y ~ et de ce que
+tr YT= 0 si Te ~ 9~. Cette derni+re propri6t6 d 6 m o n t r e aussi la fin de (1).
+                       2</
+
+   R e m a r q u o n s que Ia restriction de 2~d exp (g~ c~ Y#) est la fonction constante
+~gaIe d 1                                                                             (2)
+434                                                             C. Moeglin et J.L. Waldspurger:
+
+    Soit (re, W) une repr&entation lisse de G. On note Nff W(resp N~ W) le sous-N 2
+(resp. N')-module de W form~ des 616ments (n(n)-z(n))w, off w parcourt W
+et n parcourt N 2 (resp. N'). Alors W/N~ Wet W/Ns Wsont les modules de Jacquet
+relatifs /t N 2 (resp. N') et au caract6re Z. Remarquons que N+/KerN,)~ est un
+groupe de Heisenberg, notd H, si N + 4=N'.                                      (3)
+(Cela r6sulte de la d6finition de Ye qui entraine que B r (cf. 1.2) induit sur
+g/Y~ une forme symplectique).
+    D'apr& (1), H op6re dans W/Ns W avec un caract6re central 6gal /t )~. On
+note 5a la repr&entation lisse irr6ductible de H ayant ce caract6re central et
+l'on a
+                          W/N~ W~- 50 | H o m H ( ~ , W/N~ W).
+
+On pose:
+                               9                 W/N W),
+                           ml:=      Z       ~Zi-[-~)Zzr-i+l,
+                                   l_<i_<r
+                           L 1 .'=exp m 1.
+
+Comme ml est un r&eau autodual de Lie H/Lie centre H, on a:
+                               ~/" ~ (W/N~ W ) L1 ,
+
+off l'exposant indique que l'on a pris les invariants par L~.
+1.8. On garde les hypoth&es et les notations de 1.7 et on suppose en outre
+que (7~, W) admet un caractSre distribution s'exprimant au voisinage de l'516ment
+neutre de G comme combinaison lin6aire de transform6es de Fourier de mesures
+invariantes associ6es aux orbites nilpotentes de 9. Plus pr6cis6ment, on suppose
+qu'il existe un voisinage, not6 V , de l'616ment neutre de G, tel que log soit
+d6fini et injectif (d'inverse exp) et tel que pour tout f ~ c ~ (~U), on ait:
+
+                       tr i t ( f ) = ~ coo ~ (foexp)(X)dficj(X),
+
+
+off c o ~ , (9 parcourt l'ensemble de orbites nilpotentes de g, dflo est une mesure
+invariante sur (9, et a est la transform6e de Fourier sur g relativement au carac-
+tare 0. Les normalisations sont les suivantes: grace fi 0 on fixe une mesure
+autoduale sur F, grace fi tr on fixe alors une mesure de Haar autoduale sur
+g, grace fi Br (cf. 1.2) on fixe une mesure de Haar sur l'espace tangent /t (9
+en Y d'ofl dflo; on fixe aussi une mesure de Haar sur G telle que le Jacobien
+de l'application exponentielle vaille 1 au voisinage de 0.
+    Ces hypoth&es sont v~rifi6es si West irr6ductible grace/t [HchJ.
+
+1.9. Pour n>B, on note Z'n le caract6re de G', qui fi ~ associe )G(t'Tt-"), cf.
+1.2 (2) et 1.4 (1). On pose:
+
+                        W , = { w e W I V T ~ G , , ~z(7)w= Z,(7)w}
+                        IV' :={we WIVy~ G~,, 7z(7)w = X',(y)w}.
+Mod61es de Whittaker d6g6n~r6s pour des groupes p-adiques                                     435
+
+On a 6 v i d e m m e n t W.' = n ( t - " ) W~. Soient m, n > B, on pose:
+
+                         I.," : I/V. --* W,.
+                              w~--~ ~ Z,.(7 1) n(Ytm-")wdy,
+                                       Gm
+
+                         I'.,~ : w" --, w/,
+                             w~--, ~ Z'(7-1)n(y)wd?,
+                                       G-
+
+                           I . : W ~ W.
+                              w ~ ~ Z~
+                                       G~
+
+
+Ici d7 repr6sente la restriction d'une mesure de H a a r de G restreinte aux sous-
+groupes ouverts en question.
+    Ces d6finitions sont copi6es de [ R a] et on a 6 v i d e m m e n t le d i a g r a m m e
+commutatif:
+                                                          ln, m
+                                            w,                     ,w~
+                              n(t-") ~                    r~=.       In(t-")"                  (1)
+                                            vv:                    ~w"
+
+R e m a r q u o n s aussi c o m m e clans [ R 1] que 1'on a:
+
+                                  Z'.IP- c ~ G ' . - 1 - Z . ] P - c~G.,                       (2)
+                                  Z'.IL1        -- 1,                                          (3)
+                                  Z'.IN' c~ G'. =- Zu, n ~;,.                                  (4)
+
+On choisit n suffisamment grand p o u r que 1.4 (2) et donc 1.5 (i) soient v6rifibs.
+D ' a p r 6 s (2) un ~16ment de W~ est invariant p a r ( P - c~ G'.) et doric p a r ( P - c~ G ' )
+s i m > n. On a alors, utilisant (3) et (4) les expressions suivantes p o u r I'.," :
+
+                    I'.,m(w)=          S     Z'.(n-1) n(n) w dn
+                                  N c~G~
+
+                             =     S n(expX)                  S   Z(n-1)n(n) w c t n d x ,
+                                  ml                      NnG~,
+
+
+p o u r un choix convenable de mesure. Mais, utilisant le fait que e x p m 1 et
+exp ( m l + ( Y # c~Lc~ 91) sont dans G'. si n=>B et normalisent 6 v i d e m m e n t N 2,
+on a encore:
+                                 I'.,m(W) =           ~       z(n- 1) 7z(n)w dn
+                                                  N2t%G~
+
+                                            =         ~       z(n-1)rc(n)wdn.
+                                                  N' c~ G~n
+
+
+Ainsi, p o u r n grand, on a K e r I ' . , m ~ K e r l ' . , v si m<=p et, en p o s a n t FV~'z
+=U K e r I~,,., on a des fl6ches naturelles qui rendent c o m m u t a t i f le d i a g r a m m e
+   m>-n
+436                                                                             C. Moeglin et J.L. Waldspurger:
+
+suivant:
+                                  j'
+                                                +W/N W
+                        ~.~                   r      +. . . . . . . . .   fl6che naturelle
+                                w/&w
+On remarque que l'image d e j ' est incluse dans (W/N~ W) L '.
+1.10. Lemme. Si ~U:~O, alors pour tout n grand W, et W: sont non nuls.
+I1 suffit de prouver que W" est non nul. C o m m m e ~#f~:0, choisissons x dans
+W - - N ~ W d o n t l'image dans W/N~W appartient fi (W/N~w)L'-{O}. On choisit
+M e N suffisamment grand p o u r qne p o u r tout m>=M, x soit invariant par
+P - c~ G~ et pour que 1.5 (i) soit v6rifiS. Utilisant alors 1.9 (3) et (4), on a:
+
+                   I'~(x)= ~ ~(exp X)                   ~        z(n 1) u(n)x d X dn,
+                           ma                       N' nG;n
+
+
+pour un bon choix des mesures. Et 1'image de l"(x) et de x dans W/N; Wco'/n-
+cident. D'ofl, pour tout re>m, on a: I ' ( x ) e W ' - { O } .
+1.11. Proposition. Si ~tU:~O, alors il existe une orbite nilpotente de g, notbe (9,
+intervenant dans l'expression de tr z au voisinage de l'bldment neutre avec un
+coefficient non nul et tel que Ye ~.
+   Gr$ce ~ 1.10, on suppose que W , + 0 pour n grand. On note ~p, l'616ment
+de c ~ ( G ) d6fini par cp,(y)=Z,(~ -1) si ~ G , et 0 sinon. C o m m e en [R1], on
+a:
+                            dim W, = (mes G,)- 1(tr z (~o,)).
+
+Pour n grand tr ~(~0n) se calcule ~ l'aide de 1.8. En particulier il faut d'abord
+calculer ~,~"eexp. Or on a, pour tout Z ~ g :
+
+                    ~poexp (Z) =          y         ~o, (exp X) @ (tr Z X ) d X
+                                       t~ ~L'
+
+                                  =       ~ @(tr-(~ -2"Y-Z)X)dX
+                                       u_~L'
+
+                                  =0           si     ~       2"Y-Z~(t~"E)i
+                                  = measure a~"E sinon.
+
+Une condition n6cessaire pour que tr~(~o,):#0 est donc qu'il existe (9 (avec
+c~ + 0) telle que l'on ait:
+                                (9 c~ o.'~-2" y + (tO"E)i:# ~.
+
+C o m m e (9 est stable par multiplication par a~a", on obtient:
+                                (9 ~ Y + t~2n(t~n ]J) • + ~ .
+
+En outre la d6finition de E assure que ta~Zn(cz~n/J) i e s t un voisinage de 0. C o m m e
+il n'y a qu'un n o m b r e fini d'orbites nilpotentes, cela entraine la proposition.
+ModUles de Whittaker d6g6n6r~s pour des groupes p-adiques                                     437
+
+1.12. Lemme. On note (9=G. Y e t on suppose que cr est non nul dans 1.8 et
+que Y n'appartient pas 5 l'adh&ence d'une autre orbite (9 pour laquelle cr ~:0,
+i.e. (9 est un dl~ment maximal de ~tt,(n). Alors, on a: pour tout n grand dim IV,
+est finie et ind@endante de n dgale ~ c~.
+   O n reprend les notations et les rhsultats de la d h m o n s t r a t i o n de 1.11. Les
+hypothhses assurent alors que l'on a p o u r n g r a n d :
+
+                    dim W, = ( m e s G,) -1 tr ,(go,)
+                              = c~(mes G.) -1 ~ (qo.oexp)(X)drip(X)
+
+                              = e o ( m e s G . ) - l ( j " dflo)    mesureu~"E,
+
+
+off f = O c~ (u~- 2, y + (u~nE)• O n identifie (9 et G/G(Y) off G(Y) est le stabilisa-
+teur dans G de Y. O n v6rifie que t normalise G(Y) et on calcule
+
+                        Yf t - " = {:~G/G(Y)I: yf~-i _ yeu~,E•
+
+Soit c ~ N , c > B . Clairement q u a n d n e s t g r a n d 32t -n est un voisinage de i
+dans G/G(Y). P o u r n suffisamment g r a n d on idenfifie d o n c Y ' t - " fi un sous-
+ensemble de exp ~Cm'. Soit X~u~Cm ' tel que exp X ~ 9 ? t n. O n dolt avoir p o u r
+tout Z~o~nE:
+                   0 (tr o~ - 2, (exp X) Y(exp -- X) Z) = 0 tr u~ - 2, YZ.
+
+Ce qui revient fi dire que exp X normalise le caract~re )~, de G,. D'apr6s 1.6
+(iii) cela ~quivaut fi X e ~ " m ' . O n a d o n c :
+
+                 dim W~ = c~ (mes ~ " E) (mes G,)- 1                       ~           d :.
+                                                                    (Gn/G~:~G(Y ))t~
+Or, on a:
+                             j"          dp=(           ~           d:)]detg/y.:I.
+                     (Gn/Gn :~ G(Y))tn          (G~/G~ :> G (Y))
+
+
+O n calcule [det~/y~ t"[ en utilisant le fait que si 2 est une valeur propre de t
+dans g/y4,, l'espace p r o p r e 6tant de dimension r, alors 2 - 1 ~ -2 en est aussi
+une avec un espace p r o p r e de dimension r et si 2 = 2 - 1 u~-2 alors r e s t pair.
+O n obtient alors facilement:
+
+                                  [detg/r~ t'l = [a~-.dJ~(~/Y*)[.
+
+O n choisit n suffisamment g r a n d p o u r que la valeur absolue du Jacobien de
+l'application exponentielle de ~"E sur G, soit 1 et on a grace aux normalisations
+faites en 1.8:
+                                         d~=      ~     dX=l~.~ndim(a/Y*)].
+                        Gn/Gn t~ G (Y)         ~ nm'
+
+D'ofl dim Wn = ce.
+1.13. L e m m e . Soient c u n entier, c > B et X~E"/21+C(Lc~ Y e ) (off [n/2] est la
+partie entidre de n/2). Alors exp X normalise G, et stabilise Z,. Ainsi exp X opdre
+grace 5 ~ dans VV~et en fait sin est grand, cette action est triviale.
+438                                                                         C. M o e g l i n et J i .   Waldspurger:
+
+
+Les premi6res assertions sont claires d'aprds 1.3 et les dhfinitions. Vhrifions que
+l'on a:
+                                     ~ ( ~ - 2 , tr X Y ) = 1.                                                   (1)
+
+    Choisissons un 616ment, not6 T, de g vhrifiant IT, Y ] = - - 2 Y ( i l en existe
+par la th4orie des S/z-triplets). On a:
+
+                     tr X Y - - 1/2 tr X [T, Y] = -- 1/2 tr [Y,,X] T= 0,
+
+puisque X e Y#. D'o6 fi fortiori (1).
+    On pose ici U = e x p X . On remarque que u appartient A un sous-groupe
+compact de G. La trace de Faction de u dans l'espace vectoriel de dimension
+finie l/V,est un hombre complexe de module infhrieur ou 6gal/t dim I4/,, l'6galit6
+ne se produisant que si Faction est triviale. Tenant compte de (1), il suffit doric
+de vhrifier que l'on a:
+
+                            trw. ~r(u) = O(u~ -2" tr X Y ) dim W~.                                               (2)
+
+Or    on a:
+
+                           trw, 7r(u)=(mes G,) -2 tr re(q)* s* qo,),
+
+od e. est la masse de Dirac en u. On calcule facilement:
+
+                         (q)* s* (p,)(~;)=(mes G,) cp,(y u-1), VTGG.
+
+On note A la repr6sentation r~guli6re droite de G darts cg2(G). On choisit n
+suffisamment grand pour que l'on puisse calculer tr A (u-1)(p, grace/L la formule
+de 1.8. Pour utiliser cette formule calculons, pour tout Z s g:
+
+                   (A (u- t)~0, oexp)(Z)= ~ (p, (exp Tu- 1) O (tr TZ)dT.
+                                          g
+
+On doit avoir T dans un voisinage de 0 pour que q~,(expTu-1)+0 et s i n
+est suffisamment grand on peut alors imposer fi T d'appartenir ~ u~IE, off
+f e N ; pour avoir quelque chose de non nul il faut encore que (expT)
+( e x p - X ) ~ G, c'est-/l-dire, avec les hypoth6ses sur X, T~X + u~" E. (cf. 1.3).
+      En faisant le changement de variable T ' = T - X , on obtient que l'expression
+cherch6e vaut:
+
+                 O(trXZ)       ~ ~0,(exp(T'+X) e x p - X ) O ( t r T'Z)dT'.
+                            u~r~L,
+
+On v6rifie que l'on a:
+
+          exp (T' + X) exp - X = exp (T' + IX, T']/2 + T"),                     off T" ~ u~z" + 1L;
+
+d'ofl (p, (exp ( T ' + X) e x p - X ) = cp,(T') puisque que X ~ Y e. Finalement on a:
+
+                    o~xxp (Z) = 0 (tr X Z ) q% exp (Z),
+          d (u--~l)q~.
+
+              tr n(cp* e* q0,) = c~ (rues G,)                ~              ~ (tr XZ) dg~(Z).
+                                                6~r~ (oD" an g + (t~nL')•
+ModUles de Whittaker d6g6n6r6s pour des groupes p-adiques                                 439
+
+
+On a d~jfi calcul6 (9 c~ c~-2, y+(MnE)l (cf. 1.12), cela coincide avec:
+
+                        (exp (a9~ m')) t n. Y= a~- 2n (exp (u~nm')). Y.
+
+Soit Z'~u~nm '. On a d'apr6s 1.3 (3):
+
+                   e x p Z ' . Y = Y + [ Z ' , Y]+Z"      oil    Z"~ct~
+D'ofi:
+
+     O (tr u~- 2n X (exp Z ' . Y)) = O (tr u~- 2n(X Y+ Y [X, Z'])) = O (tr u~r- 2nX Y).
+
+Ainsi (cf. la d6monstration de 1.12) on a:
+
+                  tr rc(~0* e* 0,) =(rues G,) 2 O (tr a~-2nXY) dim W,,
+
+ce qui est l'assertion cherch6e.
+1.14. Corollaire. Dans le diagramme terminant 1.9 pour n grand j e t f sont des
+injections et l'image de j' est (W/N~ W) L'.
+   Par commutativit6 il suffit de montrer que j' est injectif d'image (WINz W) L~.
+Pour v6rifier l'injectivit6 on pose an:=c~t"/2J+~L~Y~ng~ et An.-=expa n. On
+remarque c o m m e en 1.13 que An G, est un sous-groupe de G et que l'on peut
+6tendre Z, en un caractbre de AoG, en posant Zn(V):=O(tr~-Z'YlogT). Le
+lemme pr6c6dent et 1.9 (3) assurent que l'on a:
+
+                      W , = {we WIVTeA, G,,               rc(7)w=zn(7)w};
+d'ofl:
+                   W~'= {w~ WIV7e(t-nzn tn)a'~,                 ~(7)w = Z(7)w}.
+
+S i m > n et s i n est suffisamment grand pour que 1.4 soit v6rifi6 on a:
+
+
+                                  t- m A,,~tm(G~nn N' )
+
+
+Maintenant t-mAmt"(G'~c~N ') forment une suite croissante de sous-groupes
+compacts de N ' arbitrairement grands. D'ot~ le r6sultat cherch6 par la caract6ri-
+sation des modules de Jacquet (cf. [BZ 2] w 2.33).
+     Soit 2~(W/Ns W) L' et x e W u n ant6c6dent de 2. On a prouv6 darts la d6mons-
+tration de 1.10 qu'il existe un entier, not6 ici Bx, tel que pour tout n>Bx,
+I',(x) ait p o u r image dans W/N;~Wl'6Dment 2. C o m m e I'm(X)---I'n,,~I'n(X) p o u r
+m>n>Bx, il est clair que l'n(x)r        x. Cela montre qu'6tant donn6 un nombre
+fini d'616ments lin6airement ind~pendants 21,..., 2T de (W/Ns W) L1, il existe un
+entier M tel que p o u r tout n>__M il existe des 616ments Yl .... , YT lin6airement
+ind6pendants de VV~'/W~.xayant 2~,..., 2T c o m m e images dans W/N~ W. C o m m e
+la dimension de W/,/W~,z est born6e quant n varie d'apr6s 1.13, on voit d'abord
+que dim (W/Ns W) L1 est finie puis que (prenant p o u r 21 .... , 2 T u n e base de
+(W/Ns W) L1) p o u r n grand W//W'x s'envoie surjectivement sur (W/Ns W) L'.
+I. 15. Lemme. On suppose n grand, alors I,,n +~ est injectif.
+     On suit pour le d6but la d~monstration de IRa]. On garde les notations
+440                                                                                      C. Moeglinet J.L. Waldspurger:
+
+(On, (p, + ~ de la d6monstration de I. 11. On calcule:
+
+         In+ 1,n oIn, n+ 1 o I n
+             = ~ ~ ~ (o,(7)(o,+l(h)On(?')z(Yt-~)z(ht)z(~')dydhd7 '
+               Gn Gn + 1 Gn
+
+             =mes(Gn+ac~tG, t -1)                                     ~,
+                                                          ~ e G n + 1/Gn+ 1 mtGn t - 1
+
+               Zn+ l(])-1 )                ~         (Pn(7)~~                                           '.
+                                      Gn x G~
+
+
+Comme les 616ments de t -~ G,+lt normalisent G, ( s i n est grand cf. 1.3), on
+obtient encore apr6s changements de variables que cette expression vaut:
+
+           =mes(G,+lc~tGnt -1 )                                     ~"              Xn+ 1 (])- 1) 7c(t- 1]) t)
+                                                        ~2~Gn+ l/Gn+ 1 c~tGnt- 1
+
+                            Xn(t- l p- l tT- l t-17t) Xn(7) Xn(7'- l) n(7') dT d7 '.
+              Gn x Gn
+
+           =rues (G.+ 1 c~ tG, t- l) rues G,
+                                                     Zn+ 1(Y- l) 7c(t- 1]) t) ~(q0n)
+              yeGn+l/Gn+lntGnt                   1
+                 t - 1 ~t s t a b i l i s e Zn
+
+
+Grace au lemme 1.13 qui s'applique s i n est grand, on obtient encore que
+I,+1,,o I,.,+ 1 oI n est un multiple non nul de I n. Comme I nest surjectif sur Wn,
+l'injectivit6 de I,,n+l est claire.
+1.16. Th6or~me (on adopte les notations de l'introduction). Soit (re, W) un reprdsen-
+tation lisse irrdductible de G alors l'ensemble des ~Idments maximaux de ~tr(rC)
+cofncide avec l'ensemble des dldments maximaux de ,ArWh(7C).
+    Prenons d'abord (9 un 616ment maximal de ,Artr(~). On fixe Y dans (9 et
+on choisit n'importe quel sous-groupe/t un param6tre v6rifiant 1.2 relativement
+fi Y Pour d6montrer que Wadmet un mod61e de Whittaker d6g6n6r6 relativement
+fi Yet /t ce sous-groupe fi un param6tre, grace fi 1.14 et 1.12 il ne reste plus
+qu'fi d6montrer que W2z est nul s i n est grand. C'est ce que d6montre 1.15
+en utilisant: In,re=In+ nmOI,,,+ 1-
+    Soit maintenant (9 un 616ment maximal de JKwh0Z); d'apr6s 1.11 il existe
+une orbite, not6e (9', de ~tr(rc) telle que l'on ait: 6' ~ (~ Par d6finition de la
+relation d'ordre sur l'ensemble des orbites nilpotentes de g, on sait qu'il existe
+un ~16ment maximal de ~t~(rc), not6 (9" 6ventuellement 6gal ~ (9', tel que l'on
+ait: (~"~ (Y. La premi6re partie de la d6monstration prouve que l'on a aussi
+(9"e ~#Wh(~) d'od (9"= (9; ce qui termine la d6monstration.
+1.17. Corollaire (notations de l'introduction et de 1.16). Soit (9 un Ol~ment maximal
+de ~tr(~), alors le coefficient cr cofncide avec la dimension de l'espace des formes
+de Whittaker ddg~ndr~es relativement dt un dlOment quelconque, notO Y, de (9 et
+n'importe quel sous-groupe gt un paramOtre, note qo, vdrifiant (* *) (cf introduction).
+    Cela r6sulte de 1.16, 1.14 et 1.12.
+Modbles de Whittaker d6g6n6r6s pour des groupes p-adiques                            441
+
+
+Chapitre II. Exemples
+
+Dans ce chapitre on garde les notations introduites dans l'introduction.
+II.1. Le cas de la s&ie principale rdguliOre pour un groupe classique ddpIoyd.
+II.l.1. Dans ce paragraphe les induites sont des induites fi droite normalis6es
+de la fagon uselle. En [R 2] Rodier a d6compos6 la s6rie principale d'un groupe
+semi-simple d6ploy6, not6 G, obtenue par induction d'un caract4re r4gulier;
+on se propose, en supposant G classique de d6crire pour les sous-quotients
+irr6ductibles de ces s6ries principales les 616ments de Xtr(rC) et de calculer la
+dimension de l'espace des formes de Whittaker d6g6n6r4es leur correspondant.
+Ici la situation est simple parcequ'elle se ram6ne fi des calculs pour des repr6sen-
+tations induites fi partir de sous-groupes paraboliques de G.
+     Rappelons bri6vement les r6sultats de [-R2] dont nous aurons besoin. On
+suppose que G est un groupe r6ductif d6ploy6 et on choisit un sous-groupe
+de Borel, not6 B de G contenant un tore d6ploy6, not6 T. On note U le radical
+unipotent de B e t Wle groupe de Weyl de G relativement fi T. Soit Z un caract6re
+de T (prolong6 trivialement sur U en un caract&e de B), on suppose que Z
+est r~gulier et suivant Rodier, on pose:
+
+                S = {c~v ~X,(T)[zo(o~V)(s)= [s[, Vs~F*},
+                Vc~v ~ X , ( T ) ,    H~v :={~EX*(T) cr           v (s)= 1, VssF*}
+
+j l'ensemble des composantes connexes de X* (T)--U~v,s H ~ .
+    Alors j est en bijection avec les parties de S en associant fi F E J l'ensemble
+Sr.'--{~ v ~SlV~eCc~o~ v (s)= [sm[, V s s F * off m>0}.
+    On note A § le sous-ensemble de X*(T) form6 par les caract6res intervenant
+dans Faction de Tsur Lie U et pour tout F e J on pose"
+
+                                     w r , = { w e W l w . A + ~ r}.
+
+Rodier d6montre alors le th6or~me suivant'
+Th6or6me (jR2], III. thSor6me). La reprdsentation 7r:=ind~z est sans multiplicitbs
+et ses sous-quotients irrbductibles sont paramdtrbs par J ; la reprdsentation corres-
+pond gt F ~ J , notde rCr, est I'unique sous-repr~sentation de ind~z TM off w est un
+dldment (quelconque) de Wr et elle est aussi caractdrisde par son module de Jacquet
+(Trr)v qui est semi-simple isomorphe h @ Zw.
+                                                w~Wr
+    Si G est un groupe classique, le fait que Z soit r6gulier entraine les propri6t6s
+suivantes:
+II.1.2. Remarque. (i) S fait partie d'une base de coracines simples.
+     Cela se vbrifie fi la main s6par6ment pour chacun des groupes classiques
+et n'est pas vrai pour un groupe quelconque comme le montre l'exemple de
+G 2 " o n note (~v, fiv) une Z-base de X , ( T ) off [[~v II > lift v II, et on d6finit Z
+(ici un 616ment de X*(T)) par Z o ~ v =1[ et Z o f i v = 3 z off 3z e s t un caract4re
+cubique. On v6rific que Zest un caract&e r6gulier. Or ici,
+                                        s = {~v,(~v)(flvp}.
+442                                                             C. Moeglinet J.L. Waldspurger:
+
+     A partir de maintenant, on suppose que G est clasique et on fixe une base
+de coracines simples, not6e ~v contenant S. On suppose que B est tel que
+( ~ v , A + ) ~ N . Un parabolique est dit standard s'il contient B. Pour tout F % r
+on note P r le sous-groupe parabolique standard de G d6fini par le fait que
+son groupe de Weyl relativement /t T e s t le groupe de Weyl du sous-syst6me
+de coracines engendr6 par St; on note Zr le caract6re de P qui intervient darts
+ind~rz. On a alors"
+Remarque. (ii) Le groupe de Grothendieck engendr~ par les sous-quotients irr4ducti-
+bles de ind~z cofncide avec le groupe de Grothendieck engendr~ par les representa-
+tions ind~rZr off F parcourt J . Plus pr4cisdment, on a dans le groupe de Grothen-
+dieck:
+                       VF~J,      i n d ~ Z r = @r,ls/,,=sFrCr,;                (1)
+
+                       ~r = @'IS,-, = sr ( - D Is*-'-s'-I ind~,, Zr'.                     (2)
+
+  (2) est une consSquence immOdiate de (1). Pour prouver (1) on calcule le
+module de Jacquet ([B-Z], 2.12) de l'induite:
+
+                     (indpG~Zr)v ~ @w~w I< . . . . > >__O.W~A+w~s~ ZTM,
+off ~ veut dire 6galit6 entre semi-simplifiOs. Par dOfinition de Xr, on sait que
+les sous-quotients de indpa~ Zr sont aussi des sous-quotients de indB~ Utilisant
+le thOorOme de Rodier cit6 plus haut qui montre entre autre que Wr~l(7~r)v
+forme une partition de l'ensemble des caractOres de la forme Z~ off w~W, on
+en dOduit (1).
+II.l.3. Proposition. Soit F % f . Les ~l~ments de ~t~(rcr) maximaux sont exactement
+Ies orbites nilpotentes de g qui coupent l'algkbre de Lie, notde "Pr, du radical
+unipotent de Pr suivant un ouvert. Ces orbites sont incluses dans l'unique orbite
+sous G(F), off _fest une cloture de F, qui coupe "Pr |        suivant un ouvert (pour
+la topologie de Zariski), i.e. l'orbite de Richardson de Pr, notOe f2.
+    On dOmontre cette proposition fi l'aide de II.1.2 (2) et du calcul du caractOre
+d'une induite que nous allons reproduire ici. Plus gOnOralement soient P u n
+sous-groupe parabolique de G, M un sous-groupe de Levi de P et n une reprOsen-
+tation lisse de longueur finie de M. On note ici U le radical unipotent de P
+et on choisit un compact maximal, not6 K, de G. Grace/t [Ra], on a, en posant
+p =ind~n:
+
+Vf~cgy(G),     trp(f)=tr~(Sf)        off    Vm~M,        Sf(m)=~ ~f(kmuk           X)dkdu.
+                                                                   v ~:                   (3)
+
+Soit f ~ c ~ ( G ) une fonction coneentr6e fi l'origine de G alors S f ~ ( M )          est
+concentr6e ~ l'origine de M e t on a:
+    tr lr(Sf)=~co~ ~ S f ( X ) d f l ~ ( X ) , off la somme se fait sur les orbites, not6es
+
+(9.1, de m : = Lie M, c ~  et dfie~ est une mesure invariante sur (9~.       (4)
+    Soit J/t un petit r6seau de m tel que S f soit coneentr6e sur exp Jg, alors
+on    a:
+
+                    VX~m,      S f ( X ) = ~ Sf(exp Y ) ~ t r ( Y X ) d Y                 (5)
+                                           JR
+Mod6les de Whittaker d6g~n6r6s pour des groupes p-adiques                               443
+
+Posons pour tout 4lhment, not6 7, de G:fK(7).'= ~ f(k-~Tk)dk, on a:
+                                                            K
+
+
+          VX~m, S'f(X)= ~ ~fk(exp Yu)O tr(YX)dYdu
+                                ~4l U
+
+                              = ~ ~ fK(exp(Y+U)) O tr(Y+U)XdYdU,
+                                   Lie U
+
+
+en utilisant le fait que Lie U est normalis6 par Jr et ~ (tr UX)= 1 pour tout
+U~Lie U. Ainsi, en utilisant la formule d'inversion de Fourier, et le fait que
+Lie U est l'orthogonal de Lie P, (5) devient:
+
+                  VXem,       S'f(x)=       ~ fK(exp Y)@ tr(YX)dYdU
+                                         Lie P
+
+                                        = I L(x+            z)du.
+                                         Lie U
+
+
+A 1'aide de (4), (3) devient donc:
+
+                     trp(f)=~co~ ~ ~ fK(X+U) dUdflcm(X).                                 (6)
+                                        Ora Lie U
+
+
+On note ind~ (9., 1'ensemble des orbites nilpotentes de g qui coupent (9., + Lie U
+suivant un ouvert. Montrons que l'on a:
+
+9 V(9~indp~(9",      (gm((9,,+LieU)estuneP-orbiteouvertedans(9"+LieU;                    (7)
+9 Ur162          C~((9,, + Lie U)) est une ouvert dense de (9., + Lie U.                 (8)
+
+On note F une cl6ture algebrique de F. D'aprhs Lusztig-Spaltenstein (cf. IS],
+II.3.1) on salt qu'il existe une unique orbite nothe in"d~ (9., sous G(F) qui coupe
+G(F). (9.,+ Lie U(F) suivant un ouvert de Zariski.
+     De plus (cf. [S], II.3.2. (e)) xndu (9.,c~(m(F). (9.,+ Lie U(F)) est une unique
+P(F)-orbite. Soit (9 une G-orbite incluse darts i~'d~t (9" coupant (9.,+Lie U et
+soit Xe(gc~((9,,+Lie U). Utilisant le fait que F est de caract6ristique 0 et ce
+qui prhchde, on voit que (9 c~ ((9., + Lie U) contient un voisinage de X dans (9.,
+ + Lie U. Ainsi (gEind~(9.,. La rhciproque est claire, i.e."
+     ind~M (9., est l'ensemble des G-orbites incluses dans in~'d~ (9., coupant (9.,
+ + L i e U;
+     Dans ces conditions (8) r6sulte de ce qui pr6c4de.
+      Montrons (7). Soit (9 e ind~M (9., et soient X, Y~ (9 c~ ((9m+ Lie U). Alors il existe
+g~G(F) et ~ e P ( F ) tels que l'on ait:
+
+                        X=g-Y=~.Y,               i.e.   ~-lg~Staba(p)y.
+
+On sait que la composante neutre de StabG@)Yest incluse dans P(ff) (cf. IS],
+II.3.2. (e)). En outre on tire facilement de [S-S], IV.2.25) que l'application natu-
+relle de stab~ Ydans stabG(f) Y/(stabG~p) y)O est surjective. C'est-fi-dire:
+
+                               g - 1ge(stabptp) Y) stab~ (Y).
+444                                                                                   c. Moeglin et J.L. Waldspurger:
+
+On peut donc supposer (en multipliant 6ventuellement ~ (resp. g)/~ droite par
+un 616ment de stabv(~) Y(resp. de stab o (Y)) que l'on a:
+
+                                              ~,=geGnP(F)=P(F).
+
+D'ofl (7).
+   Soit (9~ind~t(9,,; alors la restriction de dflomdU (cf. (6)) fi (9'=(9c~((9m
++ Lie U) est une mesure P-semi-invariante de poids [detLioV], que l'on note dfio,.
+D'apr6s (IRa], lemme 3) on a:
+                                      L (x) d         (x) =     S}(x) d (x),
+                                (9,                            (9
+
+
+o d c o se calcu]e facilement et vaut: ]stabGXdstabvXd off Xe est un 6]6ment
+quelconque de (9'.
+      Revenant fi (6) en tenant compte de (8), on trouve:
+
+              tr p ( f ) = ~     corn         ~       Istabo Xo/stabv X~I ~ f ( x ) dfio(X).                      (9)
+                                        (gelnd~O~                                     O
+
+
+Dans l e c a s qui nous interessait co, = 0 si (9,, + 0 et C{o}= 1 d'ofl dans ce cas:
+
+                tr p ( f ) =          ~'          Istab~(X~)/stabv (X~)I ~ f ( x ) drip(X).
+                               6 e i n d GM {0}                                   0
+
+
+P o u r terminer la d6monstration de la proposition, il ne reste plus qu'fi remarquer
+que l'on a;
+    VF, F ' e J tels que Sr c St, , alors P r c Pr' et en particulier en notant "Pr
+et "Pr, les alg+bres de Lie des radicaux unipotents de Pr et Pr,, on a "Pr ~ "Pr'-
+    D'ofl 6videmment en tenant compte de (8) (ici (9,,= 0), on a:
+
+                               U            ((9                      U
+                        e i n d ~ r ' {0}                       ~)e indpGF, {0}
+
+
+
+Doric p o u r tout (geind~r,{0 }, il existe (9~           tel que (9 c O ~ C o m m e
+(9o c~ "Pr' = 0, on a (9 c ~ - (9o. La proposition est maintenant une cons6quence
+facile de (8), l'existence de f2 avec les propri6t6s souhait6es dans l'@nonc6 a
+d6jfi 6t6 r u e (cf. la preuve de (7) et (8)).
+II.1.3. Corollaire (notations de la proposition): rcr admet un modOle de Whittaker
+ddgdnOr~ relativement ~ chacune des orbites de g coupant "Pr suivant un ouvert.
+Et soit (9 une de ces orbites, alors l'espace des formes de Whittaker (d~gdndr~es)
+est de dimension ]staba (X)/stabe (X)] oft X est un dldment de (9 ~ "Pr.
+II.1.5. Remarque. Les rOsultats prdcddents s'dtendent aux cas des groupes orthogo-
+naux.
+
+
+II.2. Le cas de G1..
+Proposition. Soit ~z une reprdsentation Iisse irr~ductible de GI,(F); alors l'ensembIe
+des dl~ments maximaux de ~/~,r(~) sont inclus dans une unique orbite nilpotente
+de g. On la note Xttr(~).
+Mod+les de Whittaker d+g6n6r6s pour des groupes p-adiques                                                                                 445
+
+
+    La d6monstration de cette proposition est tr6s proche de celle de II.1.3 utili-
+sant les r6sultats de [Z]. Rappelons d'abord que l'on a avec les notations de
+la d6monstration de II.1.3:
+
+                     9 i~'~d~(9,. c~ g est une unique G-orbite, not6e ind~t (9,..                                                          (1)
+                     9 si (9~. c C,. - (9~ alors ind~t (91, c ~                               (9,.- ind~M(9,..                             (2)
+                     9 VXeg, stab~ X est connexe.                                                                                          (3)
+
+Soit p une repr6sentation cuspidale de Glr(F ) (off r e N ) , alors la proposition
+pour p est connue grace fi ([H1]).
+Le cas d'un segment: soient a e Z et m e N , on note A le segment [ a + 1, a + m ]
+   ..=p, + 1 x ... x pa +,, l'induite du produit des repr6sentations [det a § i[ p 1 < i < m,
+de Glr(F ) x ... x Glr(F). Et, suivant [-Z], on note {A)o l'unique sous-repr6senta-
+tion de re. Prouvons la proposition pour {A)o:
+      Soit Y u n 616ment nilpotent de g; on met Ysous-forme de Jordan de telle
+sorte qu'Y soit sur la sous-diagonale inf6rieure. On adopte les notations de
+I e t on choisit q0 de telle sorte que N + = N 2 soit le sous-groupe unipotent
+sup6rieur. On note P l e sous-groupe parabolique standard dont le Levi standard,
+not6 M, est tel que Y soit un 616ment nilpotent r6gulier de Lie M. On note
+U le radical unipotent de P. On remarque que {A)p admet un mod61e Whittaker
+d6g6n6r~ relativement/t (Y, ~o) si et seulement le module de Jacquet (A)p,u en
+tant que repr6sentation de M, admet un mod61e de Whittaker. D'apr6s ([Z],
+3.4 puis 6.6) cela est 6quivalcnt /t ce que M soit le produit de m copies de
+GI,(F), i.e. avec 1.16 et 1.17 on a prouv6 l'assertion cherch6e avec
+
+                 Yttr(rc) l'orbite correspondant gl la partition formde de m-fois r.                                                       (4)
+
+La proposition pour les sous-quotients irr6ductibles de rcse d6montre alors
+exactement comme en II.1.3 grace d'une part/t ([Z], 9.13) qui pour G1, g6n6ralise
+les r6sultats de Rodier utilis6s en II.1 et d'autre part grace fi (4) qui avec (1)
+et (2) permet de continuer comme dans ce qui suit II.1.3 (9). Ici comme dans
+la situation de (4), les constantes sont 1 grace pour (4) aux mames r6f6rences
+/t [Z] que pour (4) etfi (3) pour le reste.
+    Remarquons aussi qu'il r6sulte de (1), (2) et de II.1.3 (9) que si la proposition
+est vraie pour une repr6sentation de longueur finie de G I , , ( F ) x ... x GI,d(F )
+(off nl .... , n d e N ) elle est vraie pour l'induite de cette repr6sentation/l GI,1 +.. +,~.
+                                                                                                                                           (s)
+    Zelevinsky a d6montr6 que pour toute repr6sentation irr6ductible, not6e re,
+dont les donn6es cuspidales sont dans la Z-droite de p, il existe des segments
+(A ~..... A~) uniques/t l'ordre pr6s tels que 7z intervient avec multiplicit6 un dans
+l'induite (A 1)0 x ... x (As)o et tels que l'on ait dans le groupe de Grothendieck:
+
+ E=(A1)        p • ... • ( A s ) p - ~ -     ~ ( A ' 1..... A),) multisegmentdeN Z ( ~ t l . . . . . A s ) ( A ' I ) p x . . . x ( A ' ~ , ) p
+
+oti z(A~ ..... As) sont des 616ments de 2g nuls sauf si A'~, ..., A', se d6duit de
+A ~, ..., A~ par une succession d'op6rations 616mentaires du type:
+          t           t                                         t       !        t      !      t          ~t          ~!
+     <m >:=(A 1. . . . . d s , ) - + < m " > : = ( ( A i u A j ) , ( A i ~ d j ) ,          A 1 , . . . , A i . . . . , A j . . . . . d's,), (6)
+446                                                                        c. Moeglin et J.L. Waldspurger:
+
+off v signifie que l'on enl6ve ce segment et off A'i e t A) sont deux segments
+[ a i + 1, ai+m,] et [ a j + 1, aj+m] v6rifiant: ai<aj<ai+m~<ai+m Jet off:
+
+   A'iw A ~ , = [ a i + 1, aj+mj],      A'i~ A ) : = [ a ~ + 1, ai+ml] si a~<a i +mi ou 0 sinon.
+P o u r tout cela cf. ([Z] 7.1). O n veut d 6 m o n t r e r que la p r o p o s i t i o n est vraie
+p o u r 7t avec c o m m e orbite l'orbite i n d ~ (9,, off M est le Levi (standard) Glm,r
+ x ... x Gl,~r si Ai = Eai+ 1, a i + m J, 1 <_i <_set (9m est l'orbite produit des orbites
+d6finies en (4) q u a n d m varie de m~ ~ ms; on note (9(~...... ~,) cette orbite et
+on r e m a r q u e qu'elle est l'unique orbite de ~t'~((<Al> p x ... x <A~)p)). P o u r cela
+on calcule le caract~re de n au voisinage de l'origine fi l'aide de (6) et de 1.1.3
+(9). En fait il suffit de d 6 m o n t r e r que si ( m ' ) et <m") sont li6s en (7) alors
+(9<~,,>c C<~,>-C<~,>. G r a c e fi une induction par 6tage, on peut supposer que
+l'on a:
+                     A'~=,A,=[a+ l,a+m],     A)=:A',=[b+ l,b+p],
+                         (m')=(A,A')   off a < b < a + m < b + p .
+
+On a alors, en p o s a n t c:=b-a:
+
+                  O<c<=m et            m-c<p,
+                  A uA'=[-a+l,a+c+p]
+                  Ac~A'=Ea+c+l,a+m]                      si c<m,
+                           = 0                           sinon,
+                  <m"> =(~ ~A', ~ hA').                                                                  (8)
+On a: (9<,,,> = ind((r, ..., r) x (r ..... r)) et (9<,,,,> = i n d ((r ..... r) x (r, ..., r)), d'ofi (9<,,,>
+                          m fois       p fois                         p + c fois   m   c lois
+
+
+c o r r e p o n d /~ la partition inf(m p)-fois 2r, (sup(m, p)-inf(m,p)-fois r et (9<,,,,>
+c o r r e s p o n d ~ la partition (m-c)-fois2r, ( p + c ) - f o i s r . On a (9<,,,> ~ (9<,,,,> si et
+seulement si inf (m, p ) > ( m - c ) , ce qui se produit d'aprbs (8).
+       La p r o p o s i t i o n dans le cas g6n6ral se d6duit de ce cas particulier grace
+/~ ([Z], p a r a g r a p h e 1) et/l (5).
+II.3. Reprksentation de petit rang
+D a n s [H2], H o w e a introduit la notion de petit rang p o u r certaines repr6senta-
+tions unitaires de G:=Sp(2n, F), off F est un corps local. R a p p e l o n s r a p i d e m e n t
+la d6finition: on fixe un espace vectoriel de dimension n, not6 X et on munit
+X + X* de la forme symplectique usuelle et on repr6sente G c o m m e les a u t o m o r -
+phismes symplectiques de cet espace vectoriel. On note P(X) le sous-groupe
+de G qui normalise X et N(X) son radical unipotent. N(X) est ab61ien et s'identi-
+fie /t son alg~bre de Lie, not6e n, par l'application 7 ~ 7 - 1 ; q u a n t fi n, c'est
+une alg6bre de Lie ab61ienne i s o m o r p h e c o m m e espace vectoriel fi l'ensemble
+de 2-tenseurs sym6triques sur X, not6 S 2 (X), c'est-fi-dire les formes q u a d r a t i q u e s
+sym&riques sur X*. On fixe un caract6re continu, not6 0, de F dans C* et
+ainsi les caract6res de N(X) s'identifie aux 616merits de S2(X*), i.e. les formes
+quadratiques symbtriques sur X. La t r a n s f o r m a t i o n de Fourier ~tablit alors
+une bijection entre ~gc~ (N(X)) et ~ 2 (S z (X*)). Le groupe P (X) op6re dans S 2 (X*))
+ModUles de Whittaker d6gbnbr6s pour des groupes p-adiques                             447
+
+avec un n o m b r e fini d'orbites, les classes d'6quivalence de formes quadratiques
+sym&riques sur X. Soient /~ une telle orbite et Te/~ alors le rang de T e s t
+ind6pendant du choix de T et on le note par abus rang /3. Soit k un entier,
+on note ~k l'ensemble des 616ments de ~2 ~(N(X)) dont les transform6es de Fourier
+sont nulles sur l'ensemble des orbites de S z ( X *) de r a n g < k . So]t (~z, W) une
+repr6sentation unitaire irr6ductible alors H o w e dit que (~z, W) est de rang k
+off k < n si l'on a ~ ( ~ k ) W = 0 et ~ (~k-1)W+ 0. Ici on travaille avec des repr6senta-
+tions lisses sur un corps non archim6dien. On utilise la marne d6fnition dans
+ce cadre et on va d6montrer la proposition suivante:
+
+II.3.1. Proposition. Soit (re, W) une representation lisse irr~ductible de Sp(2n, F).
+Alors (re, W) est de rang k, off k est un entier < n si et seulernent si pour tout
+(9~Xtr(zc) et tout Te(9 le rang de T vu comme endomorphisme de X + X* est
+infdrieur ou dgal & k avec l'~galit~ pour au moins une orbite de ~ttr(~).
+    Le lien entre cette proposition et le chapitre I provient de ce que la d6finition
+du petit rang dans le cadre lisse est en fait 6quivalente ~ des conditions sur
+les modules de Jacquet relativement aux caract6res de N(X). Soient TESZ(X *)
+et (~, W) une repr6sentation lisse; on note ~r le caract6re de N ( X ) associ6
+/t T et on pose: NTW,={(~(n))--~tT(n))v , Off n ~ N ( X ) et v~W}. Soit k un entier
+inf6rieur strictement fin alors a d'apr6s ([M], 4 lemme et 5. (i)):
+     W e s t de rang k si et seulement si: W / N r W = O pour tout T e S 2 ( X *) de
+rang strictement plus grand que k et il existe T e S 2 ( X *) de rang k tel que
+W / N r W + O.
+    En [M] on a v6rifi6 plus pr6cis6ment que si W e s t irr6ductible de rang
+k avec k < n, il existe une orbite, not6e/~, de S 2 (X*) de rang k telle que quelque
+soit TE/3, l'application naturelle:
+
+                W ~ Indg~)x) • Ncx) W/NT W           o ~ 1 0 T ( X ) :=stabo~(x) T,
+               w -~ (~ - . ~ ( ~ ) w + N~ l/V/N~ l/v),
+
+est injective. 9
+    Dans ces conditions on dit, c o m m e en [M], que iW est concentr6e sur ft.
+On a d'ailleurs en plus, dans ces conditions (cf. [M], 4), W / N r, 1W=0 p o u r
+tout T'r      (fl est la fermeture de fi dans S2(X*)). On va d'abord d6montrer
+le lemme suivant:
+11.3.2. Lemme. Soient fl une orbite de S2(X *) et (Tz, W) une reprOsentation irrdduc-
+tible de Sp(2n, F). Alors (re, l/V) est concentrde sur fl si et seulement si pour
+toute orbite (Qff~Ftr(g) et tout dl~ment Y de (9 la forme linkaire T ~ b ( t r ( Y T ) )
+sur S 2 (X) appartient gt ~ et gt fl pour au moins un Y
+    Ici plut6t que de voir S2(X *) c o m m e un ensemble de formes quadratiques,
+il vaut mieux voir S 2 (X*) c o m m e l'alg6bre de Lie du radical unipotent du para-
+bolique oppos6 /t P(X). R e m a r q u o n s que p o u r tout 616merit Y de g, on peut
+d6composer Y suivant la s o m m e directe: g = S 2 (X*) 9 Lie GI(X) G S 2 (X); nous
+6crirons Y = Y + yo + y+.                                                            (1)
+    En ces termes les conditions de lemme s'expriment par:
+    V(gff~g~ttr(n), V Y~(9, on a Y - ~ f l a v e c Yefl p o u r au moins un Y
+    Soit T e S z ( X *) ('~, g) et supposons que l'on ait 1W/NTW+O. I1 est clair que
+le centre de GI(X) fournit un sous-groupe fl un param&re, not6 ~0, tel que
+448                                                                         c. Moeglin et J.L. Waldspurger:
+
+1'on ait, p o u r tout seF:
+                             VxeS2(X*),               ~o(s)x ~o(s- ~)= s- ~ x,
+                             V x e Lie G1 (X),        ~o(s)x ~o(s- ~)= x,
+                             VxeSZ(X),                ~o(s)x ~o(s-1)= s2 x.                                 (,)
+Par hypoth6se G.T est un 616ment de ,A/'Wh(rC              ) et d'apr6s 1.16 il existe une orbite
+dans J~',r(rC), not6e (9, telle que l'on ait: (T= G.T. Prenons une suite d'616ments
+Y1.... , Yp,... de (9 qui converge vers T; alors, avec les notations de (1),
+Y1- ..... Yp- .... est une suite d'616ments de S2(X *) qui converge vers T.                   (2)
+    M o n t r o n s m a i n t e n a n t que l'on a p o u r tout 616merit maximal, not6 (9, de
+
+
+                    si W e s t concentr6e sur fi, p o u r tout Ye(9 on a Y - eft.                           (3)
+
+On fixe Y,, ~k et L c o m m e en 1.1, E c o m m e en 1.2 et suivant. Pour n grand,
+on pose fy,, la fonction qui vaut 0 en dehors de e x p g " E                                    et qui vaut
+   t r g - 2 " Y l o g ; ~ p o u r y E e x p g " E . O n a m o n t r 6 dans la d 6 m o n s t r a t i o n de 1.12
+que rc(fv,,)#0. On note q0r,. l'616ment de cg~(N(X)) nul en dehors de
+exp g"(E c~S2(X)) et qui vaut ~0 tr ( g - z , log 7) p o u r 7~exp eWE. O n a montr6
+dans la d 6 m o n s t r a t i o n de 1.12 que rc(fy, n)+0. On note qb',, l'616ment de
+cg~(N(X)) nul en dehors de exp g " E ~ S2(X)) et qui vaut O otr ( g - 2 , Ylog 7)
+p o u r ~ ~ exp g " (E c~ S 2 (X)). O n v6rifie que
+
+             exp g " (E c~ S 2 (X*)) exp g " (E ~ Lie G1 (X)) exp g " (E c~ S 2 (X))
+
+est un c o m p a c t ouvert de e x p ( g " E ) . De ~z(fr,,)+0, on tire alors rc(cpr,,)~e0.
+On calcule facilement la transform6e de Fourier de Or,, c o m m e en 1.11:
+
+      ~br,, (T') = 0                                    si g - 2, y - _ T' r ( ( g " E) c~ S 2 (X)) •
+                  = mesure ( g " E c~ S 2 (X))          sinon.                                              (4)
+
+Supports que Y q~fi et fixons un voisinage, not6 ~ , de Y - tel que ~ ~ f i = 0.
+Soit n suffisamment g r a n d p o u r que Y- --}-gzn(gnE c3 S2(X))• D ~//~, et soit T'efi;
+on a gZnY'ffgznfl=-fl (cf. (*)) et il r6sulte de (4) que ~br,,(T')=0. Puisque W
+est concentr6 sur fl, on devrait avoir rc(~0r,,)= 0, ce qui d o n n e une contradiction
+p r o u v a n t (4).
+      R e p r e n o n s les 616ments introduit en (2), avec (3) on obtient que p o u r p
+suffisamment grand lip-~fl si W e s t concentr6e sur ft. Avec (3) cela p r o u v e la
+ndcessit6 des conditions du lemme.
+      R 6 c i p r o q u e m e n t s u p p o s o n s que p o u r tout 416ment maximal, not6 (9, de ~ r (~z)
+et p o u r tout Y~(9 on ait Y-Efiofl fi est de S2(X *) ct m o n t r o n s :
+
+                                         W/NrW=O,             VTr                                           (5)
+
+On raisonne p a r l'absurde en s u p p o s a n t W/NTW+O, p o u r TeS2(X*)--fl. On
+obtient c o m m e en (2), une suite d'616ments, Y1,..., Yp.... de ( 9 ~ r ( ~ ) telle que
+YI-, .... Yp- .... converge vers Tr C o m m e ces 616ments sont d a n s / ? p a r h y p o -
+th6se, on a une contradiction qui p r o u v e (5).
+ModNes de Whittaker d6g+n6r6s pour des groupes p-adiques                                   449
+
+     C o m m e en ([M], 5. (i)) on sait maintenant que la propri6t6 (3) entraine
+que West concentr~e sur une orbite de S2(X*), not6e/~', incluse dans ~'. D'apr6s
+la partie d6j/t prouv6e, p o u r tout (9~Yttr(z~) et tout Y~(9, Y-~/~'. L'hypoth+se,
+il existe (ge~ttr(~) et Ye(9 tels que Y - e / 3 entraine 6videmment que/~'=/3. D'ofi
+te lemme.
+II.3.3. Avant de prouver II.3.1, m o n t r o n s encore le lemme suivant qui utilise
+les notations de II.3.2 (1).
+Lemme. Soit (9 une G-orbite de g; on note k le rang de ses ~Idments vus comme
+endomorphismes de X 9 X*. Alors il existe Ye(9 tel que l'on ait:
+
+                                    rang Y - = inf(k, n).
+
+      M o n t r o n s d ' a b o r d que le lemme peut se r6exprimer sous la forme suivante:
+soit (9 une orbite nilpotente de 9 alors il existe un 616ment nilpotent de g notb
+Y' ayant les p r o p r b t 6 s suivantes: ((9' := G. Y')
+      (1) Y ' e g ,
+      (2) y,2 = 0 (le carr6 6tant pris c o m m e e n d o m o r p h i s m e de X | X*),     ()
+      (3) rang Y ' = i n f ( r a n g (9, n).
+      Supposons d ' a b o r d que (9~Y v6rifient les conditions du lemme; on pose
+Y ' : = Y - . I1 est clair que Y' v6rifie (2) et (3) et il v6rifie (I) grfice fi II.3.2 (,).
+R6ciproquement soit Y' v6rifiant ('); l'hypoth6se (2) assure que Y' est conjugu6
+d'un 616ment de S2(X *) et on suppose donc que Y ' e S 2 ( X * ) . On choisit alors
+une suite d'616ments de (9, not6e I:1..... Yp ..... qui converge vers Y' (cf. (1)).
+La suite des 616ments I:1- ..... Yp-,... converge aussi vers Y', d'ofi p o u r p grand
+on a rang Y f > i n f ( k , n ) (cf. (3)). Or on a sfirement rang Y p < n et Y f e 6 (cf,
+II.3.2 (,)) d'ofi rang Yp- <=k. Cela entraine le lemme. Prouvons () en commengant
+par r e m a r q u e r que (1) et (2) entrainent que l'on a rang Y ' < i n f ( k , n ) . On va
+utiliser la d6composition en bloc de J o r d a n des 616ments nilpotents de g en
+r e n v o y a n t fi ([S-S], IV, paragraphe 2); en particulier l'ensemble des dimensions
+des blocs de Jordan forme une partition symplectique de 2n, dite la partition
+assocbe fi l'orbite de l'616ment. Partant d'une orbite (9 dont la partition associ6e
+est (na, ..., nk) on va d ' a b o r d d6montrer qu'il existe une orbite (9" v6rifiant:
+      (4) (9" c 6,
+      (5) rang (9" = rang (9,
+      (6) la partition associ6e fi (9" v6rifie l'un des deux cas suivants:
+
+                        l~cas: la partition n'a que des 2 et des 1,
+                        2 ~cas: la partition n'a pas de 1.
+
+Si la partition associ6e fi (9 n'a pas de 1, on pose (9" ,=O qui convient 6videmment.
+Sinon on passe de (9 /t (9" par une suite d'op6rations 616mentaires du type
+suivant:
+     on suppose que la partion de (9 est n t ..... n~, 1,..., 1 avec r-fois 1 ot~ r > 0
+(n~cessairement r e s t pair) et on va m o n t r e r qu'il existe une orbite, not6e (~,
+v6rifiant (4) et dont la partition associ6e est soit (nt ..... n ~ _ ~ - 1 n ~ - 1 ..... nt,
+2, 2, 1.... ,1) avec r - 2 - f o i s 1 off i est un indice tel que n~ et n~_~ sont 6gaux
+strictement sup6rieur/t 2 (correspondant fi deux blocs de J o r d a n form6s d'espaces
+isotropes en dualit+), soit (nl ..... n~-2, ..., 2, 2, 1.... ,1) r - 2 - f o i s 1 off n~ cette
+450                                                                                       C. Moeglin et J.L. Waldspurger:
+
+
+fois correspond fi un bloc de Jordan symplectique de dimension > 2 (n6cessaire-
+ment paire).
+    Remarquons tout de suite que (~ v6rifie alors aussi (5), le rang se calculant
+sur la partition par la formule Znj- 1.
+    I1 est clair qu'en passant de (9 /t (~ on fait diminuer le nombre de 1 dans
+la partition et que l'existence de O prouvera celle de 0". Prouvons l'existence
+de (~. D'apr~s les propri6t6s des d6compositions en bloc de Jordan, il suffit
+de la d6montrer quand (9 a pour partition (q, q, 1, 1,) ou (2q, 1, 1) et contient
+l'+l+ment suivant, 6crit darts une base symplectique, not6e e _ ( q + 1), e q,..., e_ 1,
+e l ~ . . . , eq, eq+ 1:
+
+
+                            00                              00 t
+                            0~1-.                  0         0
+                                     "-0"1
+                                                                             off aeF(a = 0 corres-
+                                             0a
+                                                                             pond fi (q, q, 1, 1) et
+                                              q   ~xxx                       a + 0 fi (2q, 1, 1).
+                                 0                 \\
+                                                        \
+                                                            x1
+
+
+                                                            "00
+                           t00
+On remarque que e _ q , e_(~+ 1) "Jr-e_(q_ 1), e_(q_ 1D --., e _ 1, e l , . - . , eq_ 1 - - e q + 1, eq + 1,
+eq est encore une base symplectique et que Y dans cette base s'6crit sous la
+forme suivante:
+                                  0-1        -1
+                                         0    0
+                                                                   0
+
+                                                            0 "x
+                                                              \ \\
+                                                                             0
+                                                                 "~"1
+                                                                   \
+
+                                                                       '0a
+                           y:=       0                                                          0
+                                                                         01, \
+                                                        0                     x \\
+                                                                               x     \
+
+                                                                                   "0'1
+                                                                                         01_0
+                                     0                                                    I01
+                                                                                          I
+                                                                                          i   0
+
+Notons P le parabolique standard de Levi Gl(2)x Sp(2q--2); on peut 6videm-
+ment 6crire y sous la forme Y+y' off ~" appartient au Levi standard de Lie P
+et y' /t l'alg6bre de Lie du radical unipotent de P. Le centre de GI(2) fournit
+un sous-groupe fi un param~tre, not~ cp, tel que l'on ait:
+
+                                     VseF*,             q)(s).y= Y+sy';
+
+d'ofi Y~6. I1 est alors clair que l'orbite de Y,, not6e (~, convient.
+Mod6les de Whittaker d~g~n6r6s pour des groupes p-adiques                                                              451
+
+
+     Fixons maintenant C ' une orbite v6rifiant (4), (5) et (6). Si l'on est dans
+le i e cas de (6), on pose (9' :=(9" qui clairement convient, on a ici rang (9'= rang (9.
+Supposons donc que l'on est dans le deuxi6me cas de (6). On va construire
+(9' par une suite d'op6rations 616mentaires du type suivant:
+     soit (9" de partition (nl ..... nt) ne contenant pas de 1 alors il existe O" v6ri-
+fiant:
+     (7) ~" c (7",
+     (8) la partition de (~" est soit (nl,..., ni 1 - 1, n i - 1,..., nt, 2) off i est c o m m e
+dans le premier cas de la construction de O, soit (nl .... , h i - 2 ..... nt, 2) off
+i est c o m m e dans le deuxi6me cas de la construction de ~. R e m a r q u o n s qu'fi
+la fin on obtient une orbite dans la fermeture de (9 dont la partition n'est
+formbe que de 2, d'ofi 6videmment son rang est n e t le carr6 de ses 616merits
+est 0, i.e. cette orbite convient dans (')'.
+     Pour prouver l'existence de ~", on se ram6ne encore au cas off (9" contient
+l'616ment suivant, 6crit dans base symplectique e_q, ..., e_ 1, el, ..., eq:
+
+                               0 --1
+                                         0--1,                                         t
+                                                        " \\                  0
+                                                        \
+                                                            "o "'1
+                                                                    Oa                                         off a e F .
+                                                                         01,
+                                                  0                       "',"1
+                                                                             \
+
+
+                                                                                  ~
+Soit p e F , alors e _ q , . . . , e _ l , el,...,eq_l+l, te_q, e q + # e _ ( q _ n est une base
+syymplectique dans laquelle Ys'6crit sous la forme:
+
+
+                   /_-',oI-1                 o
+                                                                    I
+
+
+
+
+                                0 \x~"\ \
+                                                            0
+                                     x      x
+                                         , \- 1
+            y#:=    0                       "Oa                           0           = : (ai,j)l <=i,j<=2q.
+                               0                      0,1.
+                                                            "-,61
+                                                                ,
+                                                                "011              /
+                     -                      0                       ]o
+                                                                    I
+                                                                       o
+
+Si # est un carr6 not6 v2, alors on v6rifie que y, est conjugu6 de l'616ment
+6crit de la marne faqon que yu sauf l'616ment al,2 (notation 6vidente) qui devient
+- v -1, l'616ment a 2 q - l , 2 q qui devient v -1 et al,2q qui devient - 2 . On passe
+fi la limite quand v tend vers l'infini pour obtenir l'existence de ~".
+452                                                                 C. Moeglin et J.L. Waldspurger:
+
+      II.3.4. Preuve de II.3.1.
+Supposons d'abord que W soit une repr6sentation lisse irr6ductible de rang
+k avec k<n. On sait que W e s t concentr6e sur une orbite de S2(X*), not6e
+/?, avec rang/~= k. Soit (9~ttr(rC). Si les 616ments de (9 sont de rang strictement
+sup6rieur /t k, on choisit YE(9 tel que rang Y - > k (cf. II.3.4). Ceta contredit
+II.3.2. L'existence de YE(gEdV(r(rC) tel que rang Y=k, suit de la r6ciproque. R6ci-
+proquement soit k<n et supposons que pour tout (geoA~r (re) et tout Ys(9 on
+ait rang Y<k. Raisonnons par l'absurde en supposant d'abord que West de
+r a n g > k . Alors il existe T~S2(X *) de r a n g > k telle que W/NTQ:t=O. Comme
+en II.3.2 (2) on obtient une contradiction. Ce m6me argument prouve que W
+ne peut atre de r a n g < k s'il existe (9~JVttr(~) et Ye(9 avec rang Y=k, d'ofi II.3.1.
+
+
+Bibliographie
+[B-Z]  Bernstein, I.N., Zelevinsky, A.V.: Induced representations of reductive p-adic groups. I.
+       Ann. Sci. Ec. Norm. Super, 4es6rie, 10, 441-472 (1977)
+[B-Z2] Bernstein, I.N., Zelevinsky, A.V.: Representations of the group Gl(n, F), where F is a non
+       archimedean local field. Russ. Math. Surv. 31, 1-68 (1976)
+[B]    Bourbaki, N.: Groupes et alg6bres de Lie, Chap. 7 et 8. fasc. XXXVIII. Paris; Hermann
+       1975
+[Hch] Harish-Chandra: Admissible distributions on reductive p-adic groups, Lie Theories and
+       their applications, Queen's Papers in Pure and Applied Mathematics, Queen's University,
+       Kingston, Ontario, 1978, p. 281-347
+[H]    Howe, R.: The Fourier transform and germs of characters (case of Gin over a p-adic field).
+       Math. Ann 208, 305-322 (1974)
+[H 2]  Howe, R. : A notion of rank for unitary representations of classical groups. C.I.M.E., Summer
+       School on Harmonic Analysis, Cortona, 1980
+[M]    Mmglin, C.: Representation de petit rang d'apr6s R. Howe, expos~ au s6minaire automorphe
+       de Paris 7, preprint, 1986
+IRa]   Ranga Rao, R.: Orbital integrals in a semi-simple Lie group. Ann. Math. 96, 505 510
+       (1972)
+[R ~]  Rodier, F.: ModUle de Whittaker et caract~res de repr6sentations, in non commutative
+       harmonic analysis, 6dit6 par J. Carmona et M. Vergne, Lect. Notes Math. 466, pp. 151 171.
+       Berlin-Heidelberg-New-York: Springer 1974
+[R 2]  Rodier, F.: D6composition de la s6rie principale des groupes r~ductifs p-adiques, in non
+       commutative harmonic analysis, 6dit6 par H. Carmona et M. Vergne, Lect. Notes Math.
+       880. Berlin-Heidelberg-New-York: Springer 1981
+[R 3]  Rodier, F.: Les representations de GSp(4, k) off k est un corps local C.R. Acad. Sc. Paris
+       283, 429-431 (1976)
+IS]    Spaltenstein, N.: Classes unipotentes et sous-groupes de Borel, Lect. Notes Math. 946.
+       Berlin-Heidelberg-New-York: Springer 1982
+[S-S]  Springer, T.A., Steinberg, R.: Conjugacy classes, in A. Borel et al. : Seminar on algebraic
+       groups and related finite groups. Lect. Notes Math. 131. Berlin-Heidelberg-New-York:
+       Springer 1970
+[Z]    Zelevinsky, A.V.: Induced representations of reductive p-adic groups. II. On irreducible
+       representations of Gl(n). Ann. Sci. Ec. Norm. Super, 4es6rie 13, 165-210 (1980)
+
+
+Regu le 18 Septembre 1986
+

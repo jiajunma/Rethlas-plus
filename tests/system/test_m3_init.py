@@ -29,6 +29,9 @@ def test_init_creates_full_skeleton(tmp_path: Path) -> None:
         "runtime/jobs",
         "runtime/logs",
         "runtime/locks",
+        "runtime/queues",
+        "runtime/queues/learner",
+        "runtime/queues/referee",
         "runtime/state",
     ]:
         assert (tmp_path / rel).is_dir(), f"{rel} missing"
@@ -47,6 +50,8 @@ def test_init_writes_annotated_template_anchored_to_arch(tmp_path: Path) -> None
     assert cfg.scheduling.desired_pass_count == 3
     assert cfg.scheduling.generator_workers == 2
     assert cfg.scheduling.verifier_workers == 4
+    assert cfg.scheduling.learner_workers == 1
+    assert cfg.scheduling.referee_workers == 1
     assert cfg.scheduling.codex_silent_timeout_seconds == 1800
     assert cfg.dashboard.bind == "127.0.0.1:8765"
 
@@ -57,6 +62,8 @@ def test_init_writes_annotated_template_anchored_to_arch(tmp_path: Path) -> None
         "desired_pass_count",
         "generator_workers",
         "verifier_workers",
+        "learner_workers",
+        "referee_workers",
         "codex_silent_timeout_seconds",
         "bind",
     ]

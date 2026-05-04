@@ -20,6 +20,7 @@ verdict hash-match) remain in :mod:`librarian.projector`.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ from common.kb.types import (
     PROOF_REQUIRING_KINDS,
 )
 from common.producers import producers_toml_bytes
+from learner.decoder import LearnerDecodeError, parse_learner_batch
+from referee.decoder import RefereeDecodeError, parse_referee_report
 
 
 class AdmissionError(ValueError):
@@ -133,6 +136,55 @@ def validate_admission(
         hint = payload.get("hint")
         if not isinstance(hint, str) or not hint.strip():
             raise AdmissionError("hint must be a non-empty string")
+
+    if etype in {"source.artifact_registered", "source.spans_extracted"}:
+        if not isinstance(payload.get("source_id"), str) or not payload["source_id"]:
+            raise AdmissionError(f"{etype} requires payload.source_id")
+
+    if etype == "learner.batch_proposed":
+        try:
+            parse_learner_batch(
+                json.dumps(
+                    {
+                        "output_schema": "learner_batch_v1",
+                        "source_id": payload.get("source_id", ""),
+                        "run_id": payload.get("learner_run", ""),
+                        "context_hash": payload.get("context_hash", ""),
+                        "source_spans": payload.get("source_spans", []),
+                        "notation_contexts": payload.get("notation_contexts", []),
+                        "candidate_nodes": payload.get("candidate_nodes", []),
+                        "dependency_edges": payload.get("dependency_edges", []),
+                        "bridge_requests": payload.get("bridge_requests", []),
+                        "verification_requests": payload.get("verification_requests", []),
+                        "issues": payload.get("issues", []),
+                        "summary": payload.get("summary", ""),
+                    },
+                    sort_keys=True,
+                )
+            )
+        except LearnerDecodeError as exc:
+            raise AdmissionError(f"{exc.reason}: {exc.detail}") from exc
+
+    if etype == "learner.issue_reported":
+        if not isinstance(payload.get("source_id"), str):
+            raise AdmissionError("learner.issue_reported requires source_id")
+        if not isinstance(payload.get("issues"), list) or not payload.get("issues"):
+            raise AdmissionError("learner.issue_reported requires non-empty issues[]")
+
+    if etype == "referee.review_completed":
+        report = payload.get("report")
+        if not isinstance(report, dict):
+            raise AdmissionError("referee.review_completed requires report object")
+        try:
+            parse_referee_report(json.dumps(report, sort_keys=True))
+        except RefereeDecodeError as exc:
+            raise AdmissionError(f"{exc.reason}: {exc.detail}") from exc
+
+    if etype == "referee.citation_checked":
+        if not isinstance(payload.get("citation_check_id"), str):
+            raise AdmissionError("referee.citation_checked requires citation_check_id")
+        if not isinstance(payload.get("evidence_hash"), str) or not payload.get("evidence_hash"):
+            raise AdmissionError("referee.citation_checked requires evidence_hash")
 
 
 def _check_label_prefix(label: str, kind: NodeKind) -> None:

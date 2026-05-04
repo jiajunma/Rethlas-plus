@@ -3012,6 +3012,15 @@ Pages:
   `runtime/state/coordinator.json`
 - `GET /api/overview` — JSON payload backing the main page; combines raw
   coordinator runtime state with KB enrichment
+- `GET /api/tree` — Phase II proof-tree view. With no query string it
+  returns every `kind=theorem` as a root; `?root=<label>` returns just
+  that root's dependency subtree. Response shape:
+  `{ts, trees, node_count, edge_count}` where each tree node carries
+  `{label, kind, status, pass_count, repair_count, desired_pass_count,
+  in_flight, shared_parents, children}`. Dangling `\ref{...}` labels
+  admitted under H29 are emitted as child nodes with
+  `kind = null` and `status = "missing_from_nodes"`; corrupt cycles
+  are cut with `cycle_detected = true`.
 - `GET /api/theorems` — enriched view: all `kind=theorem` nodes with
   dashboard-derived status and links back to the relevant coordinator state
 - `GET /api/nodes` — every kind of node (definition / proposition /
@@ -3442,7 +3451,7 @@ before unlinking `dag.kz/`. Dashboard observes this and returns HTTP
 `503 Service Unavailable` with
 `Retry-After: 5` and a JSON body `{"status": "rebuild_in_progress"}`
 for any endpoint that depends on Kuzu (`/api/overview`,
-`/api/theorems`, `/api/node/...`, `/api/rejected`). Non-Kuzu endpoints
+`/api/tree`, `/api/theorems`, `/api/node/...`, `/api/rejected`). Non-Kuzu endpoints
 (`/api/coordinator`, `/api/active`, raw `/events/stream`) stay up.
 
 #### Kuzu concurrent-read note

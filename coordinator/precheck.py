@@ -90,17 +90,18 @@ def precheck_generator(
     *,
     in_flight_targets: Iterable[str],
     expected_hash_for_drift_check: str | None = None,
+    allow_reroute: bool = False,
 ) -> tuple[DispatchContext | None, PrecheckFailure | None]:
     """Validate ``cand`` for a generator dispatch.
 
     Returns ``(context, None)`` when the candidate passes; otherwise
     ``(None, failure)`` with a structured reason.
     """
-    if cand.pass_count != -1:
+    if cand.pass_count != -1 and not (allow_reroute and cand.pass_count == 0):
         return None, _fail(cand, "generator", "pool_mismatch", f"pass_count={cand.pass_count} (need -1)")
     if cand.target in in_flight_targets:
         return None, _fail(cand, "generator", "in_flight", "another job already targets this label")
-    if not cand.deps_ready:
+    if not cand.deps_ready and not allow_reroute:
         missing = [k for k, v in cand.dep_statement_hashes.items() if not v]
         return None, _fail(cand, "generator", "deps_not_ready", f"missing deps: {missing}")
     if (

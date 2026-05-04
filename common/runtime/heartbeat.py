@@ -16,6 +16,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from common.runtime.codex_runner import time_scale
 from common.runtime.jobs import update_job_file
@@ -30,6 +31,7 @@ class JobHeartbeat:
 
     job_file: Path
     interval_s: float = _DEFAULT_INTERVAL_S
+    update_fn: Callable[[Path], object] = update_job_file
 
     def __post_init__(self) -> None:
         self._stop = threading.Event()
@@ -57,7 +59,7 @@ class JobHeartbeat:
     def _run(self) -> None:
         scaled = max(0.01, self.interval_s * time_scale())
         while not self._stop.wait(scaled):
-            update_job_file(self.job_file)
+            self.update_fn(self.job_file)
 
 
 __all__ = ["JobHeartbeat"]

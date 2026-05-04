@@ -66,6 +66,66 @@ def test_repair_mode_emits_repair_context() -> None:
     assert "Initial guidance" not in prompt
 
 
+def test_high_repair_count_enters_search_branch_mode() -> None:
+    rec = _job(
+        mode="repair",
+        repair_count=2,
+        verification_report="summary: same gap again",
+        repair_hint="[verifier]\nmissing bridge",
+        h_rejected="d" * 64,
+    )
+    prompt = compose_prompt(rec)
+    assert "Search branch guidance" in prompt
+    assert "materially different proof strategy" in prompt
+    assert "Do not introduce broad algebraic geometry" in prompt
+    assert "open dense" in prompt
+
+
+def test_low_repair_count_omits_search_branch_mode() -> None:
+    rec = _job(
+        mode="repair",
+        repair_count=1,
+        verification_report="summary: local gap",
+        repair_hint="[verifier]\nfix local gap",
+        h_rejected="d" * 64,
+    )
+    prompt = compose_prompt(rec)
+    assert "Search branch guidance" not in prompt
+
+
+def test_phase2_reroute_prompt_uses_rewrite_intent() -> None:
+    rec = _job(
+        mode="repair",
+        repair_count=1,
+        repair_hint=(
+            "phase2:reroute_around_stuck_background\n"
+            "Dependencies stuck behind Phase II generic-background guard: "
+            "lem:bg, prop:equal_dimension_local_field_orbit_closures_are_equal."
+        ),
+        proof=(
+            "Old proof route cites "
+            "\\ref{prop:equal_dimension_local_field_orbit_closures_are_equal}."
+        ),
+        dep_statement_hashes={
+            "lem:bg": "ab" * 32,
+            "prop:equal_dimension_local_field_orbit_closures_are_equal": "cd" * 32,
+            "prop:allowed_problem_specific_step": "ef" * 32,
+        },
+        h_rejected="d" * 64,
+    )
+    prompt = compose_prompt(rec)
+    assert "Rewrite the proof route" in prompt
+    assert "This is not a local patch request" in prompt
+    assert "Previous proof attempt intentionally omitted" in prompt
+    assert "Old proof route cites" not in prompt
+    assert "Allowed dependency hashes" in prompt
+    assert "prop:allowed_problem_specific_step" in prompt
+    assert "- lem:bg:" not in prompt
+    assert "- prop:equal_dimension_local_field_orbit_closures_are_equal:" not in prompt
+    assert "Small repair_count suggests trying a local proof tweak" not in prompt
+    assert "Search branch guidance" not in prompt
+
+
 def test_target_state_includes_dep_hashes() -> None:
     rec = _job(dep_statement_hashes={"def:x": "ab" * 32, "lem:y": "cd" * 32})
     prompt = compose_prompt(rec)
@@ -102,6 +162,16 @@ def test_memory_scope_section_surfaces_problem_id() -> None:
     prompt = compose_prompt(rec)
     assert "## Memory scope" in prompt
     assert 'problem_id="thm_foo"' in prompt
+
+
+def test_prompt_explains_node_file_mapping_and_target_absence() -> None:
+    rec = _job(target="thm:foo")
+    prompt = compose_prompt(rec)
+    assert "## Knowledge base access" in prompt
+    assert "knowledge_base/nodes/{prefix}_{slug}.md" in prompt
+    assert "../../knowledge_base/nodes/{prefix}_{slug}.md" in prompt
+    assert "prop_maximal_rank_orbits_and_centralizers.md" in prompt
+    assert "current target may be absent" in prompt
 
 
 def test_problem_id_for_matches_mcp_sanitize_problem_id() -> None:

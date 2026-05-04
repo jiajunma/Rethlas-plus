@@ -1,0 +1,82 @@
+{
+  "source_id": "src:moeglin_waldspurger_whittaker_1987",
+  "source_spans": [
+    {
+      "span_id": "span:mw_whittaker:title",
+      "span_hash": "sha256:2391668122847db4f7d0b71f88d7fd25b7fc9312f290ee5c1b5bafc02d9b9ca7",
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "page_range": "427-430",
+      "line_start": 1,
+      "line_end": 13,
+      "description": "title and bibliographic metadata",
+      "text": "Math. Z. 196, 427-452 (1987)                                           Mathematische\n                                                                          Zeitschrift\n                                                                       9 Springer-Verlag 1987\n\n\n\n\nModUles de Whittaker d~g~n6r~s\npour des groupes p-adiques\nC. M~eglin ~ et J.L. Waldspurger 2\n  Universit6 P. et M. Curie, L.M.F. Aile 45-46, 3~       4 place Jussieu, F-75230 Paris Cedex 05,\nFrance\n2 E.N.S. centre de Math~matiques, 45, rue d'Ulm, F-75005 Paris, France"
+    },
+    {
+      "span_id": "span:mw_whittaker:rodier_character_expansion",
+      "span_hash": "sha256:4a4c0b46f3d31d6277d26299354a42faf29e9b705581746f7274a2e71c90c224",
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "page_range": "427-430",
+      "line_start": 17,
+      "line_end": 38,
+      "description": "Rodier background and local character expansion near the identity",
+      "text": "Soient F un corps p-adique de caractOristique rOsiduelle diff~rente de 2 et G\nun groupe algObrique rOductif d+fini sur F. On fixe un caractOre, not6 ~,, continu\nde F dans C*. En [R 1] Rodier a montr6 que l'existence d'un modOle de Whitta-\nker pour une reprOsentation lisse irrOductible de G se voit sur l'expression du\ncaractOre distribution de cette reprOsentation au voisinage de l'origine. Rappe-\nIons (cf. [Hch]) que si (r~, W) est une reprOsentation lisse irrOductible de G,\nil existe un voisinage de 1, not~ ~ , isomorphe par l'application logarithme\nfi un voisinage de 0 de g l'alg~bre de Lie de G, sur lequel on a une 6galit6\nde distribution:\n                                     tr rc = ~ co(j\" d/~o)^                                   (*)\n                                                    o\n\noff (9 parcourt l'ensemble des orbites nilpotentes de g, c o sont des constantes\net (S d/~o)^ est la transformOe de Fourier de la mesure invariante d/~ (convena-\n     o\nblement normalisOe cf. 1.8) sur (9; i.e. fixons une forme bilinOaire symOtrique\nn o n dOgOnOrOeg-invariante, notOe trg ou plus simplement tr; notons ^ la transfor-\nmation de Fourier sur g relativement au caractOre ~otr; alors (*) s'Ocrit\n\n                  V~0e(g2 (~),       tr n(~0)=~ ce I(~ooexp)(X)dBdX).\n                                                o       o"
+    },
+    {
+      "span_id": "span:mw_whittaker:rodier_whittaker_orbit",
+      "span_hash": "sha256:55b63f7c624ebad8d65e476ac5ca28d9cd7eaef9b99131d5dbd1d83620407406",
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "page_range": "427-430",
+      "line_start": 39,
+      "line_end": 54,
+      "description": "Rodier theorem reformulated using maximal nilpotent orbits with nonzero coefficient",
+      "text": "    Le rOsultat de Rodier (qui suppose G dOployO) s'exprime alors essentiellement\nde la fagon suivante: soit N u n sous-groupe unipotent maximal de G, T u n\ntore de G normalisant N e t 0 un caractOre non dOgOnOr6 de N, i.e. le stabilisateur\nde 0 dans Test le centre de G. La reprOsentation lisse irrOductible (re, W) admet\nun modOle de Whittaker relativement fi 0 si et seulement si c04=0, off (9 est\nl'orbite de g contenant l'616ment suivant, not6 f dOfini par:\n\n                        f0, si X est darts l'atg~bre, de Lie du Bore1 oppos6 ~i TN,\n        q)( t r j X ) = [0(exp X), si X est dans 1 alg~bre de Lie de N.\n\n428                                                         C. Moeglinet J.L. Waldspurger:\n\nMunissons l'ensemble des orbites nilpotentes de g de la relation d'ordre partielle\nd6finie par: (9 < (9'<=~(9 c (9', off - est la fermeture pour la topologie usuelle.\n    Le r6sultat de Rodier peut alors se r6exprimer en disant que (~z, W) admet\nun mod61e de Whittaker si et seulement si il existe une orbite nilpotente maxi-"
+    },
+    {
+      "span_id": "span:mw_whittaker:degenerate_whittaker_forms",
+      "span_hash": "sha256:abd73fc93bfc2d8f764064a603fa353a39a1b30eaca0b6b0ec734f289d5d2b19",
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "page_range": "427-430",
+      "line_start": 55,
+      "line_end": 98,
+      "description": "Definition of degenerate Whittaker forms attached to (f, phi) and the main dimension statement",
+      "text": "male, not6e (9, telle que ce =t=0.\n    Le but de ce travail est de g6n6raliser le th6or6me de Rodier en interpr6tant\nles coefficients co off (9 parcourt l'ensemble des orbites nilpotentes maximales\npour la propri6t6 ce+ 0 comme 6tant la dimension d'un espace de formes de\nWhittaker d6g6n6r6es sur V. Pour avoir une telle interpr6tation, il faut d'abord\nd6finir ce que l'on entend par forme de Whittaker d6g6n6r6e. Fixons ici (9 une\norbite nilpotente et choisissons un ~16ment de (9, not6 f On choisit aussi un\nsous-groupe fi un param6tre de G, not6 ~0, v6rifiant:\n\n                              Vs~F*,      (p(s).f =s-2f                             (**)\n\nL'existence d'un tel ~o est assur6e par la th6orie des S12-triplets ([13], w 11), mais\nremarquons qu'il y a bien d'autres choix possibles. On note U (resp. U') le\nsous-groupe unipotent de G dont l'alg6bre de Lie est form6e des 616ments, not6s\nX, v6rifiant: lim q)(s). S = 0 (resp. lim q0(s)s -1. X = 0). On note U\" le sous-groupe\n             s~O                   s~O\n\nde U engendr6 par U' et par le stabilisateur dans U de f. On v6rifie que la\nfonction 7 -~ O t r J . log 7 est un caract~re de U\", not6 Oy, et on pose:\n\n                              =                           ww.\n\n\nOn dit que W admet un mod61e de Whittaker d6g6n6r6 relativement /t (f, q))\nsi Wv-,y#:O. Si U\"#: U, on remarque que U/U\"nKerOf est un groupe de Hei-\nsenberg de centre U\"/U\"chKer 0 f et on note 5~ la repr6sentation irr6ductible\nde ce groupe de caract6re central 0f- On pose:\n\n                      We,y= Wv,, f                  si U= U\"\n                           = Horny (5P, Wv-,y)      si U :~ U\".\n\nEt on appelle We,s l'espace des formes de Whittaker d6g6n6r6es sur Wrelative-\nment fi (f, ~o). Cet espace d6pend en g6n6ral du choix de ~0 (par exemple si\nf = 0, on peut prendre ~o de telle sorte que soit U\" = 1 soit U\" est un sous-groupe\nunipotent maximal de G; dans le premier cas We,y= W e t darts le deuxi6me\ncas We,y est le module de Jacquet usuel relativement /t U\"). On note ~tt~(7c)\nl'ensemble des orbites nilpotentes pour lesquelles c~ + 0 (cf. (*)) et ~Wh(TC)l'ensem-\nble des orbites nilpotentes contenant un 616ment f pour lequel il existe un sous-\ngroupe/t un param6tre not6 ~o, v6rifiant (, ,) et pour lesquels We.y + 0.\n     Le rbsultat principal de ce travail, objet du chapitre I, est de d6montrer\nque les 616merits maximaux de Wtt~(n) coincident avec les 616ments maximaux\nde SWh(~) et que si (9 est un 616ment maximal de l'un de ces ensembles, on\na:\nc~=dim We,s, off f~(9 et ~o est n'importe quel sous-groupe fi un param6tre v6ri-"
+    },
+    {
+      "span_id": "span:mw_whittaker:proof_method_examples",
+      "span_hash": "sha256:3b7833a1b90c2ea05268eb42589bd31826cef19474031e9b5170d22d66437398",
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "page_range": "427-430",
+      "line_start": 99,
+      "line_end": 117,
+      "description": "Proof method and chapter II examples/open p-adic orbit property",
+      "text": "fiant (, ,).\n     L'id6e de la d6monstration se trouve d6jfi darts [H ~] et [Rt], elle consiste\n/t remarquer que l'espace des coinvariants Wv-,s peut darts certains cas s'expri-\n\nModUlesde Whittaker d6g6nfir+spour des groupes p-adiques                       429\n\nmer comme limite d'un syst6me inductif de semi-invariants pour une famille\nde sous-groupes compacts de G relativement fi certains caract&es de ces sous-\ngroupes.\n     Dans le chapitre lI, on donne d'abord quelques exemples ot~ l'on sait d6crire\nles 616ments maximaux de ~tr(~) et calculer les constantes; c'est le cas des\nsous-quotients irr6ductibles des s6ries principales r6guli6res des groupes clas-\nsiques d6ploy6s (la d6composition de ces s6ries principales est faites dans jR2])\net le cas de G1, (on utilise alors les r6sultats de [Z]). Ces exemples sugg6rent\nque, notant F une cl6ture alg6brique de F, il existe une unique G(F)-orbite\nnilpotente dans g|          not6e g, telle que les 616merits maximaux de Jttr(rC)\nsoient inclus dans (~ c~ g. Cette propri6t6 est vraie pour Ies corps archim6diens\ngrace aux travaux de Barbasch-Vogan et de Joseph, mais nous ne savons pas\nla d6montrer dans le cas p-adique (saul pour G1,). A la fin du chapitre II, on"
+    },
+    {
+      "span_id": "span:mw_whittaker:local_setup",
+      "span_hash": "sha256:15653a79aa90275b55ec9f116fb05ac240b67212eb30715431d7a872b9bc6151",
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "page_range": "427-430",
+      "line_start": 120,
+      "line_end": 181,
+      "description": "Chapter I local setup: p-adic field, lattice, exponential/logarithm formulas, nilpotent Y and one-parameter subgroup",
+      "text": "Chapitre I. Mod61e de Whittaker d6g6n6r6\n\n1.1. Soient F, G, g, 44 tr, comme dans l'introduction. On note !~ l'anneau des\nentiers de F et u~ une uniformisante de g). On suppose que ~ est non ramifi6,\ni.e. son conducteur est 9 . On fixe un sous-~-module libre de g, not6 L et\nv6rifiant:\n                                 9 g=L|\n                                           FL, L] c L.\n\nRappclons ici quelques formules que l'on utilisera dans la suite:\n9 il existe A ~ N tel que exp soit d6finie, injective sur c~AL. On note log:\n\n                      exp u ~ a L ~ ~AL, l'application r6ciproque.             (1)\n\n9 soit c 6 N ; on peut choisir A, v6rifiant (1) et tel que l'on ait:\n\n                       9 Vn, m>A,           VXeu~\"L,       VY~uW\"L:            (2)\n\nlog (exp X exp Y)--(X+ Y+I/2[X, Y])eu~\"+\"+CL,\n\n                     9 Vn>A,         Vm,      VXeu~\"L,      VY6tM\"L,           (3)\n\n(exp X) Y(exp - X ) ' ( Y +   IX, Y ] ) ~ n + \" + C L .\n1.2. Soit Y~L; on suppose que Yest un 616ment nilpotent de g. On note y e\nle centralisateur de Ydans g. On a classiquement:\n\n                        y e = {XegIVZ~g,             tr(Y[X,Z])=O}.\nOn fixe un sous-groupe a un param6tre de G d'image un tore d6ploy6 de rang\nun, (p: F* ~ G de telle sorte que l'on ait:\n                              VseF*: qo(s) Y~o(s)-1 = s -2 Y                   (2)\n\n430                                                                 C. Moeglin et ].L. Waldspurger:\n\n\nOn d6compose g sous l'action adjointe de ~0, i.e.:\n\n             g= Y, 9i,      of9,={X~glVseF*,              q~(s)X~o(s)-~=-s~X}.\n\nL'existence d'un tel q) est assur6e par ([B], w 11), mais on peut donner bien\nd'autres exemples qui ne proviennent pas de la th6orie des S/2-triplets. Par\nexemples suppons que G soit simple d6ploy6 et admette un sous-groupe paraboli-\nque dont le radical unipotent, not6 U, soit ab61ien; on d6compose ce parabolique\nsous la forme MU, o6 M est un sous groupe de L6vi; le centre de M est\nun tore d6ploy6 de rang un, not6 C. On peut dans ce cas choisir un homorphisme\nq~: F* --, C tel quc p o u r tout X ~16ment de Lie U on ait:\n\n                                 ~o(s) X q~(s- ~)=s- 2 S.\nAinsi si Yappartient fi Lie U, q0 convient mais en g~n~ral ~o(F*) et exp Y n'appar-\ntiennent p a s / t l'image d'un h o m o r p h i s m e de S12 dans G.\n    On pose:\n                                           t.-=q~(~).                                          (2)\nC o m m e q)(F*) laisse stable Y~, on fixe un suppl6mentaire stable par ~0(F*)\nde Y#, not6 m e t on a la d~composition:\n\n                             11l= ~, m i     o1.1 lTti:=m(-3g i.\n                                  ie~\n\nOn pose m - := y ' m~ et m 2 : = ~ m i . I1 est clair que l'application:\n                 i_<O             i>__2"
+    }
+  ],
+  "existing_kb_matches": [],
+  "notation_context": {
+    "language": "French OCR from PDF; accents are noisy in extracted text.",
+    "article": "C. Moeglin and J.-L. Waldspurger, Modeles de Whittaker degeneres pour des groupes p-adiques, Math. Z. 196 (1987), 427-452.",
+    "label_style": "Use ASCII slugs only, e.g. def:degenerate_whittaker_form and ext:moeglin_waldspurger_main_theorem.",
+    "expected_conservatism": "Only propose source-backed definitions or external theorem candidates; record OCR/math ambiguities as issues instead of inventing proofs."
+  },
+  "budgets": {
+    "max_nodes": 6,
+    "max_bridge_requests": 4,
+    "max_issues": 6
+  },
+  "local_artifact": {
+    "pdf_path": "/tmp/rethlas-phase3-mw.ZRTX5G/sources/moeglin_waldspurger_whittaker/paper.pdf",
+    "text_path": "/tmp/rethlas-phase3-mw.ZRTX5G/sources/moeglin_waldspurger_whittaker/pages_1_8.txt",
+    "pdf_sha256": "5faa6797d9d76af54f2ddb50409bde87e498d58bd3d51b760bac0bbedac6fbc8"
+  }
+}

@@ -42,6 +42,8 @@ class ConfigError(ValueError):
 DEFAULT_DESIRED_PASS_COUNT: Final[int] = 3
 DEFAULT_GENERATOR_WORKERS: Final[int] = 2
 DEFAULT_VERIFIER_WORKERS: Final[int] = 4
+DEFAULT_LEARNER_WORKERS: Final[int] = 1
+DEFAULT_REFEREE_WORKERS: Final[int] = 1
 DEFAULT_CODEX_SILENT_TIMEOUT_SECONDS: Final[int] = 1800
 DEFAULT_DASHBOARD_BIND: Final[str] = "127.0.0.1:8765"
 
@@ -51,6 +53,8 @@ _SCHEDULING_KEYS: Final[frozenset[str]] = frozenset(
         "desired_pass_count",
         "generator_workers",
         "verifier_workers",
+        "learner_workers",
+        "referee_workers",
         "codex_silent_timeout_seconds",
     }
 )
@@ -66,6 +70,8 @@ class SchedulingConfig:
     desired_pass_count: int = DEFAULT_DESIRED_PASS_COUNT
     generator_workers: int = DEFAULT_GENERATOR_WORKERS
     verifier_workers: int = DEFAULT_VERIFIER_WORKERS
+    learner_workers: int = DEFAULT_LEARNER_WORKERS
+    referee_workers: int = DEFAULT_REFEREE_WORKERS
     codex_silent_timeout_seconds: int = DEFAULT_CODEX_SILENT_TIMEOUT_SECONDS
 
 
@@ -152,6 +158,12 @@ def _parse_scheduling(raw: Mapping[str, Any]) -> SchedulingConfig:
         ),
         verifier_workers=_positive_int(
             raw, "verifier_workers", DEFAULT_VERIFIER_WORKERS, minimum=1
+        ),
+        learner_workers=_positive_int(
+            raw, "learner_workers", DEFAULT_LEARNER_WORKERS, minimum=1
+        ),
+        referee_workers=_positive_int(
+            raw, "referee_workers", DEFAULT_REFEREE_WORKERS, minimum=1
         ),
         codex_silent_timeout_seconds=_positive_int(
             raw,

@@ -122,10 +122,14 @@ agents/
 sources/
   artifacts/        original PDFs/TeX, page images, OCR/layout/TeX outputs
   spans.py          source-span records with page/bbox or TeX line/confidence
+  blocks.py         theorem/proof/definition/citation logical blocks
+  notation.py       scoped notation and symbol context records
   ocr.py            scanned-PDF OCR pipeline
   tex.py            TeX project parsing, theorem envs, refs/citations/macros
   alignment.py      PDF span <-> TeX span alignment
-  citations.py      external reference retrieval and evidence records
+  citations.py      external reference retrieval, downloads, and evidence records
+  approvals.py      user-approved external premises with scope/trust metadata
+  requests.py       bridge/verification/citation/manual request records
 
 reviews/
   reports/          referee report Markdown/YAML records
@@ -140,10 +144,16 @@ dashboard/
 This is conceptual. It can be implemented incrementally inside the existing
 packages first, then split once boundaries stabilize.
 
-Phase 3 adds `learner` and `referee` as top-level Codex-call roles. They are
-orchestration agents over source spans, node drafts, generator, verifier, and
-retrieval. Generator and verifier remain inner tools; learner/referee do not
-directly mutate durable state.
+Phase 3 adds two paper-reading workflows as top-level Codex-call roles:
+
+```text
+learn_source   learner reads a source and builds the KB
+review_source  referee reads a source and reviews mathematical correctness
+```
+
+They are orchestration agents over source spans, node drafts, generator,
+verifier, and retrieval. Generator and verifier remain inner tools;
+learner/referee do not directly mutate durable state.
 
 Runtime-wise, `learner` and `referee` should be independent roles like
 `generator` and `verifier`: each gets its own job type, prompt contract,
@@ -163,13 +173,18 @@ The two Phase 3 agents have different durable outputs:
 - `learner` outputs source-backed candidate node batches, dependency edges,
   bridge-lemma requests, and extraction issues.
 - `referee` outputs review reports, verdicts, citation checks, verified repair
-  records, and unresolved gap reports.
+  records, reconstructed-jump evidence, and unresolved gap reports.
 
 They may both request generator/verifier work, but the request is scoped by the
 top-level role. Learner asks "what can be learned into the KB from this
 source?" Referee asks "is this claim/proof correct, and where does it fail?"
 This distinction prevents review work from silently becoming a broad import
 job, and prevents source ingestion from silently accepting unreviewed gaps.
+For referee, an informal proof jump is not automatically a defect: it becomes
+acceptable evidence when the LLM reconstructs the omitted chain and verifier
+accepts it under the original statement, hypotheses, dependencies, and notation.
+If reconstruction changes that proof context, the result is a revision
+recommendation or gap, not validation of the source proof.
 
 Learner's long-term product is a larger, better indexed knowledge base.
 Generator should consume learner output only after librarian admission and
@@ -203,6 +218,13 @@ emit structured requests such as `bridge_requested`,
 The scheduler then dispatches generator, verifier, retrieval, or dashboard
 manual-review work and resumes the source/review job with the result. This
 keeps budgets, logs, retries, and provenance observable.
+Citation retrieval should first use local KB/source artifacts, then public
+metadata and legally accessible PDF/TeX downloads. If the reference cannot be
+resolved, the dashboard should ask the user for a reference PDF/TeX or for an
+explicit approval of the cited theorem as a bounded external premise. A user
+approval can unblock a review, but it must be recorded with statement hash,
+scope, trust level, and dependent claims; it is not the same as verifier or
+formal proof success.
 
 Referee should write to a separate review workspace, not directly to
 `knowledge_base/nodes/`. Its default durable output is a report with issues,

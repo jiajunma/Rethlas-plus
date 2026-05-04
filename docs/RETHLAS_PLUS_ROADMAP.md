@@ -220,9 +220,16 @@ local nodes.
 
 ## Phase III: Source-to-KB Extraction and Review
 
-Phase III is the bridge from theorem-library search to source ingestion. It
-turns articles and books into node documents and reviews them for logical
-gaps.
+Phase III is the paper-reading layer. It has two end-to-end goals:
+
+```text
+learn_source   read papers/books and organize a larger searchable KB
+review_source  read papers/books and check whether the mathematical proofs work
+```
+
+It is the bridge from theorem-library search to source ingestion. It turns
+articles and books into node documents, and it produces review reports for
+logical gaps, missing details, unclear citations, and incorrect proofs.
 
 It solves:
 
@@ -236,7 +243,12 @@ It solves:
 - review hidden hypotheses, notation drift, citation applicability, source
   extraction quality, edge cases, and counterexample attempts;
 - use generator/verifier to repair the missing logical chain when possible;
+- accept omitted proof details when they can be reconstructed by the LLM and
+  verified under the original proof context;
 - retrieve external references and citation evidence for review;
+- automatically download publicly accessible cited references when possible,
+  otherwise request user-supplied PDFs/TeX or explicit user approval of the
+  cited theorem as a bounded external premise;
 - flag unrepaired gaps explicitly instead of silently accepting them;
 - keep referee reports, requested details, evidence, and repair attempts in a
   separate review workspace so review work does not pollute the node library;
@@ -279,18 +291,16 @@ structured spans and references.
 
 Implementation order should be source-first:
 
-- source artifact pipeline: PDF/text/OCR/TeX/layout extraction, PDF-TeX
-  alignment, and span records;
-- job-v2 envelope for source-oriented roles;
-- learner role, decoder, `learner.batch_proposed`, and librarian admission;
-- Kuzu provenance edges from source spans to nodes;
-- referee role, review reports, citation checks, and external-reference
-  evidence;
-- separate review workspace for referee reports, issues, requested details,
-  evidence, and repair attempts;
-- scheduler request queues for bridge generation, verification, citation
-  retrieval, and manual checks;
-- dashboard source/provenance/review views.
+```text
+P3.A Source artifacts and hashes
+P3.B Source spans, logical blocks, notation contexts, and Kuzu source graph
+P3.C TeX project parsing and macro/citation extraction
+P3.D PDF-TeX alignment and visual/manual check queue
+P3.E Learner role, job-v2, decoder, batch admission, and verification requests
+P3.F Referee role, review workspace, issue severity, citations, and requested details
+P3.G Request scheduler for bridge, verification, citation, and manual checks
+P3.H Dashboard source/provenance/review views
+```
 
 The reward target is different for the two modes:
 

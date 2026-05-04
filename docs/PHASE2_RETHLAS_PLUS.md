@@ -777,6 +777,24 @@ Branch actions:
 - change invariant or model;
 - formalize a key definition.
 
+First implementation guard:
+
+- `repair_count < 2`: ordinary local repair is still allowed.
+- `repair_count = 2`: generator prompt enters search-branch mode and must
+  produce a materially different strategy, with helper nodes tied narrowly to
+  the target instead of expanding generic background.
+- `repair_count > 2`: coordinator stops auto-dispatching the same target and
+  surfaces `search_branch_stuck` in the heartbeat/attention stream. A new
+  sibling branch or an explicit user strategy hint is required to continue.
+- Generator-introduced generic background helpers rejected once are treated as
+  `generic_background_stuck`, so runs like `inducedorbittoy` stop expanding
+  broad algebraic-geometry preliminaries and return to a problem-specific
+  branch or explicit external theorem.
+- A deliberate user hint containing `phase2:allow_problem_specific_branch`
+  reopens exactly that target for one problem-specific repair attempt. Use it
+  only with concrete strategy text; it is an operator override, not a generic
+  retry button.
+
 Selector actions:
 
 - `promote`

@@ -1,30 +1,45 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "VerificationOutput",
+  "title": "PhaseIVerifierOutput",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "verification_report",
+    "verification_hash",
     "verdict",
-    "repair_hints"
+    "verification_report",
+    "repair_hint"
   ],
   "properties": {
+    "verification_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "gap",
+        "critical"
+      ]
+    },
     "verification_report": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "summary",
+        "checked_items",
+        "gaps",
         "critical_errors",
-        "gaps"
+        "external_reference_checks"
       ],
       "properties": {
         "summary": {
           "type": "string"
         },
-        "critical_errors": {
+        "checked_items": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/finding"
+            "$ref": "#/$defs/checked_item"
           }
         },
         "gaps": {
@@ -33,35 +48,137 @@
             "$ref": "#/$defs/finding"
           }
         },
-        "notes": {
-          "type": "string"
-        },
-        "checked_items": {
+        "critical_errors": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/finding"
           }
         },
         "external_reference_checks": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/external_reference_check"
           }
         }
       }
     },
-    "verdict": {
-      "type": "string",
-      "enum": [
-        "correct",
-        "wrong"
-      ]
-    },
-    "repair_hints": {
+    "repair_hint": {
       "type": "string"
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "accepted"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verification_report": {
+            "properties": {
+              "gaps": {
+                "maxItems": 0
+              },
+              "critical_errors": {
+                "maxItems": 0
+              }
+            }
+          },
+          "repair_hint": {
+            "const": ""
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "gap"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verification_report": {
+            "properties": {
+              "gaps": {
+                "minItems": 1
+              },
+              "critical_errors": {
+                "maxItems": 0
+              }
+            }
+          },
+          "repair_hint": {
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "critical"
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verification_report": {
+            "properties": {
+              "critical_errors": {
+                "minItems": 1
+              }
+            }
+          },
+          "repair_hint": {
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
+    "checked_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "status",
+        "notes"
+      ],
+      "properties": {
+        "location": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "gap",
+            "critical"
+          ]
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
     "finding": {
       "type": "object",
       "additionalProperties": false,
@@ -77,11 +194,37 @@
         "issue": {
           "type": "string",
           "minLength": 1
+        }
+      }
+    },
+    "external_reference_check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "location",
+        "reference",
+        "status",
+        "notes"
+      ],
+      "properties": {
+        "location": {
+          "type": "string",
+          "minLength": 1
         },
-        "severity": {
+        "reference": {
           "type": "string"
         },
-        "evidence": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "verified_in_nodes",
+            "verified_external_theorem_node",
+            "missing_from_nodes",
+            "insufficient_information",
+            "not_applicable"
+          ]
+        },
+        "notes": {
           "type": "string"
         }
       }

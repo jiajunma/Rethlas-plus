@@ -11,6 +11,11 @@ Phase I event types (§3.5.1):
 - ``user.node_added`` / ``user.node_revised`` / ``user.hint_attached``
 - ``generator.batch_committed``
 - ``verifier.run_completed``
+
+Phase III event types:
+- ``source.artifact_registered`` / ``source.spans_extracted``
+- ``learner.batch_proposed`` / ``learner.issue_reported``
+- ``referee.review_completed`` / ``referee.citation_checked``
 """
 
 from __future__ import annotations
@@ -25,6 +30,12 @@ EVENT_TYPES: Final[frozenset[str]] = frozenset(
         "user.hint_attached",
         "generator.batch_committed",
         "verifier.run_completed",
+        "source.artifact_registered",
+        "source.spans_extracted",
+        "learner.batch_proposed",
+        "learner.issue_reported",
+        "referee.review_completed",
+        "referee.citation_checked",
     }
 )
 

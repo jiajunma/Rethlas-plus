@@ -27,6 +27,10 @@ from common.runtime.jobs import (
     list_jobs,
     update_job_file,
 )
+from common.runtime.jobs_v2 import (
+    list_role_jobs,
+    update_role_job_file,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +75,39 @@ def reconcile_publishing_jobs(
             )
         else:
             update_job_file(
+                path,
+                status=STATUS_APPLY_FAILED,
+                reason=row.reason,
+                detail=row.detail,
+            )
+        delete_job_file(path)
+        resolved.append(
+            ReconcileOutcome(
+                job_id=rec.job_id,
+                target=rec.target,
+                kind=rec.kind,
+                status=row.status,
+                reason=row.reason,
+            )
+        )
+    for rec in list_role_jobs(jobs_dir):
+        if rec.status != "publishing":
+            continue
+        event_id = rec.output_event_id or _extract_event_id(rec.detail)
+        if not event_id:
+            continue
+        row = applied_event_status(ws, event_id)
+        if row is None:
+            continue
+        path = job_file_path(jobs_dir, rec.job_id)
+        if row.status == "applied":
+            update_role_job_file(
+                path,
+                status=STATUS_APPLIED,
+                detail=f"event_id={event_id}",
+            )
+        else:
+            update_role_job_file(
                 path,
                 status=STATUS_APPLY_FAILED,
                 reason=row.reason,

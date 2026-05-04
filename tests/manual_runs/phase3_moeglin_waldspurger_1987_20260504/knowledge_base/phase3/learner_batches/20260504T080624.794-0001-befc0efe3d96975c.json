@@ -1,0 +1,245 @@
+{
+  "actor": "learner:mw-proof-enrich",
+  "context_hash": "sha256:85d9e2109d135e9d7af4c79bfc61d919bdb35fb0f409ada7a4f81420044bc366",
+  "event_id": "20260504T080624.794-0001-befc0efe3d96975c",
+  "event_type": "learner.batch_proposed",
+  "hash": "sha256:ae1024a7a65faabae9f477435b4e24713f38f64dab2b1a1259e1624541683c13",
+  "learner_run": "learn_mw_i_11_i_12_proof_enrichment_001",
+  "payload": {
+    "bridge_requests": [
+      {
+        "blocks": [
+          "lem:mw_i_12_dimension_coefficient"
+        ],
+        "budget_class": "local_bridge",
+        "from_claim": "After localizing the orbital integral in Lemma I.12, dim W_n is reduced to c_O times mes(varpi^n E) times a quotient-measure factor on a finite-level quotient attached to G(Y).",
+        "local_context_labels": [
+          "prop:mw_i_11_orbit_from_whittaker",
+          "lem:mw_i_6_character_stabilizer",
+          "ext:harish_chandra_local_character_expansion"
+        ],
+        "max_new_nodes": 1,
+        "request_id": "bridge_req_mw_i_12_measure_cancellation",
+        "requester": "learner",
+        "source_spans": [
+          {
+            "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+            "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+          }
+        ],
+        "to_claim": "The determinant computation for t on g/y together with the Jacobian normalization of exp cancels the quotient-measure factor exactly, so the remaining prefactor is 1 and dim W_n = c_O."
+      }
+    ],
+    "candidate_nodes": [
+      {
+        "depends_on": [
+          "lem:mw_i_10_nonzero_invariants",
+          "ext:harish_chandra_local_character_expansion"
+        ],
+        "kind": "proposition",
+        "label": "prop:mw_i_11_orbit_from_whittaker",
+        "proof": "Using 1.10, the proof reduces to the case where W_n is nonzero for all sufficiently large n. It introduces the test function phi_n supported on G_n with value chi_n^{-1} there and uses the trace identity dim W_n = (mes G_n)^(-1) tr pi(phi_n). For large n, tr pi(phi_n) is computed via the local character expansion 1.8, and the Fourier transform of phi_n composed with exp is shown to vanish unless the variable lies in varpi^(-2n)Y plus the annihilator of varpi^n E; otherwise it contributes a constant multiple of mes(varpi^n E). Therefore nonvanishing of tr pi(phi_n) forces the existence of some nilpotent orbit O with nonzero coefficient c_O meeting that translate of varpi^(-2n)Y. Since nilpotent orbits are stable under scalar multiplication, this gives intersections of O with Y plus a shrinking neighborhood of 0 for arbitrarily large n, and because there are only finitely many nilpotent orbits, one such orbit must have Y in its closure.",
+        "proof_status": "proof_sketch_extracted",
+        "proof_steps": [
+          {
+            "depends_on": [
+              "lem:mw_i_10_nonzero_invariants"
+            ],
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Apply Lemma 1.10 to assume W_n != 0 for all sufficiently large n."
+          },
+          {
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Define phi_n on G, supported on G_n, and use dim W_n = (mes G_n)^(-1) tr pi(phi_n)."
+          },
+          {
+            "depends_on": [
+              "ext:harish_chandra_local_character_expansion"
+            ],
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Compute the Fourier transform of phi_n o exp and deduce that tr pi(phi_n) can be nonzero only if some orbit with c_O != 0 meets varpi^(-2n)Y plus the annihilator of varpi^n E."
+          },
+          {
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Rescale by scalar stability of nilpotent orbits to obtain intersections with Y plus shrinking neighborhoods of 0, then use finiteness of nilpotent orbits to conclude Y lies in the closure of one orbit with nonzero coefficient."
+          }
+        ],
+        "remark": "The displayed Fourier-support formula is OCR-noisy, but the reduction from nonzero W_n to an orbit meeting shrinking neighborhoods of Y is clear in the span.",
+        "source_note": "Proof-enrichment re-emission of the existing Proposition I.11 candidate.",
+        "source_refs": [
+          {
+            "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+            "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+          }
+        ],
+        "statement": "If the degenerate Whittaker space attached to Y is nonzero, then there exists a nilpotent orbit O in g that occurs with nonzero coefficient in the local character expansion of tr pi near the identity and whose closure contains Y."
+      },
+      {
+        "depends_on": [
+          "prop:mw_i_11_orbit_from_whittaker",
+          "lem:mw_i_6_character_stabilizer",
+          "ext:harish_chandra_local_character_expansion"
+        ],
+        "kind": "lemma",
+        "label": "lem:mw_i_12_dimension_coefficient",
+        "proof": "The proof explicitly reuses the notation and calculations from 1.11. By the maximality hypothesis on O = G.Y, for large n the support window isolated in 1.11 only sees the orbit O among the orbits with nonzero coefficients, so dim W_n is written as c_O times the orbital integral of phi_n o exp over O, hence as c_O times mes(varpi^n E) times a quotient-measure integral on O identified with G/G(Y). The proof then uses that t normalizes G(Y) and translates the relevant subset by t^(-n); after identifying this translated set with a small exponential neighborhood, an element exp X in it must preserve the character chi_n on G_n. By 1.6(iii), this forces X to lie in varpi^n m', which localizes the orbital integral to a quotient-measure factor over a finite-level quotient. The final displayed lines compute the determinant of t on g/y by pairing eigenvalues and then use the chosen orbital-measure normalization together with the Jacobian of exp on varpi^n E to cancel the remaining factor, yielding dim W_n = c_O. Because those determinant and measure formulas are partly obscured by OCR, the exact cancellation is left as a bridge request rather than claimed as fully reconstructed.",
+        "proof_status": "proof_incomplete",
+        "proof_steps": [
+          {
+            "depends_on": [
+              "prop:mw_i_11_orbit_from_whittaker",
+              "ext:harish_chandra_local_character_expansion"
+            ],
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Reuse the trace formula and support computation from 1.11; maximality of O implies that for large n only O contributes among orbits with nonzero coefficients near the relevant support window."
+          },
+          {
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Identify O with G/G(Y), note that t normalizes G(Y), and translate the support condition by t^(-n) so that it can be compared with a small exponential neighborhood exp(varpi^c m')."
+          },
+          {
+            "depends_on": [
+              "lem:mw_i_6_character_stabilizer"
+            ],
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "If exp X lies in the translated subset, then equality of the characters for all Z in varpi^n E means exp X normalizes chi_n; by 1.6(iii), this is equivalent to X lying in varpi^n m'."
+          },
+          {
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Substitute this description into the orbital integral to express dim W_n as c_O times mes(varpi^n E) times a quotient-measure factor on a finite-level quotient attached to G(Y)."
+          },
+          {
+            "source_ref": {
+              "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+              "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+            },
+            "step": "Use the determinant computation for t on g/y and the normalization of the exponential Jacobian to cancel the remaining factor and conclude dim W_n = c_O; the exact displayed cancellation is the unreconstructed step."
+          }
+        ],
+        "remark": "The proof logic is largely recoverable, but the final determinant and measure-normalization cancellation is too damaged in OCR to treat as fully extracted.",
+        "source_note": "Proof-enrichment re-emission of the existing Lemma I.12 candidate.",
+        "source_refs": [
+          {
+            "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+            "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+          }
+        ],
+        "statement": "Let O = G.Y and suppose its coefficient c_O in 1.8 is nonzero and Y does not lie in the closure of any other orbit with nonzero coefficient in 1.8. Then for all sufficiently large n, dim W_n is finite, independent of n, and equal to c_O."
+      }
+    ],
+    "context_hash": "sha256:85d9e2109d135e9d7af4c79bfc61d919bdb35fb0f409ada7a4f81420044bc366",
+    "dependency_edges": [
+      {
+        "dependency": "lem:mw_i_10_nonzero_invariants",
+        "dependent": "prop:mw_i_11_orbit_from_whittaker",
+        "relation": "uses"
+      },
+      {
+        "dependency": "ext:harish_chandra_local_character_expansion",
+        "dependent": "prop:mw_i_11_orbit_from_whittaker",
+        "relation": "uses"
+      },
+      {
+        "dependency": "prop:mw_i_11_orbit_from_whittaker",
+        "dependent": "lem:mw_i_12_dimension_coefficient",
+        "relation": "uses"
+      },
+      {
+        "dependency": "lem:mw_i_6_character_stabilizer",
+        "dependent": "lem:mw_i_12_dimension_coefficient",
+        "relation": "uses"
+      },
+      {
+        "dependency": "ext:harish_chandra_local_character_expansion",
+        "dependent": "lem:mw_i_12_dimension_coefficient",
+        "relation": "uses"
+      },
+      {
+        "dependency": "bridge_req_mw_i_12_measure_cancellation",
+        "dependent": "lem:mw_i_12_dimension_coefficient",
+        "relation": "needs_bridge"
+      }
+    ],
+    "issues": [
+      {
+        "description": "In Proposition I.11 the displayed computation of the Fourier transform of phi_n o exp is legible at the level of its support consequence, but the exact lattice-annihilator notation is OCR-damaged.",
+        "issue_id": "issue:mw_i_11_fourier_support_formula_ocr",
+        "issue_type": "ocr_low_confidence",
+        "source_ref": {
+          "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+          "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+        }
+      },
+      {
+        "description": "In Lemma I.12 the final quotient-measure identity, determinant computation for t on g/y, and exponential-Jacobian normalization are partly unreadable in OCR, so the exact cancellation proving the prefactor is 1 should be transcribed manually.",
+        "issue_id": "issue:mw_i_12_measure_normalization_ocr",
+        "issue_type": "needs_manual_transcription",
+        "source_ref": {
+          "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+          "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+        }
+      }
+    ],
+    "learner_run": "learn_mw_i_11_i_12_proof_enrichment_001",
+    "notation_contexts": [
+      {
+        "label": "ctx:mw_i_11_finite_level_trace_formula",
+        "source_refs": [
+          {
+            "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+            "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+          }
+        ],
+        "statement": "For large n, the proof uses the compactly supported test function phi_n on G that equals chi_n^{-1} on G_n and 0 outside G_n, together with the identity dim W_n = (mes G_n)^(-1) tr pi(phi_n)."
+      },
+      {
+        "label": "ctx:mw_i_12_orbit_quotient_setup",
+        "source_refs": [
+          {
+            "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+            "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+          }
+        ],
+        "statement": "In 1.12 the orbit O = G.Y is identified with G/G(Y); the element t normalizes G(Y), and the support condition coming from 1.11 is translated by t^(-n) and compared with a small exponential neighborhood exp(varpi^c m')."
+      }
+    ],
+    "source_id": "src:moeglin_waldspurger_whittaker_1987",
+    "source_spans": [
+      {
+        "source_id": "src:moeglin_waldspurger_whittaker_1987",
+        "span_hash": "sha256:dd0fc085b49d04492a469b159eaea36defa35df9abc1b6b5bbe96702dc23641f",
+        "span_id": "span:mw_whittaker:i_11_i_12_proof_enrichment"
+      }
+    ],
+    "summary": "Re-emitted the existing I.11 proposition and I.12 lemma with source-backed proof skeletons. Proposition I.11 is reconstructed through the finite-level trace formula, Fourier-support argument, and shrinking-neighborhood closure argument; Lemma I.12 is reconstructed through orbital-integral localization and the stabilizer criterion from 1.6(iii), with one bridge request isolating the OCR-damaged final determinant and measure-normalization cancellation.",
+    "verification_requests": []
+  },
+  "schema": "rethlas-learner-batch-artifact-v1",
+  "source_id": "src:moeglin_waldspurger_whittaker_1987",
+  "status": "proposed",
+  "ts": "2026-05-04T16:06:24.794+08:00"
+}

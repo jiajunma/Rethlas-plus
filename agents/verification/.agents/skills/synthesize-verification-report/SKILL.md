@@ -1,56 +1,56 @@
 ---
 name: synthesize-verification-report
-description: Aggregate all detected errors and gaps into the final verification report, apply strict accept/reject logic, and produce repair hints when rejected.
+description: Build the Phase I verifier verdict JSON for one target node.
 ---
 
 # Synthesize Verification Report
 
-Produce the final verification output JSON and verdict.
+Aggregate the verification reasoning into the final JSON object consumed by
+`verifier/role.py`.
 
 ## Input Contract
 
-Read all findings from:
+Use the current run's in-context findings:
 
-- `statement_checks`
-- `reference_checks`
+- checked proof items
+- dependency checks
+- external-reference observations
+- gaps
+- critical errors
+- prompt-provided `verification_hash`
 
-Each issue must include `location` and `issue`.
+Do not query memory or write result files.
 
 ## Procedure
 
-1. Collect all critical errors and all gaps from previous checks.
-2. Build a complete `verification_report` object with:
-   - `summary`
-   - `critical_errors`
-   - `gaps`
-3. Apply strict verdict rule:
-   - `correct` iff `critical_errors=[]` and `gaps=[]`.
-   - otherwise `wrong`.
-4. If verdict is `wrong`, produce concrete non-empty `repair_hints`.
-5. Validate the output via `validate_verification_output`.
-6. Persist output via `write_verification_output`.
+1. Include every checked item, gap, critical error, and external-reference
+   check. Do not drop weak findings to make the verdict cleaner.
+2. Choose verdict:
+   - `accepted` iff `gaps=[]` and `critical_errors=[]`;
+   - `critical` iff `critical_errors` is non-empty;
+   - otherwise `gap`.
+3. For `accepted`, set `repair_hint` to `""`.
+4. For `gap` or `critical`, set `repair_hint` to a concise non-empty summary of
+   what evidence or revision the generator should provide. Do not write a
+   replacement proof.
+5. Return the raw JSON object as the final output with no markdown fence and no
+   prose after it.
 
 ## Output Contract
 
-Final output JSON:
-
 ```json
 {
+  "verification_hash": "string from prompt",
+  "verdict": "accepted",
   "verification_report": {
     "summary": "string",
+    "checked_items": [],
+    "gaps": [],
     "critical_errors": [],
-    "gaps": []
+    "external_reference_checks": []
   },
-  "verdict": "correct",
-  "repair_hints": ""
+  "repair_hint": ""
 }
 ```
 
-If there is any error or gap, verdict must be `"wrong"` and `repair_hints` must be non-empty.
-
-## MCP Tools
-
-- `memory_query`
-- `memory_append`
-- `validate_verification_output`
-- `write_verification_output`
+The `verification_hash` must exactly match the prompt value.

@@ -1,0 +1,147 @@
+{
+  "source_id": "src:moeglin_waldspurger_whittaker_1987",
+  "source_spans": [
+    {
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "span_id": "span:mw_whittaker:ii_1_3_corollary_whittaker_dimensions",
+      "span_hash": "sha256:e1cbea195a044bbb2518bc60f12b0f8de7985a303d98b7a9b3a1ff89929c3b67",
+      "description": "II.1.3 corollary: degenerate Whittaker models and dimension formula for regular principal series constituents",
+      "page_range": "443-452",
+      "line_start": 920,
+      "line_end": 932,
+      "text": "                                        (gelnd~O~                                     O\n\n\nDans l e c a s qui nous interessait co, = 0 si (9,, + 0 et C{o}= 1 d'ofl dans ce cas:\n\n                tr p ( f ) =          ~'          Istab~(X~)/stabv (X~)I ~ f ( x ) drip(X).\n                               6 e i n d GM {0}                                   0\n\n\nP o u r terminer la d6monstration de la proposition, il ne reste plus qu'fi remarquer\nque l'on a;\n    VF, F ' e J tels que Sr c St, , alors P r c Pr' et en particulier en notant \"Pr\net \"Pr, les alg+bres de Lie des radicaux unipotents de Pr et Pr,, on a \"Pr ~ \"Pr'-"
+    },
+    {
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "span_id": "span:mw_whittaker:ii_3_1_small_rank_statement",
+      "span_hash": "sha256:779803d3257bfc71f087c7dd6d8cdaa06af13bbe3871a81d408268a1f1630733",
+      "description": "II.3.1 proposition statement: small rank for Sp(2n,F) characterized by ranks of character-expansion nilpotent orbits",
+      "page_range": "443-452",
+      "line_start": 1044,
+      "line_end": 1074,
+      "text": "D a n s [H2], H o w e a introduit la notion de petit rang p o u r certaines repr6senta-\ntions unitaires de G:=Sp(2n, F), off F est un corps local. R a p p e l o n s r a p i d e m e n t\nla d6finition: on fixe un espace vectoriel de dimension n, not6 X et on munit\nX + X* de la forme symplectique usuelle et on repr6sente G c o m m e les a u t o m o r -\nphismes symplectiques de cet espace vectoriel. On note P(X) le sous-groupe\nde G qui normalise X et N(X) son radical unipotent. N(X) est ab61ien et s'identi-\nfie /t son alg~bre de Lie, not6e n, par l'application 7 ~ 7 - 1 ; q u a n t fi n, c'est\nune alg6bre de Lie ab61ienne i s o m o r p h e c o m m e espace vectoriel fi l'ensemble\nde 2-tenseurs sym6triques sur X, not6 S 2 (X), c'est-fi-dire les formes q u a d r a t i q u e s\nsym&riques sur X*. On fixe un caract6re continu, not6 0, de F dans C* et\nainsi les caract6res de N(X) s'identifie aux 616merits de S2(X*), i.e. les formes\nquadratiques symbtriques sur X. La t r a n s f o r m a t i o n de Fourier ~tablit alors\nune bijection entre ~gc~ (N(X)) et ~ 2 (S z (X*)). Le groupe P (X) op6re dans S 2 (X*))\n\nModUles de Whittaker d6gbnbr6s pour des groupes p-adiques                             447\n\navec un n o m b r e fini d'orbites, les classes d'6quivalence de formes quadratiques\nsym&riques sur X. Soient /~ une telle orbite et Te/~ alors le rang de T e s t\nind6pendant du choix de T et on le note par abus rang /3. Soit k un entier,\non note ~k l'ensemble des 616ments de ~2 ~(N(X)) dont les transform6es de Fourier\nsont nulles sur l'ensemble des orbites de S z ( X *) de r a n g < k . So]t (~z, W) une\nrepr6sentation unitaire irr6ductible alors H o w e dit que (~z, W) est de rang k\noff k < n si l'on a ~ ( ~ k ) W = 0 et ~ (~k-1)W+ 0. Ici on travaille avec des repr6senta-\ntions lisses sur un corps non archim6dien. On utilise la marne d6fnition dans\nce cadre et on va d6montrer la proposition suivante:\n\nII.3.1. Proposition. Soit (re, W) une representation lisse irr~ductible de Sp(2n, F).\nAlors (re, W) est de rang k, off k est un entier < n si et seulernent si pour tout\n(9~Xtr(zc) et tout Te(9 le rang de T vu comme endomorphisme de X + X* est\ninfdrieur ou dgal & k avec l'~galit~ pour au moins une orbite de ~ttr(~).\n    Le lien entre cette proposition et le chapitre I provient de ce que la d6finition"
+    },
+    {
+      "source_id": "src:moeglin_waldspurger_whittaker_1987",
+      "span_id": "span:mw_whittaker:ii_3_3_rank_projection_full",
+      "span_hash": "sha256:09384bcf803b850bd752d38427dc1b83f0ae9b8203ec86977b2e7a30ab617403",
+      "description": "II.3.3 lemma and proof sketch: choose an element in an orbit whose S^2(X*) component has rank inf(k,n), followed by proof of II.3.1",
+      "page_range": "443-452",
+      "line_start": 1144,
+      "line_end": 1324,
+      "text": "est concentr6 sur fl, on devrait avoir rc(~0r,,)= 0, ce qui d o n n e une contradiction\np r o u v a n t (4).\n      R e p r e n o n s les 616ments introduit en (2), avec (3) on obtient que p o u r p\nsuffisamment grand lip-~fl si W e s t concentr6e sur ft. Avec (3) cela p r o u v e la\nndcessit6 des conditions du lemme.\n      R 6 c i p r o q u e m e n t s u p p o s o n s que p o u r tout 416ment maximal, not6 (9, de ~ r (~z)\net p o u r tout Y~(9 on ait Y-Efiofl fi est de S2(X *) ct m o n t r o n s :\n\n                                         W/NrW=O,             VTr                                           (5)\n\nOn raisonne p a r l'absurde en s u p p o s a n t W/NTW+O, p o u r TeS2(X*)--fl. On\nobtient c o m m e en (2), une suite d'616ments, Y1,..., Yp.... de ( 9 ~ r ( ~ ) telle que\nYI-, .... Yp- .... converge vers Tr C o m m e ces 616ments sont d a n s / ? p a r h y p o -\nth6se, on a une contradiction qui p r o u v e (5).\n\nModNes de Whittaker d6g+n6r6s pour des groupes p-adiques                                   449\n\n     C o m m e en ([M], 5. (i)) on sait maintenant que la propri6t6 (3) entraine\nque West concentr~e sur une orbite de S2(X*), not6e/~', incluse dans ~'. D'apr6s\nla partie d6j/t prouv6e, p o u r tout (9~Yttr(z~) et tout Y~(9, Y-~/~'. L'hypoth+se,\nil existe (ge~ttr(~) et Ye(9 tels que Y - e / 3 entraine 6videmment que/~'=/3. D'ofi\nte lemme.\nII.3.3. Avant de prouver II.3.1, m o n t r o n s encore le lemme suivant qui utilise\nles notations de II.3.2 (1).\nLemme. Soit (9 une G-orbite de g; on note k le rang de ses ~Idments vus comme\nendomorphismes de X 9 X*. Alors il existe Ye(9 tel que l'on ait:\n\n                                    rang Y - = inf(k, n).\n\n      M o n t r o n s d ' a b o r d que le lemme peut se r6exprimer sous la forme suivante:\nsoit (9 une orbite nilpotente de 9 alors il existe un 616ment nilpotent de g notb\nY' ayant les p r o p r b t 6 s suivantes: ((9' := G. Y')\n      (1) Y ' e g ,\n      (2) y,2 = 0 (le carr6 6tant pris c o m m e e n d o m o r p h i s m e de X | X*),     ()\n      (3) rang Y ' = i n f ( r a n g (9, n).\n      Supposons d ' a b o r d que (9~Y v6rifient les conditions du lemme; on pose\nY ' : = Y - . I1 est clair que Y' v6rifie (2) et (3) et il v6rifie (I) grfice fi II.3.2 (,).\nR6ciproquement soit Y' v6rifiant ('); l'hypoth6se (2) assure que Y' est conjugu6\nd'un 616ment de S2(X *) et on suppose donc que Y ' e S 2 ( X * ) . On choisit alors\nune suite d'616ments de (9, not6e I:1..... Yp ..... qui converge vers Y' (cf. (1)).\nLa suite des 616ments I:1- ..... Yp-,... converge aussi vers Y', d'ofi p o u r p grand\non a rang Y f > i n f ( k , n ) (cf. (3)). Or on a sfirement rang Y p < n et Y f e 6 (cf,\nII.3.2 (,)) d'ofi rang Yp- <=k. Cela entraine le lemme. Prouvons () en commengant\npar r e m a r q u e r que (1) et (2) entrainent que l'on a rang Y ' < i n f ( k , n ) . On va\nutiliser la d6composition en bloc de J o r d a n des 616ments nilpotents de g en\nr e n v o y a n t fi ([S-S], IV, paragraphe 2); en particulier l'ensemble des dimensions\ndes blocs de Jordan forme une partition symplectique de 2n, dite la partition\nassocbe fi l'orbite de l'616ment. Partant d'une orbite (9 dont la partition associ6e\nest (na, ..., nk) on va d ' a b o r d d6montrer qu'il existe une orbite (9\" v6rifiant:\n      (4) (9\" c 6,\n      (5) rang (9\" = rang (9,\n      (6) la partition associ6e fi (9\" v6rifie l'un des deux cas suivants:\n\n                        l~cas: la partition n'a que des 2 et des 1,\n                        2 ~cas: la partition n'a pas de 1.\n\nSi la partition associ6e fi (9 n'a pas de 1, on pose (9\" ,=O qui convient 6videmment.\nSinon on passe de (9 /t (9\" par une suite d'op6rations 616mentaires du type\nsuivant:\n     on suppose que la partion de (9 est n t ..... n~, 1,..., 1 avec r-fois 1 ot~ r > 0\n(n~cessairement r e s t pair) et on va m o n t r e r qu'il existe une orbite, not6e (~,\nv6rifiant (4) et dont la partition associ6e est soit (nt ..... n ~ _ ~ - 1 n ~ - 1 ..... nt,\n2, 2, 1.... ,1) avec r - 2 - f o i s 1 off i est un indice tel que n~ et n~_~ sont 6gaux\nstrictement sup6rieur/t 2 (correspondant fi deux blocs de J o r d a n form6s d'espaces\nisotropes en dualit+), soit (nl ..... n~-2, ..., 2, 2, 1.... ,1) r - 2 - f o i s 1 off n~ cette\n\n450                                                                                       C. Moeglin et J.L. Waldspurger:\n\n\nfois correspond fi un bloc de Jordan symplectique de dimension > 2 (n6cessaire-\nment paire).\n    Remarquons tout de suite que (~ v6rifie alors aussi (5), le rang se calculant\nsur la partition par la formule Znj- 1.\n    I1 est clair qu'en passant de (9 /t (~ on fait diminuer le nombre de 1 dans\nla partition et que l'existence de O prouvera celle de 0\". Prouvons l'existence\nde (~. D'apr~s les propri6t6s des d6compositions en bloc de Jordan, il suffit\nde la d6montrer quand (9 a pour partition (q, q, 1, 1,) ou (2q, 1, 1) et contient\nl'+l+ment suivant, 6crit darts une base symplectique, not6e e _ ( q + 1), e q,..., e_ 1,\ne l ~ . . . , eq, eq+ 1:\n\n\n                            00                              00 t\n                            0~1-.                  0         0\n                                     \"-0\"1\n                                                                             off aeF(a = 0 corres-\n                                             0a\n                                                                             pond fi (q, q, 1, 1) et\n                                              q   ~xxx                       a + 0 fi (2q, 1, 1).\n                                 0                 \\\\\n                                                        \\\n                                                            x1\n\n\n                                                            \"00\n                           t00\nOn remarque que e _ q , e_(~+ 1) \"Jr-e_(q_ 1), e_(q_ 1D --., e _ 1, e l , . - . , eq_ 1 - - e q + 1, eq + 1,\neq est encore une base symplectique et que Y dans cette base s'6crit sous la\nforme suivante:\n                                  0-1        -1\n                                         0    0\n                                                                   0\n\n                                                            0 \"x\n                                                              \\ \\\\\n                                                                             0\n                                                                 \"~\"1\n                                                                   \\\n\n                                                                       '0a\n                           y:=       0                                                          0\n                                                                         01, \\\n                                                        0                     x \\\\\n                                                                               x     \\\n\n                                                                                   \"0'1\n                                                                                         01_0\n                                     0                                                    I01\n                                                                                          I\n                                                                                          i   0\n\nNotons P le parabolique standard de Levi Gl(2)x Sp(2q--2); on peut 6videm-\nment 6crire y sous la forme Y+y' off ~\" appartient au Levi standard de Lie P\net y' /t l'alg6bre de Lie du radical unipotent de P. Le centre de GI(2) fournit\nun sous-groupe fi un param~tre, not~ cp, tel que l'on ait:\n\n                                     VseF*,             q)(s).y= Y+sy';\n\nd'ofi Y~6. I1 est alors clair que l'orbite de Y,, not6e (~, convient.\n\nMod6les de Whittaker d~g~n6r6s pour des groupes p-adiques                                                              451\n\n\n     Fixons maintenant C ' une orbite v6rifiant (4), (5) et (6). Si l'on est dans\nle i e cas de (6), on pose (9' :=(9\" qui clairement convient, on a ici rang (9'= rang (9.\nSupposons donc que l'on est dans le deuxi6me cas de (6). On va construire\n(9' par une suite d'op6rations 616mentaires du type suivant:\n     soit (9\" de partition (nl ..... nt) ne contenant pas de 1 alors il existe O\" v6ri-\nfiant:\n     (7) ~\" c (7\",\n     (8) la partition de (~\" est soit (nl,..., ni 1 - 1, n i - 1,..., nt, 2) off i est c o m m e\ndans le premier cas de la construction de O, soit (nl .... , h i - 2 ..... nt, 2) off\ni est c o m m e dans le deuxi6me cas de la construction de ~. R e m a r q u o n s qu'fi\nla fin on obtient une orbite dans la fermeture de (9 dont la partition n'est\nformbe que de 2, d'ofi 6videmment son rang est n e t le carr6 de ses 616merits\nest 0, i.e. cette orbite convient dans (')'.\n     Pour prouver l'existence de ~\", on se ram6ne encore au cas off (9\" contient\nl'616ment suivant, 6crit dans base symplectique e_q, ..., e_ 1, el, ..., eq:\n\n                               0 --1\n                                         0--1,                                         t\n                                                        \" \\\\                  0\n                                                        \\\n                                                            \"o \"'1\n                                                                    Oa                                         off a e F .\n                                                                         01,\n                                                  0                       \"',\"1\n                                                                             \\\n\n\n                                                                                  ~\nSoit p e F , alors e _ q , . . . , e _ l , el,...,eq_l+l, te_q, e q + # e _ ( q _ n est une base\nsyymplectique dans laquelle Ys'6crit sous la forme:\n\n\n                   /_-',oI-1                 o\n                                                                    I\n\n\n\n\n                                0 \\x~\"\\ \\\n                                                            0\n                                     x      x\n                                         , \\- 1\n            y#:=    0                       \"Oa                           0           = : (ai,j)l <=i,j<=2q.\n                               0                      0,1.\n                                                            \"-,61\n                                                                ,\n                                                                \"011              /\n                     -                      0                       ]o\n                                                                    I"
+    }
+  ],
+  "existing_kb_matches": [
+    {
+      "kind": "definition",
+      "label": "def:degenerate_whittaker_setup",
+      "statement": "Given a nilpotent orbit O in g and f in O, choose a one-parameter subgroup phi: F^* -> G satisfying phi(s).f = s^-2 f for all s in F^*. Define U, respectively U', as the unipotent subgroup whose Lie algebra consists of those X such that lim_{s->0} phi(s).X = 0, respectively lim_{s->0} phi(s)s^-1.X = 0. Define U'' as the subgroup of U generated by U' and the stabilizer of f in U. The function gamma |-> psi(tr(f log gamma)) is a character of U'', denoted theta_f."
+    },
+    {
+      "kind": "definition",
+      "label": "def:degenerate_whittaker_forms",
+      "statement": "For a smooth representation (pi,W) and degenerate Whittaker setup (f,phi), W is said to admit a degenerate Whittaker model relative to (f,phi) if W_{U'',theta_f} is nonzero. The space W_{f,phi} of degenerate Whittaker forms on W relative to (f,phi) is defined by W_{U'',theta_f} when U = U'', and, when U != U'', by a Hom-space from the irreducible representation of the Heisenberg quotient U/(U'' intersection ker theta_f) with central character theta_f into W_{U'',theta_f}."
+    },
+    {
+      "kind": "definition",
+      "label": "def:whittaker_orbit_sets",
+      "statement": "Order nilpotent orbits by closure: O < O' means O is contained in the usual-topology closure of O'. For a representation pi with local character coefficients c_O, the paper introduces one set of nilpotent orbits O with c_O != 0 and a second set of nilpotent orbits containing an element f for which there exists a one-parameter subgroup phi satisfying phi(s).f = s^-2 f and W_{f,phi} != 0."
+    },
+    {
+      "kind": "external_theorem",
+      "label": "ext:harish_chandra_local_character_expansion",
+      "statement": "For a smooth irreducible representation (pi,W) of G, there is a neighborhood of 1 in G identified by logarithm with a neighborhood of 0 in g on which the distribution character of pi has an expansion as a sum over nilpotent orbits O in g: tr pi = sum_O c_O times the Fourier transform of a suitably normalized invariant measure on O, with Fourier transform taken relative to psi composed with tr."
+    },
+    {
+      "kind": "external_theorem",
+      "label": "ext:rodier_whittaker_model_criterion",
+      "statement": "Assume G is split. Let N be a maximal unipotent subgroup of G, T a torus normalizing N, and theta a nondegenerate character of N, meaning its stabilizer in T is the center of G. For the nilpotent orbit O containing the element f associated to theta by the source's pairing formula, a smooth irreducible representation (pi,W) admits a Whittaker model relative to theta if and only if c_O != 0. The source also reformulates this as existence of a maximal nilpotent orbit with nonzero coefficient."
+    },
+    {
+      "kind": "external_theorem",
+      "label": "ext:moeglin_waldspurger_main_theorem",
+      "statement": "The main result of Chapter I says that the maximal elements of the nilpotent-orbit set defined by c_O != 0 coincide with the maximal elements of the nilpotent-orbit set defined by existence of nonzero W_{f,phi}. If O is a maximal element of either set, then c_O = dim W_{f,phi}, where f lies in O and phi is any one-parameter subgroup satisfying phi(s).f = s^-2 f."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_3_compact_subgroup_bch",
+      "statement": "Assume e > 2d. Then there exists B > 3d such that for every n > B the exponential map is defined and injective on varpi^n E with inverse log, and exp(varpi^n E) is a subgroup of G. For n,m > B, the logarithm of exp X exp Z and the conjugation of Z by exp X satisfy the BCH and commutator error estimates recorded in 1.3(2)-(3)."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_6_character_stabilizer",
+      "statement": "For n >= B, the functional X |-> psi(tr(varpi^(-2n) Y X)) restricts to a Lie algebra character on the lattice used to define G_n, and gamma |-> psi(tr(varpi^(-2n) Y log gamma)) defines a character chi_n of G_n. If B <= m <= n and gamma in G_m stabilizes chi_n, then gamma lies in G_n exp(varpi^m (Y_sharp intersect L))."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_10_nonzero_invariants",
+      "statement": "If the degenerate Whittaker space attached to the fixed nilpotent datum is nonzero, then for all sufficiently large n both auxiliary spaces W_n and W_n' are nonzero."
+    },
+    {
+      "kind": "proposition",
+      "label": "prop:mw_i_11_orbit_from_whittaker",
+      "statement": "If the degenerate Whittaker space attached to Y is nonzero, then there exists a nilpotent orbit O in g that occurs with nonzero coefficient in the local character expansion of tr pi near the identity and whose closure contains Y."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_12_dimension_coefficient",
+      "statement": "Let O = G.Y and suppose its coefficient c_O in 1.8 is nonzero and Y does not lie in the closure of any other orbit with nonzero coefficient in 1.8. Then for all sufficiently large n, dim W_n is finite, independent of n, and equal to c_O."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_13_trivial_action",
+      "statement": "Fix c > B. If X belongs to the deep lattice inside L intersect Y_sharp specified in 1.13, then exp X normalizes G_n and stabilizes chi_n. Hence exp X acts on W_n, and for n sufficiently large this action is trivial."
+    },
+    {
+      "kind": "proposition",
+      "label": "prop:mw_i_14_jacquet_injection",
+      "statement": "For n sufficiently large, in the diagram at the end of 1.9 the maps j and j' are injective, and the image of j' is the L'-fixed subspace of the Jacquet quotient appearing there."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_i_15_transition_injective",
+      "statement": "For n sufficiently large, the transition map I_{n,n+1} is injective."
+    },
+    {
+      "kind": "proposition",
+      "label": "prop:mw_ii_1_3_regular_principal_series_orbits",
+      "statement": "Let F_idx be an element of the indexing set J from II.1, with associated constituent pi_F and standard parabolic P_F. The maximal elements of N_tr(pi_F) are exactly the nilpotent orbits in g whose intersection with the Lie algebra u_F of the unipotent radical of P_F contains an open subset. These orbits are all contained in the Richardson orbit Omega_F of P_F."
+    },
+    {
+      "kind": "proposition",
+      "label": "prop:mw_ii_2_gl_n_unique_nilpotent_orbit",
+      "statement": "For any smooth irreducible representation pi of GL_n(F), the maximal elements of N_tr(pi) are contained in a unique nilpotent orbit of gl_n, denoted X_tr(pi)."
+    },
+    {
+      "kind": "lemma",
+      "label": "lem:mw_ii_3_2_concentration_criterion",
+      "statement": "Let beta be an orbit in S^2(X^*), and let (pi,W) be an irreducible representation of Sp(2n,F). Then W is concentrated on beta if and only if for every orbit O in the source's character-expansion set attached to pi and every Y in O, the S^2(X^*)-projection Y_minus lies in the closure of beta, and for at least one such Y it lies in beta itself."
+    }
+  ],
+  "local_artifact": {
+    "pdf_path": "/Users/hoxide/mycodes/Rethlas/tests/manual_runs/phase3_moeglin_waldspurger_1987_20260504/sources/moeglin_waldspurger_whittaker/paper.pdf",
+    "pdf_sha256": "5faa6797d9d76af54f2ddb50409bde87e498d58bd3d51b760bac0bbedac6fbc8",
+    "text_path": "/Users/hoxide/mycodes/Rethlas/tests/manual_runs/phase3_moeglin_waldspurger_1987_20260504/sources/moeglin_waldspurger_whittaker/full_text.txt",
+    "previous_batches": [
+      "/Users/hoxide/mycodes/Rethlas/tests/manual_runs/phase3_moeglin_waldspurger_1987_20260504/knowledge_base/phase3/learner_batches/20260504T054552.177-0001-0b6b3aaf5ca36d7f.json",
+      "/Users/hoxide/mycodes/Rethlas/tests/manual_runs/phase3_moeglin_waldspurger_1987_20260504/knowledge_base/phase3/learner_batches/20260504T063645.797-0001-62c81532048d8dfc.json"
+    ]
+  },
+  "notation_context": {
+    "article": "C. Moeglin and J.-L. Waldspurger, Modeles de Whittaker degeneres pour des groupes p-adiques, Math. Z. 196 (1987), 427-452.",
+    "batch_intent": "Third focused learner pass for obvious body-result gaps after two saved batches. Avoid duplicating existing labels. Prefer only new corollary/proposition/lemma candidates that are explicitly present in the spans.",
+    "expected_nodes": [
+      "II.1.3 corollary",
+      "II.3.1 proposition",
+      "II.3.3 lemma"
+    ],
+    "expected_conservatism": "If OCR-damaged formulas or partition manipulations are unsafe, record an issue requiring visual transcription rather than inventing details.",
+    "label_style": "ASCII slugs only, e.g. prop:mw_ii_3_1_small_rank_orbits or lem:mw_ii_3_3_rank_projection."
+  },
+  "budgets": {
+    "max_nodes": 5,
+    "max_bridge_requests": 3,
+    "max_issues": 6
+  }
+}

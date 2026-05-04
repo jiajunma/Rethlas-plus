@@ -2,8 +2,14 @@
 
 Date: 2026-05-03
 
-Phase 3 turns finished mathematical sources into Rethlas knowledge and review
-records. Sources include papers, books, lecture notes, preprints, and internal
+Phase 3 gives Rethlas two end-to-end paper-reading capabilities:
+
+```text
+learn_source   read a paper/book and organize a larger knowledge base
+review_source  read a paper/book and judge whether its mathematical proofs work
+```
+
+Sources include papers, books, lecture notes, preprints, and internal
 manuscripts. A source may be polished and still contain gaps, notation drift,
 implicit prerequisites, citation errors, or wrong statements.
 
@@ -18,19 +24,42 @@ Both roles may call generator and verifier through the Rethlas harness. Neither
 role directly mutates truth state. They emit proposed node batches, review
 reports, citation records, and repair tasks that the librarian validates.
 
+The shared input layer is the source-artifact pipeline: PDF, scanned PDF, TeX,
+PDF+TeX alignment, OCR, logical blocks, notation contexts, citations, and
+source spans. The two workflows diverge after that:
+
+```text
+source artifacts -> source spans/blocks/notation
+  -> learner  -> candidate KB nodes -> librarian admission -> retrieval indexes
+  -> referee  -> review report/issues/requested details -> review workspace
+```
+
+Learner output is meant to improve future proof search. Referee output is
+meant to tell an author/operator what is wrong, missing, unclear, or accepted.
+
 ## Phase Boundary
 
 Phase 2 gives Rethlas a node-first theorem library and branch search.
 
-Phase 3 adds source ingestion and review:
+Phase 3 adds source ingestion, KB learning, and proof review:
 
-- read source documents;
-- segment definitions, statements, proofs, examples, and references;
-- create candidate node documents with source provenance;
+- read source documents in PDF, scanned PDF, TeX, or PDF+TeX form;
+- segment definitions, statements, proofs, examples, notation, and references;
+- learn candidate node documents with source provenance;
+- organize learned nodes under mathematical topic paths;
+- verify extracted definitions, external theorem records, and proof nodes;
 - fill omitted proof steps where possible;
-- verify extracted logical chains;
-- retrieve and check external citations;
-- mark unresolved gaps explicitly.
+- accept ordinary proof jumps when the omitted chain can be reconstructed by
+  the LLM and verified under the original hypotheses;
+- build retrieval indexes that generator can later use;
+- independently review source proofs for correctness;
+- retrieve and check external citations during review;
+- automatically fetch publicly accessible referenced papers/books when needed,
+  or request user-supplied reference PDFs/TeX when access is missing;
+- allow an operator to explicitly approve a cited theorem as an external
+  premise, with hash, scope, and trust level recorded;
+- request missing details when the source is unclear;
+- mark unresolved gaps explicitly in review reports.
 
 Phase 3 does not require Lean and does not decide final formal truth. Formal
 kernel checking remains Phase 4.
@@ -207,6 +236,113 @@ Referee should not silently mutate theorem nodes. If it finds a useful repair
 lemma, the report may recommend a node update, but the actual node admission
 must be a separate librarian-validated node event.
 
+Recommended event payload sketches:
+
+```yaml
+source.artifact_registered:
+  source_id: src:...
+  artifacts:
+    - artifact_id: src:...:pdf
+      kind: pdf
+      path: sources/...
+      content_hash: sha256:...
+  bibliography: {}
+
+source.spans_extracted:
+  source_id: src:...
+  extraction_run: source_extract_...
+  input_artifact_hashes: {}
+  spans_manifest_hash: sha256:...
+  layout_hash: sha256:...
+  confidence_summary: {}
+
+learner.batch_proposed:
+  source_id: src:...
+  learner_run: learn_...
+  context_hash: sha256:...
+  candidate_nodes: []
+  dependency_edges: []
+  bridge_requests: []
+  verification_requests: []
+  issues: []
+
+referee.review_completed:
+  review_id: review_...
+  workspace_path: reviews/...
+  target_hashes: {}
+  verdict: needs_revision
+  issue_summary: {}
+  report_hash: sha256:...
+```
+
+Events should store compact manifests and hashes. Large reports, OCR outputs,
+page images, and repair attempt logs live as artifacts referenced by hash.
+
+### State Machines
+
+Source status:
+
+```text
+registered
+artifact_ready
+extracting
+spans_extracted
+needs_manual_cleanup
+ready_for_learning
+learned
+reviewed
+archived
+```
+
+Learner run status:
+
+```text
+queued
+running
+blocked_on_source_quality
+blocked_on_manual_transcription
+blocked_on_generator
+blocked_on_verifier
+batch_proposed
+admitted
+partially_admitted
+rejected
+closed
+```
+
+Referee run status:
+
+```text
+queued
+running
+awaiting_source
+awaiting_external_reference
+awaiting_author_details
+blocked_on_manual_check
+repair_attempted
+ready_for_decision
+closed
+```
+
+Issue status:
+
+```text
+open
+needs_source
+needs_author
+repair_in_progress
+repair_verified
+waived
+resolved
+rejected
+closed_unresolved
+```
+
+State changes that affect durable library truth must go through librarian
+admission. State changes inside `reviews/` or `sources/` can be recorded as
+review/source records but still need content hashes so reports remain
+reproducible.
+
 ### Scheduler Shape
 
 Use three queues:
@@ -230,6 +366,54 @@ manual_check_needed   -> dashboard/user queue
 When those results return, the scheduler either resumes the original
 learner/referee run or opens a follow-up job with the new evidence. This keeps
 budgeting, logs, retries, and dashboard state visible.
+
+Request objects should be explicit:
+
+```yaml
+bridge_request:
+  request_id: bridge_req_...
+  requester: learner | referee
+  source_spans: []
+  from_claim: ...
+  to_claim: ...
+  local_context_labels: []
+  max_new_nodes: 2
+  budget_class: local_bridge
+  blocks: [node_or_issue_id]
+
+verification_request:
+  request_id: verify_req_...
+  requester: learner | referee | scheduler
+  target_kind: definition | external_theorem | lemma | theorem | proposition
+  target_label: ...
+  verification_profile: verify_definition | verify_external_theorem | verify_proof_node | verify_bridge_node
+  required_for: [goal_or_issue_id]
+  context_hash: sha256:...
+
+citation_request:
+  request_id: cite_req_...
+  requester: referee | learner
+  citation_key: ...
+  claimed_use: ...
+  source_span: span:...
+  required_statement: ...
+  retrieval_policy: public_web_first | user_supplied_only | kb_only
+  allowed_sources: [doi, arxiv, zbmath, mathscinet, publisher, user_upload, kb]
+  max_depth: 2
+
+manual_check_request:
+  request_id: manual_req_...
+  kind: visual_formula_check | manual_transcription | author_detail | source_access | reference_pdf_needed | user_approve_external_premise
+  source_span: span:...
+  reason: ...
+  requested_reference: ...
+  claimed_external_statement: ...
+  blocks: []
+```
+
+All requests need idempotency keys derived from requester, target/source
+hashes, and normalized requested statement. Duplicate requests should be
+collapsed rather than retried.
 
 ### Source Storage
 
@@ -302,7 +486,9 @@ rebuilt or synchronized by the librarian.
 The librarian should reject learner/referee outputs when:
 
 - referenced source spans do not exist;
+- referenced logical blocks or notation contexts do not exist;
 - source span hashes do not match the dispatch context;
+- request idempotency keys do not match normalized request content;
 - OCR/layout confidence is below the configured threshold and no manual
   correction is cited;
 - candidate node labels conflict without an explicit revision path;
@@ -311,6 +497,8 @@ The librarian should reject learner/referee outputs when:
 - a referee report claims a citation is checked without evidence hash or
   retrieved statement summary;
 - verifier-dependent fields are marked verified without a verifier event.
+- large raw artifacts are embedded directly in event payloads instead of being
+  referenced by content hash.
 
 ### Dashboard
 
@@ -327,6 +515,40 @@ This should reuse the Phase 2 lazy graph expansion pattern: a source expands to
 spans, spans expand to learned nodes/reviews, nodes expand to proof/search
 state.
 
+### CLI and API
+
+Recommended CLI surface:
+
+```text
+rethlas source add --pdf paper.pdf [--tex main.tex] [--bib refs.bib] --topic lie_theory/...
+rethlas source extract --source src:...
+rethlas learner run --source src:... [--section ...] [--max-nodes N]
+rethlas referee run --target thm:... | --source src:... | --review-workspace reviews/...
+rethlas review list [--status open|closed|awaiting_author_details]
+rethlas review show review_...
+rethlas review request-details review_...
+rethlas review accept-update review_... --issue issue_...
+```
+
+Recommended API endpoints:
+
+```text
+GET  /api/sources
+GET  /api/source/{source_id}
+GET  /api/source/{source_id}/spans?kind=theorem|proof|definition
+GET  /api/source/{source_id}/page/{page}
+GET  /api/learner/runs
+GET  /api/learner/run/{run_id}
+GET  /api/reviews
+GET  /api/review/{review_id}
+GET  /api/review/{review_id}/issues
+POST /api/review/{review_id}/manual-resolution
+GET  /api/citations/{citation_check_id}
+```
+
+The API should return hashes and status fields with every object so the UI can
+detect stale views.
+
 ### Implementation Order
 
 Recommended order:
@@ -339,6 +561,56 @@ Recommended order:
 6. Add `agents/referee` and review/citation events.
 7. Add bridge/verification request queues instead of nested direct calls.
 8. Add dashboard source/provenance/review views.
+
+### Test Plan
+
+Minimum Phase 3 tests:
+
+- born-digital PDF extraction preserves theorem/proof order and page locators;
+- scanned PDF fixture produces OCR spans and blocks low-confidence formulas;
+- TeX fixture extracts theorem environments, labels, refs, citations, and macro
+  context hashes;
+- PDF+TeX alignment links rendered page spans to TeX line spans;
+- learner batch decoder rejects missing source span hashes;
+- learner-created definition nodes require `verify_definition`;
+- learner-created external theorem nodes require `verify_external_theorem`;
+- generator does not see learner output until librarian admission and indexing;
+- referee writes reports under `reviews/`, not `knowledge_base/nodes/`;
+- referee requested-detail issues block acceptance;
+- citation mismatch forces `citation` or `major` issue severity;
+- repeated bridge/citation/manual requests are deduplicated by idempotency key;
+- Kuzu rebuild reproduces Source/Span/Review/Citation/Issue edges from durable
+  records.
+
+### Milestones
+
+Suggested implementation milestones:
+
+```text
+P3.A Source artifacts
+  source add/extract commands, source records, PDF render/text, hashes
+
+P3.B Span and block model
+  source spans, logical blocks, notation contexts, Kuzu source graph
+
+P3.C TeX support
+  TeX project parser, macro digest, theorem env extraction, bib keys
+
+P3.D Alignment
+  PDF-TeX alignment records and visual/manual check queue
+
+P3.E Learner role
+  job-v2, learner prompt/decoder, batch admission, verification requests
+
+P3.F Referee role
+  review workspace, issue severity, citation checks, requested details
+
+P3.G Request scheduler
+  bridge/verification/citation/manual request queues and idempotency
+
+P3.H Dashboard
+  source viewer, learner run view, review/issue/citation views
+```
 
 ### `learner`
 
@@ -476,6 +748,52 @@ alignment:
   pdf_span_id: span:hartshorne_ch2:pdf:p17_b04
   tex_span_id: span:hartshorne_ch2:tex:prop_4_1
   confidence: 0.88
+```
+
+Logical blocks should be extracted above raw spans:
+
+```yaml
+block_id: block:hartshorne_ch2:prop_4_1
+source_id: src:hartshorne_ch2
+kind: definition | notation | assumption | theorem | lemma | proposition | proof | example | remark | citation | bibliography
+title: "Proposition 4.1"
+primary_span: span:...
+supporting_spans: []
+statement_span: span:...
+proof_spans: []
+numbering:
+  chapter: II
+  section: 4
+  label: "Proposition 4.1"
+tex:
+  environment: proposition
+  label: prop:...
+dependencies_hint:
+  refs: []
+  citations: []
+confidence:
+  segmentation: 0.91
+  math_text: 0.88
+  alignment: 0.84
+```
+
+Notation contexts should be explicit and scoped:
+
+```yaml
+notation_context_id: notation:hartshorne_ch2:section_2_4
+scope:
+  source_id: src:...
+  start_span: span:...
+  end_span: span:...
+symbols:
+  - symbol: "G"
+    meaning: "real reductive group"
+    introduced_at: span:...
+    confidence: 0.9
+  - symbol: "\\mathcal{O}"
+    meaning: "nilpotent orbit"
+    introduced_at: span:...
+    confidence: 0.86
 ```
 
 Node frontmatter can cite source spans:
@@ -761,8 +1079,12 @@ needs_manual_transcription
 ## Referee Skill
 
 The referee reviews a source, node set, or proposed article. It is stricter
-than learner. It should try to repair local jump steps by asking generator and
-verifier, but if repair fails it must report the gap clearly.
+than learner. It should not reject a proof merely because the source omits
+routine details. A proof jump is acceptable when the LLM can reconstruct the
+missing chain and the verifier accepts that chain under the original statement,
+hypotheses, dependencies, and notation. It should report the reconstructed
+chain as evidence. If reconstruction or verification fails, it must report the
+gap clearly.
 
 ### Responsibilities
 
@@ -775,6 +1097,7 @@ verifier, but if repair fails it must report the gap clearly.
 - ask generator for a bridge lemma or repair only when the intended fix is
   local and well-scoped;
 - ask verifier to check repaired chains;
+- distinguish verified reconstructed jumps from unresolved gaps;
 - produce a review verdict with gap severity and evidence.
 
 ### Non-goals
@@ -782,6 +1105,9 @@ verifier, but if repair fails it must report the gap clearly.
 - Do not convert every review into a full KB extraction job.
 - Do not accept a proof merely because a plausible repair exists; the repair
   must be generated and verified or listed as conjectural.
+- Do not count a generated bridge as validating the source proof if it changes
+  the theorem statement, adds a missing hypothesis, weakens the conclusion, or
+  depends on nonlocal material not available to the original proof.
 - Do not suppress unresolved citation failures.
 - Do not write referee scratch work or unresolved repairs into
   `knowledge_base/nodes/`.
@@ -908,8 +1234,11 @@ Counterexample and sanity checks:
 
 Repair boundary:
 
-- A referee may try a local repair, but the report must say whether the
-  original proof is valid as written.
+- A referee may try to reconstruct omitted details. If the reconstructed chain
+  verifies under the original hypotheses and dependencies, the omission is a
+  verified jump, not a mathematical gap.
+- The report must distinguish the source text as written from the reconstructed
+  detail used to justify it.
 - If a repair adds a hypothesis, weakens a conclusion, or changes a definition,
   it is a revision recommendation, not acceptance.
 - Generated bridge lemmas are evidence only after verifier success.
@@ -927,11 +1256,13 @@ citation      external reference unavailable, mismatched, or under-specified
 extraction    OCR/TeX/PDF evidence unreliable
 expository    unclear notation, missing definition, confusing organization
 editorial     typo or wording issue with no mathematical effect
+reconstructed_jump  omitted detail successfully generated and verified under the original proof context
 ```
 
-Only `minor`, `expository`, and `editorial` issues are compatible with
-`accepted_with_minor_gaps`. Any unresolved `blocker` or `major` issue should
-force `needs_revision`, `major_gap`, or `wrong`.
+`reconstructed_jump` is evidence, not a defect. Only `minor`, `expository`, and
+`editorial` issues are compatible with `accepted_with_minor_gaps`. Any
+unresolved `blocker` or `major` issue should force `needs_revision`,
+`major_gap`, or `wrong`.
 
 ### Workflow
 
@@ -946,7 +1277,9 @@ force `needs_revision`, `major_gap`, or `wrong`.
      a. check whether it follows from previous steps and dependencies;
      b. if a jump is local, request a generated bridge proof;
      c. verify the bridge or repaired step;
-     d. if repair fails, record an explicit gap.
+     d. if verification succeeds without changing the original proof context,
+        record a `reconstructed_jump` evidence item;
+     e. if repair fails, record an explicit gap.
 7. For external citations:
      a. retrieve source metadata and quoted theorem statement;
      b. compare cited theorem to the needed use;
@@ -979,6 +1312,7 @@ Review reports should include:
   "target_hashes": {},
   "verdict": "needs_revision",
   "checked_claims": [],
+  "reconstructed_jumps": [],
   "generated_repairs": [],
   "verified_repairs": [],
   "unresolved_gaps": [],
@@ -1017,16 +1351,34 @@ and move on.
 ## External Reference Retrieval
 
 External references are a harness service used especially by referee.
+The service should try, in order:
+
+1. Search local KB and already imported source artifacts.
+2. Resolve structured identifiers from TeX/bibliography: DOI, arXiv id, ISBN,
+   MR/Zbl ids, publisher URL, or canonical title.
+3. Fetch public metadata and legally accessible PDFs/TeX from configured
+   sources.
+4. If access is missing or the statement cannot be located, create a user
+   request for the reference PDF/TeX or exact theorem statement.
+5. If the operator explicitly approves the cited theorem, record that approval
+   as a bounded external premise, not as a verified theorem.
 
 Reference states:
 
 ```text
+kb_resolved
+downloaded_public_pdf
+downloaded_public_tex
+user_uploaded_reference
+user_approved_external_premise
 resolved_exact
 resolved_partial
 resolved_metadata_only
 missing_access
 statement_mismatch
 not_applicable
+awaiting_user_reference
+awaiting_user_approval
 ```
 
 A citation check should store:
@@ -1036,13 +1388,27 @@ citation_key: ...
 source_span: span:...
 claimed_use: ...
 retrieved_reference: ...
+reference_artifact_hash: sha256:...
+retrieval_source: kb | doi | arxiv | publisher | user_upload | user_approval
 quoted_or_paraphrased_statement: ...
+user_approval:
+  approved_by: ...
+  approved_at: ...
+  approved_statement_hash: sha256:...
+  scope: review_only | project_external_premise | kb_candidate
+  trust_level: assumed | trusted_by_user | source_verified | formally_verified
 applicability: resolved_exact | statement_mismatch | ...
 evidence_hash: sha256:...
 ```
 
 When the external source cannot be accessed, referee should say so. It should
-not invent the cited theorem.
+not invent the cited theorem. If the user uploads a PDF/TeX reference, it enters
+the same immutable source-artifact pipeline as the reviewed paper. If the user
+approves a theorem directly, the review may proceed under that explicit
+assumption, but the report must mark every dependent claim as relying on a
+`user_approved_external_premise`. That premise can later be promoted to an
+external theorem node only through librarian admission and the normal
+external-theorem verification profile.
 
 ## KB Integration
 
@@ -1144,6 +1510,11 @@ Prompt discipline:
 - Classify every issue by severity.
 - When citing an external result, record the exact retrieved statement or a
   bounded paraphrase plus evidence hash.
+- If an external result is not locally available, emit a citation request that
+  permits public retrieval. If retrieval fails, emit either
+  `reference_pdf_needed` or `user_approve_external_premise`.
+- Treat user-approved external premises as explicit assumptions with scope and
+  trust metadata, not as verified theorem nodes.
 - Attempt local bridge repair only under budget and only when the required
   statement is clear.
 - For scanned PDFs or low-confidence formulas, inspect page images or request
@@ -1164,6 +1535,12 @@ Prompt discipline:
 - Referee may attempt local repairs, but unresolved failures must be reported.
 - External citation retrieval is mandatory for referee when a proof relies on a
   citation not already in the KB.
+- Missing external references should first trigger automatic public retrieval,
+  then a user request for the reference PDF/TeX or explicit approval of the
+  cited theorem.
+- User-approved cited theorems are bounded external premises. They can unblock
+  a referee verdict, but they do not become verified KB nodes without
+  librarian admission and external-theorem verification.
 - Source provenance is required for every learned node.
 - PDF/OCR extraction is a deterministic source-artifact pipeline before
   learner/referee. Codex agents consume spans and page-image references, not
@@ -1171,3 +1548,9 @@ Prompt discipline:
 - OCR/layout confidence is part of provenance and can block learning or review.
 - Generated bridge lemmas must be explicit KB nodes or explicit proof segments,
   never hidden in prose.
+- Source spans, logical blocks, notation contexts, citation checks, and review
+  issues are durable source/review records.
+- Large artifacts stay out of event payloads; events carry manifests and
+  content hashes.
+- Bridge, verification, citation, and manual-check requests need idempotency
+  keys so retries do not duplicate work.

@@ -25,6 +25,8 @@ STATUS_NEEDS_GENERATION = "needs_generation"
 STATUS_GEN_BLOCKED_ON_DEPENDENCY = "generation_blocked_on_dependency"
 STATUS_USER_BLOCKED = "user_blocked"
 STATUS_IN_FLIGHT = "in_flight"
+STATUS_SEARCH_BRANCH_STUCK = "search_branch_stuck"
+STATUS_GENERIC_BACKGROUND_STUCK = "generic_background_stuck"
 
 
 def liveness_label(updated_at: str | None, now: datetime | None = None) -> str:
@@ -110,6 +112,8 @@ __all__ = [
     "STATUS_DONE",
     "STATUS_GEN_BLOCKED_ON_DEPENDENCY",
     "STATUS_IN_FLIGHT",
+    "STATUS_SEARCH_BRANCH_STUCK",
+    "STATUS_GENERIC_BACKGROUND_STUCK",
     "STATUS_NEEDS_GENERATION",
     "STATUS_NEEDS_VERIFICATION",
     "STATUS_USER_BLOCKED",

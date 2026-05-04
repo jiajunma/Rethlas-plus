@@ -14,6 +14,9 @@ _WORKSPACE_DIRS = (
     "runtime/jobs",
     "runtime/logs",
     "runtime/locks",
+    "runtime/queues",
+    "runtime/queues/learner",
+    "runtime/queues/referee",
     "runtime/state",
 )
 
@@ -29,6 +32,10 @@ desired_pass_count             = 3
 generator_workers              = 2
 # §10.3 — max in-flight verifier jobs per workspace.
 verifier_workers               = 4
+# Phase 3 — max in-flight learner jobs per workspace.
+learner_workers                = 1
+# Phase 3 — max in-flight referee jobs per workspace.
+referee_workers                = 1
 # §7.4 — kill threshold for a Codex subprocess whose log mtime goes stale.
 codex_silent_timeout_seconds   = 1800
 

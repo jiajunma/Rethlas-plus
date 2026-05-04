@@ -51,6 +51,11 @@ from common.events.io import event_sha256, read_event
 from common.events.filenames import parse_filename
 from common.kb.kuzu_backend import KuzuBackend
 from common.kb.types import Node, NodeKind
+from common.phase3.artifacts import (
+    write_learner_batch_artifact,
+    write_referee_report_artifact,
+    write_source_artifact,
+)
 from librarian.heartbeat import (
     LibrarianHeartbeat,
     PHASE_READY,
@@ -474,12 +479,36 @@ class LibrarianDaemon:
             if outcome.status.value == "applied":
                 self.counters.applied += 1
                 self.counters.last_applied = event_id
+                self._write_phase3_artifact(body)
                 if render_nodes:
                     self._render_for_event(body)
             else:
                 self.counters.failed += 1
 
         return (outcome.status.value, outcome.reason, outcome.detail)
+
+    def _write_phase3_artifact(self, body: dict[str, Any]) -> None:
+        """Mirror Phase 3 truth events to inspectable artifact files.
+
+        These artifacts are a read model only. Learner candidates stay under
+        ``knowledge_base/phase3/learner_batches`` and referee outputs under
+        ``reviews/``; no Phase 3 event is rendered into ``knowledge_base/nodes``.
+        """
+        etype = body.get("type", "")
+        event_id = body.get("event_id", "")
+        if not isinstance(event_id, str) or not event_id:
+            return
+        try:
+            if etype.startswith("source."):
+                write_source_artifact(self.ws.root, event_id=event_id, body=body)
+            elif etype == "learner.batch_proposed":
+                write_learner_batch_artifact(self.ws.root, event_id=event_id, body=body)
+            elif etype.startswith("referee."):
+                write_referee_report_artifact(self.ws.root, event_id=event_id, body=body)
+        except Exception as exc:
+            # Projection already succeeded; artifact mirroring is dashboard
+            # read-model work, so surface but do not roll back truth.
+            self.counters.last_error = f"phase3 artifact write failed: {exc}"
 
     def _render_for_event(self, body: dict[str, Any]) -> None:
         """Re-render every node touched (directly or via Merkle cascade) by

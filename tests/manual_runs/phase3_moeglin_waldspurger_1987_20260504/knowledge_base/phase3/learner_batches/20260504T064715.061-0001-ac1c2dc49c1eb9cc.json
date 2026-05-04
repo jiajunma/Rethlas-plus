@@ -1,0 +1,118 @@
+{
+  "actor": "learner:mw-body-gaps",
+  "context_hash": "",
+  "event_id": "20260504T064715.061-0001-ac1c2dc49c1eb9cc",
+  "event_type": "learner.batch_proposed",
+  "hash": "sha256:fac0df904e3ddc7a138553fef217c522eef34873d81587de2920e63c3cd4c570",
+  "learner_run": "learn_mw_whittaker_1987_phase3_focus_ii_001",
+  "payload": {
+    "bridge_requests": [],
+    "candidate_nodes": [
+      {
+        "kind": "proposition",
+        "label": "prop:mw_ii_3_1_small_rank_orbits",
+        "proof": "",
+        "remark": "The proposition statement is legible in the span, but the source's exact notation for the character-expansion orbit set should be checked against the PDF before canonical admission.",
+        "source_note": "Proposition II.3.1 characterizes Howe small rank in terms of the ranks of nilpotent orbits appearing in the character-expansion set attached to the representation.",
+        "source_refs": [
+          {
+            "span_hash": "sha256:779803d3257bfc71f087c7dd6d8cdaa06af13bbe3871a81d408268a1f1630733",
+            "span_id": "span:mw_whittaker:ii_3_1_small_rank_statement"
+          }
+        ],
+        "statement": "Let (pi,W) be a smooth irreducible representation of Sp(2n,F). Then (pi,W) is of rank k, for an integer k < n, if and only if every nilpotent orbit in the source's character-expansion set attached to pi has endomorphism rank at most k, and at least one such orbit has rank exactly k."
+      },
+      {
+        "kind": "lemma",
+        "label": "lem:mw_ii_3_3_rank_projection",
+        "proof": "",
+        "remark": "The lemma statement is legible, but the proof uses OCR-damaged partition manipulations and matrix displays that should be checked visually before any proof extraction.",
+        "source_note": "Lemma II.3.3 produces a representative of a nilpotent orbit whose S^2(X^*) component realizes the maximal rank allowed by the orbit rank.",
+        "source_refs": [
+          {
+            "span_hash": "sha256:09384bcf803b850bd752d38427dc1b83f0ae9b8203ec86977b2e7a30ab617403",
+            "span_id": "span:mw_whittaker:ii_3_3_rank_projection_full"
+          }
+        ],
+        "statement": "Let O be a G-orbit in g, and let k be the common rank of its elements viewed as endomorphisms of X plus X^*. Then there exists Y in O whose S^2(X^*) component has rank min(k,n)."
+      }
+    ],
+    "context_hash": "",
+    "dependency_edges": [
+      {
+        "dependency": "lem:mw_ii_3_2_concentration_criterion",
+        "dependent": "prop:mw_ii_3_1_small_rank_orbits",
+        "relation": "uses"
+      },
+      {
+        "dependency": "lem:mw_ii_3_3_rank_projection",
+        "dependent": "prop:mw_ii_3_1_small_rank_orbits",
+        "relation": "uses"
+      }
+    ],
+    "issues": [
+      {
+        "description": "The supplied II.1.3 corollary span begins inside a damaged displayed formula and continues with proof text, so the corollary statement about degenerate Whittaker models and its dimension formula are not safely recoverable from OCR alone.",
+        "issue_id": "issue:mw_ii_1_3_corollary_span_damaged",
+        "issue_type": "needs_manual_transcription",
+        "source_ref": {
+          "span_hash": "sha256:e1cbea195a044bbb2518bc60f12b0f8de7985a303d98b7a9b3a1ff89929c3b67",
+          "span_id": "span:mw_whittaker:ii_1_3_corollary_whittaker_dimensions"
+        }
+      },
+      {
+        "description": "The proof of II.3.3 contains heavily OCR-damaged matrix displays and partition manipulations. The statement is usable, but later proof extraction should be checked visually against the PDF.",
+        "issue_id": "issue:mw_ii_3_3_partition_displays_ocr",
+        "issue_type": "needs_visual_check",
+        "source_ref": {
+          "span_hash": "sha256:09384bcf803b850bd752d38427dc1b83f0ae9b8203ec86977b2e7a30ab617403",
+          "span_id": "span:mw_whittaker:ii_3_3_rank_projection_full"
+        }
+      }
+    ],
+    "learner_run": "learn_mw_whittaker_1987_phase3_focus_ii_001",
+    "notation_contexts": [
+      {
+        "label": "ctx:mw_ii_3_small_rank_setup",
+        "source_refs": [
+          {
+            "span_hash": "sha256:779803d3257bfc71f087c7dd6d8cdaa06af13bbe3871a81d408268a1f1630733",
+            "span_id": "span:mw_whittaker:ii_3_1_small_rank_statement"
+          }
+        ],
+        "statement": "In II.3, G = Sp(2n,F) is realized on X plus X^* with X of dimension n. The unipotent radical N(X) of the Siegel parabolic P(X) is abelian and identified with S^2(X), so its characters identify with S^2(X^*). Orbits in S^2(X^*) are classified by rank, and Howe's notion of rank k for a smooth irreducible representation is recalled through vanishing on lower-rank orbits."
+      },
+      {
+        "label": "ctx:mw_ii_3_projection_rank",
+        "source_refs": [
+          {
+            "span_hash": "sha256:09384bcf803b850bd752d38427dc1b83f0ae9b8203ec86977b2e7a30ab617403",
+            "span_id": "span:mw_whittaker:ii_3_3_rank_projection_full"
+          }
+        ],
+        "statement": "In II.3.3, a G-orbit in g has a well-defined common endomorphism rank on X plus X^*, and the lemma compares that orbit rank with the rank of the S^2(X^*) component of a suitable representative."
+      }
+    ],
+    "source_id": "src:moeglin_waldspurger_whittaker_1987",
+    "source_spans": [
+      {
+        "span_hash": "sha256:e1cbea195a044bbb2518bc60f12b0f8de7985a303d98b7a9b3a1ff89929c3b67",
+        "span_id": "span:mw_whittaker:ii_1_3_corollary_whittaker_dimensions"
+      },
+      {
+        "span_hash": "sha256:779803d3257bfc71f087c7dd6d8cdaa06af13bbe3871a81d408268a1f1630733",
+        "span_id": "span:mw_whittaker:ii_3_1_small_rank_statement"
+      },
+      {
+        "span_hash": "sha256:09384bcf803b850bd752d38427dc1b83f0ae9b8203ec86977b2e7a30ab617403",
+        "span_id": "span:mw_whittaker:ii_3_3_rank_projection_full"
+      }
+    ],
+    "summary": "Proposed two conservative Chapter II candidates explicitly supported by the supplied spans: Proposition II.3.1 on small rank via orbit ranks and Lemma II.3.3 on realizing the maximal possible S^2(X^*) rank inside an orbit. The dispatched II.1.3 corollary span was too OCR-damaged to extract a safe statement, so it is recorded as a transcription issue instead of a candidate node.",
+    "verification_requests": []
+  },
+  "schema": "rethlas-learner-batch-artifact-v1",
+  "source_id": "src:moeglin_waldspurger_whittaker_1987",
+  "status": "proposed",
+  "ts": "2026-05-04T14:47:15.061+08:00"
+}
