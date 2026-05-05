@@ -22,7 +22,14 @@ should be dispatched on this tick (capped by pool capacity and the
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Callable, Iterable, Sequence
+
+
+# Optional VOI-based priority hook (rethlas_scoring.scheduler.make_priority_fn).
+# Signature: (candidate_labels, capacity) -> labels-in-priority-order.
+# When ``None`` (default), the legacy ``(pass_count, label)`` ordering
+# applies — see ``docs/SCORING_INTEGRATION.md``.
+PriorityFn = Callable[[Sequence[str], int], list[str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +70,21 @@ def select_verifier_targets(
     *,
     capacity: int,
     in_flight_targets: Iterable[str],
+    priority_fn: PriorityFn | None = None,
 ) -> list[str]:
-    """§10.2.1 verifier ordering: (pass_count asc, label asc)."""
+    """§10.2.1 verifier ordering.
+
+    Default ordering is ``(pass_count asc, label asc)``. When
+    ``priority_fn`` is supplied (rollback toggle ``use_voi_scoring=True``),
+    the deduplicated label set is reordered by the VOI-aware priority
+    function before the busy-target / capacity filter is applied. The
+    ``pass_count`` deduplication invariant (one entry per label, min
+    pass_count) and the ``in_flight_targets`` skip rule are preserved
+    in both branches so the dispatcher contract does not regress.
+
+    See ``docs/SCORING_INTEGRATION.md`` for the rollback procedure.
+    """
+
     if capacity <= 0:
         return []
     busy = set(in_flight_targets)
@@ -74,9 +94,30 @@ def select_verifier_targets(
         prev = by_label.get(c.label)
         if prev is None or c.pass_count < prev:
             by_label[c.label] = c.pass_count
-    ordered = sorted(by_label.items(), key=lambda kv: (kv[1], kv[0]))
+
+    if priority_fn is None:
+        ordered_labels = [
+            lbl for lbl, _pc in sorted(by_label.items(), key=lambda kv: (kv[1], kv[0]))
+        ]
+    else:
+        # Ask the VOI scorer for a priority order; fall back to legacy
+        # if it returns nothing or a label outside the candidate set.
+        candidate_labels = list(by_label.keys())
+        try:
+            voi_order = priority_fn(candidate_labels, capacity + len(busy))
+        except Exception:
+            voi_order = []
+        valid = [lbl for lbl in voi_order if lbl in by_label]
+        # Append any candidates the priority_fn omitted, in legacy order,
+        # so we never starve a node by accident.
+        leftover = sorted(
+            (lbl for lbl in by_label if lbl not in valid),
+            key=lambda lbl: (by_label[lbl], lbl),
+        )
+        ordered_labels = valid + leftover
+
     out: list[str] = []
-    for lbl, _pc in ordered:
+    for lbl in ordered_labels:
         if lbl in busy:
             continue
         out.append(lbl)
@@ -88,6 +129,7 @@ def select_verifier_targets(
 
 __all__ = [
     "GeneratorCandidate",
+    "PriorityFn",
     "VerifierCandidate",
     "select_generator_targets",
     "select_verifier_targets",
