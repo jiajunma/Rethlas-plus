@@ -29,7 +29,13 @@ def cosine(a: tuple[float, ...], b: tuple[float, ...]) -> float:
         nb += y * y
     if na <= 0.0 or nb <= 0.0:
         return 0.0
-    return dot / math.sqrt(na * nb)
+    # Compute as product of sqrts (not sqrt of product) so the
+    # intermediate ``na * nb`` doesn't underflow to 0.0 for very small
+    # embeddings (e.g. ``(0, 0, 1e-156)``) and trip ZeroDivisionError.
+    denom = math.sqrt(na) * math.sqrt(nb)
+    if denom <= 0.0:
+        return 0.0
+    return dot / denom
 
 
 @dataclass

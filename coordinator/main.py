@@ -405,6 +405,14 @@ def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
                 id=c.target,
                 claim_text=c.statement or c.target,
                 embedding=provider.embed(c.statement or c.target),
+                # S6-E: derive a directional posterior from KB signals
+                # (pass_count + repair_count). Without this all nodes
+                # sit at 0.5 and cluster propagation produces no
+                # meaningful gradient — every neighbour looks equally
+                # suspicious. With the heuristic, repair-heavy nodes
+                # drop and their similar-embedding neighbours pick up
+                # higher cluster_susp scores.
+                posterior_p=_posterior_from_kb_signals(c),
                 # depends_on uses dep_statement_hashes keys (set of dep labels).
                 depends_on=tuple(sorted(c.dep_statement_hashes.keys())),
             )
@@ -461,6 +469,36 @@ def _evidence_from_candidate(cand: CandidateInput) -> list[Evidence]:
         )
         for i in range(cand.pass_count)
     ]
+
+
+def _posterior_from_kb_signals(cand: CandidateInput) -> float:
+    """Heuristic mapping of KB fields to a ``ScoredNode.posterior_p``.
+
+    Until the KB stores per-call Evidence + verifier confidence, the
+    only signals available about a candidate's truth-likelihood are:
+
+    - ``pass_count`` — successful verifier passes since the last
+      revision. More passes ⇒ higher posterior.
+    - ``repair_count`` — past rejections (each a critical verdict on
+      a *prior* version of the statement). Recent rejections ⇒ the
+      generator has had a hard time on this node ⇒ slight drop.
+
+    Mapping (S6-E):
+
+    - Start at neutral 0.5.
+    - Each ``pass_count`` adds +0.10, capped at 0.95.
+    - Each ``repair_count`` subtracts 0.05, floored at 0.10.
+
+    These are intentional **placeholders** — once verifier confidence
+    + ground-truth feedback land, this function should be replaced by
+    a calibrated mapping. The current values exist to give cluster
+    propagation a directional signal (similar nodes near a
+    repair-heavy node get higher cluster_susp via the
+    ``1 - posterior_p`` factor) without claiming false precision.
+    """
+
+    p = 0.5 + 0.10 * max(0, cand.pass_count) - 0.05 * max(0, cand.repair_count)
+    return max(0.10, min(0.95, p))
 
 
 def _action_for_candidate(
