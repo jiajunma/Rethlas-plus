@@ -7,14 +7,21 @@ import types
 
 import pytest
 
-import embedding.factory as factory  # noqa: F401 — for clarity in failure traces
+import embedding.factory as factory
 import embedding.openai_provider as openai_provider
 from embedding import (
+    CachingEmbeddingProvider,
     HashEmbeddingProvider,
     OpenAIEmbeddingProvider,
     default_provider,
+    reset_cache,
     selected_provider_name,
 )
+
+
+def _inner_of(p) -> object:
+    """Return the underlying (non-cache) provider for isinstance checks."""
+    return p.inner if isinstance(p, CachingEmbeddingProvider) else p
 
 
 # ---------------------------------------------------------------------------
@@ -24,9 +31,12 @@ from embedding import (
 def _clean_env(monkeypatch):
     monkeypatch.delenv("RETHLAS_EMBEDDING_PROVIDER", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    # Reset the lazy client cache so each test starts from a clean state.
+    # Reset the lazy client cache + the factory's cached wrapper so each
+    # test sees an isolated provider stack.
     openai_provider._CLIENT = None
+    reset_cache()
     yield
+    reset_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +44,8 @@ def _clean_env(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_default_provider_falls_back_to_hash_when_nothing_available() -> None:
     p = default_provider()
-    assert isinstance(p, HashEmbeddingProvider)
+    assert isinstance(p, CachingEmbeddingProvider)
+    assert isinstance(_inner_of(p), HashEmbeddingProvider)
 
 
 def test_selected_provider_name_reports_hash_when_no_openai() -> None:
@@ -46,7 +57,7 @@ def test_selected_provider_name_reports_hash_when_no_openai() -> None:
 # ---------------------------------------------------------------------------
 def test_explicit_hash_override(monkeypatch) -> None:
     monkeypatch.setenv("RETHLAS_EMBEDDING_PROVIDER", "hash")
-    assert isinstance(default_provider(), HashEmbeddingProvider)
+    assert isinstance(_inner_of(default_provider()), HashEmbeddingProvider)
     assert selected_provider_name() == "hash"
 
 
@@ -62,12 +73,12 @@ def test_unknown_env_override_silently_falls_through_to_hash(monkeypatch) -> Non
     auto-detect rather than raising."""
     monkeypatch.setenv("RETHLAS_EMBEDDING_PROVIDER", "bogus_name")
     p = default_provider()
-    assert isinstance(p, HashEmbeddingProvider)
+    assert isinstance(_inner_of(p), HashEmbeddingProvider)
 
 
 def test_env_override_case_and_whitespace_insensitive(monkeypatch) -> None:
     monkeypatch.setenv("RETHLAS_EMBEDDING_PROVIDER", "  HASH  ")
-    assert isinstance(default_provider(), HashEmbeddingProvider)
+    assert isinstance(_inner_of(default_provider()), HashEmbeddingProvider)
 
 
 # ---------------------------------------------------------------------------
@@ -91,21 +102,21 @@ def test_auto_detect_picks_openai_when_sdk_and_key_present(monkeypatch) -> None:
     _install_fake_openai(monkeypatch)
     assert openai_provider.is_available() is True
     assert selected_provider_name() == "openai"
-    assert isinstance(default_provider(), OpenAIEmbeddingProvider)
+    assert isinstance(_inner_of(default_provider()), OpenAIEmbeddingProvider)
 
 
 def test_auto_detect_skips_openai_without_key(monkeypatch) -> None:
     _install_fake_openai(monkeypatch)
     # No OPENAI_API_KEY → openai not "available" even with SDK.
     assert openai_provider.is_available() is False
-    assert isinstance(default_provider(), HashEmbeddingProvider)
+    assert isinstance(_inner_of(default_provider()), HashEmbeddingProvider)
 
 
 def test_auto_detect_skips_openai_without_sdk(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-test-only")
     monkeypatch.setitem(sys.modules, "openai", None)  # Force ImportError
     # Provider should fall back to hash without raising.
-    assert isinstance(default_provider(), HashEmbeddingProvider)
+    assert isinstance(_inner_of(default_provider()), HashEmbeddingProvider)
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 from typing import Literal
 
+from .cache import CachingEmbeddingProvider
 from .hash_provider import HashEmbeddingProvider
 from .openai_provider import OpenAIEmbeddingProvider, is_available as _openai_available
 from .provider import EmbeddingProvider
@@ -30,8 +31,17 @@ _ENV_OVERRIDE_VAR = "RETHLAS_EMBEDDING_PROVIDER"
 _VALID_OVERRIDES = frozenset({"openai", "hash"})
 
 
-def default_provider() -> EmbeddingProvider:
-    """Return the best available provider per the precedence above."""
+# Process-wide cache so repeated dispatch ticks against the same
+# workspace pay the inner provider exactly once per distinct claim.
+# Keyed by the inner provider's type so swapping providers (e.g.
+# operator flips RETHLAS_EMBEDDING_PROVIDER mid-process) doesn't
+# return stale vectors of the wrong dimension.
+_CACHE: CachingEmbeddingProvider | None = None
+_CACHED_INNER_TYPE: type | None = None
+
+
+def _build_inner() -> EmbeddingProvider:
+    """Pick the raw underlying provider per the env precedence."""
     override = os.environ.get(_ENV_OVERRIDE_VAR, "").strip().lower()
     if override and override not in _VALID_OVERRIDES:
         # Unknown override — fall through to auto-detect rather than
@@ -55,6 +65,25 @@ def default_provider() -> EmbeddingProvider:
     return HashEmbeddingProvider()
 
 
+def default_provider() -> EmbeddingProvider:
+    """Return the best available provider per the precedence above,
+    wrapped in a process-wide :class:`CachingEmbeddingProvider`."""
+    global _CACHE, _CACHED_INNER_TYPE
+    inner = _build_inner()
+    if _CACHE is None or type(inner) is not _CACHED_INNER_TYPE:
+        _CACHE = CachingEmbeddingProvider(inner=inner)
+        _CACHED_INNER_TYPE = type(inner)
+    return _CACHE
+
+
+def reset_cache() -> None:
+    """Drop the process-wide cache. Useful in tests / after operator
+    flips the env override; not normally called from production code."""
+    global _CACHE, _CACHED_INNER_TYPE
+    _CACHE = None
+    _CACHED_INNER_TYPE = None
+
+
 def selected_provider_name() -> Literal["openai", "hash"]:
     """Cheap query for logging / telemetry — what would
     :func:`default_provider` choose right now?
@@ -72,4 +101,4 @@ def selected_provider_name() -> Literal["openai", "hash"]:
     return "hash"
 
 
-__all__ = ["default_provider", "selected_provider_name"]
+__all__ = ["default_provider", "reset_cache", "selected_provider_name"]

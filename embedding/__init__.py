@@ -14,15 +14,18 @@ and persist embeddings on the KB side.
 
 from __future__ import annotations
 
-from .factory import default_provider, selected_provider_name
+from .cache import CachingEmbeddingProvider
+from .factory import default_provider, reset_cache, selected_provider_name
 from .hash_provider import HashEmbeddingProvider
 from .openai_provider import OpenAIEmbeddingProvider
 from .provider import EmbeddingProvider
 
 __all__ = [
+    "CachingEmbeddingProvider",
     "EmbeddingProvider",
     "HashEmbeddingProvider",
     "OpenAIEmbeddingProvider",
     "default_provider",
+    "reset_cache",
     "selected_provider_name",
 ]
