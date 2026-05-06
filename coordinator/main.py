@@ -92,6 +92,10 @@ from coordinator.precheck import (
     precheck_verifier,
 )
 from librarian.heartbeat import PHASE_READY, read_heartbeat as read_librarian_hb
+from rethlas_scoring.calibration import perfect_verifier_roc
+from rethlas_scoring.cluster import ClusterIndex
+from rethlas_scoring.data import ProofGraph, ScoredNode
+from rethlas_scoring.scheduler import make_priority_fn
 
 
 # Tick cadence — production default 1s, tests can shorten via env.
@@ -342,6 +346,58 @@ def _snapshot_kb(ws: WorkspacePaths) -> _KBSnapshot | None:
             )
         )
     return _KBSnapshot(candidates=out)
+
+
+# ---------------------------------------------------------------------------
+# VOI priority function — Phase B wiring (docs/SCORING_INTEGRATION.md §3).
+# ---------------------------------------------------------------------------
+def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
+    """Construct a ``PriorityFn`` from the current KB snapshot.
+
+    Returns ``None`` when the toggle is off, when the snapshot is empty,
+    or when the import / construction itself fails — in any of those
+    cases the dispatcher uses its legacy ``(pass_count, label)`` order.
+
+    Phase B uses placeholder fields:
+
+    - ``embedding=()`` disables cluster propagation until the embedding
+      pipeline lands (Phase C — see ``docs/SCORING_AUDIT.md §4.3``).
+    - ``posterior_p=0.5`` is a neutral prior; without verifier
+      confidence + calibration, a real posterior cannot be inferred.
+    - ``perfect_verifier_roc()`` short-circuits the noise model — VOI
+      will treat the verifier as oracle until ``VerifierROC`` has real
+      ground-truth feedback to calibrate against.
+
+    Even with these placeholders, the priority function still pulls
+    ``relevance_cone`` (= the dependency closure) into Z, so nodes whose
+    closure is large or whose neighbours are uncertain rank higher.
+    """
+
+    if not use_voi_scoring or not snapshot.candidates:
+        return None
+    try:
+        sg_nodes = {
+            c.target: ScoredNode(
+                id=c.target,
+                claim_text=c.statement or c.target,
+                # depends_on uses dep_statement_hashes keys (set of dep labels).
+                depends_on=tuple(sorted(c.dep_statement_hashes.keys())),
+            )
+            for c in snapshot.candidates
+            if c.target
+        }
+        if not sg_nodes:
+            return None
+        sgraph = ProofGraph.build(sg_nodes)
+        return make_priority_fn(
+            graph=sgraph,
+            roc=perfect_verifier_roc(),
+            cluster=ClusterIndex().build(sgraph),
+        )
+    except Exception:
+        # Defence-in-depth: a buggy scorer must never starve dispatch.
+        # The dispatcher itself also catches priority_fn exceptions.
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -863,8 +919,14 @@ def _tick(state: CoordinatorState) -> None:
     gen_targets = select_generator_targets(
         gen_pool, capacity=gen_capacity, in_flight_targets=in_flight_targets
     )
+    priority_fn = _build_priority_fn(
+        snapshot, use_voi_scoring=state.config.scheduling.use_voi_scoring
+    )
     ver_targets = select_verifier_targets(
-        ver_pool, capacity=ver_capacity, in_flight_targets=in_flight_targets
+        ver_pool,
+        capacity=ver_capacity,
+        in_flight_targets=in_flight_targets,
+        priority_fn=priority_fn,
     )
 
     by_label = {c.target: c for c in snapshot.candidates}

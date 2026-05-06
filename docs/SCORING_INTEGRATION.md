@@ -46,54 +46,47 @@ def select_verifier_targets(
 
 ---
 
-## 3. Turning it on (Phase B — cold)
+## 3. Turning it on (Phase B — landed in this branch)
 
-In `coordinator/main.py` around the existing
-[`select_verifier_targets`](../coordinator/main.py) call site (line 866):
+**Wiring is now in place.** Set the toggle in `rethlas.toml`:
 
-```python
-from rethlas_scoring.scheduler import make_priority_fn
-from rethlas_scoring.calibration import perfect_verifier_roc
-from rethlas_scoring.cluster import ClusterIndex
-from rethlas_scoring.data import ProofGraph, ScoredNode
-
-# ... existing code ...
-
-if state.config.scheduling.use_voi_scoring:
-    sg_nodes = {
-        c.target: ScoredNode(
-            id=c.target,
-            claim_text=c.target,            # placeholder
-            embedding=(),                   # cluster disabled until embeddings land
-            posterior_p=0.5,                # neutral prior
-        )
-        for c in snapshot.candidates
-    }
-    sgraph = ProofGraph.build(sg_nodes)
-    pfn = make_priority_fn(
-        graph=sgraph,
-        roc=perfect_verifier_roc(),         # placeholder until calibration data exists
-        cluster=ClusterIndex().build(sgraph),
-        n_voi_samples=200,
-    )
-else:
-    pfn = None
-
-ver_targets = select_verifier_targets(
-    ver_pool,
-    capacity=ver_capacity,
-    in_flight_targets=in_flight_targets,
-    priority_fn=pfn,
-)
+```toml
+[scheduling]
+use_voi_scoring = true   # default false
 ```
 
-Add `use_voi_scoring: bool = False` to the `[scheduling]` section of
-`rethlas.toml` (existing `state.config.scheduling` dataclass — extend in
-[common/config/](../common/config/)).
+What the wiring does — see [coordinator/main.py](../coordinator/main.py)
+`_build_priority_fn` (immediately after `_snapshot_kb`) and the dispatch
+site below it:
 
-This wiring is intentionally **not** committed in this branch — it
-crosses module boundaries and warrants its own PR with a config-loader
-test. Treat the pseudocode above as a recipe.
+- Builds a `ProofGraph` from the current `_KBSnapshot.candidates` each
+  tick. Each `ScoredNode` carries the candidate's `statement` as
+  `claim_text` and the `dep_statement_hashes` keys as `depends_on`.
+- Calls `make_priority_fn(graph, roc=perfect_verifier_roc(), cluster=...)`
+  and passes the result as `priority_fn=` into `select_verifier_targets`.
+- Returns `None` (→ legacy order) when the toggle is off, the snapshot
+  is empty, or anything inside the scoring layer raises. The dispatcher
+  itself also has a `try/except` guard, so two layers of defence keep
+  the scoring path from starving dispatch.
+
+Phase B intentionally uses neutral placeholders — `posterior_p=0.5`,
+`embedding=()`, `perfect_verifier_roc()`. Cluster propagation is
+inactive without embeddings; calibration is short-circuited until
+verifier confidence + ground-truth feedback exist. The VOI signal is
+still informative because it pulls each node's full
+`relevance_cone` (the dependency closure) into Z. Phase C lifts those
+placeholders.
+
+Tests covering the wiring:
+
+- [tests/scoring/test_config.py](../tests/scoring/test_config.py) —
+  parser accepts `use_voi_scoring`, defaults to `false`, rejects
+  non-bool.
+- [tests/scoring/test_main_wiring.py](../tests/scoring/test_main_wiring.py) —
+  `_build_priority_fn` returns `None` when toggle off / snapshot empty /
+  scoring layer crashes; returns a callable otherwise.
+- [tests/scoring/test_dispatcher_integration.py](../tests/scoring/test_dispatcher_integration.py) —
+  dispatcher honours, omits, and recovers from `priority_fn`.
 
 ---
 

@@ -44,6 +44,9 @@ DEFAULT_GENERATOR_WORKERS: Final[int] = 2
 DEFAULT_VERIFIER_WORKERS: Final[int] = 4
 DEFAULT_CODEX_SILENT_TIMEOUT_SECONDS: Final[int] = 1800
 DEFAULT_DASHBOARD_BIND: Final[str] = "127.0.0.1:8765"
+# Phase B rollback toggle (docs/SCORING_INTEGRATION.md §3). Default OFF
+# preserves the legacy ``(pass_count, label)`` ordering byte-for-byte.
+DEFAULT_USE_VOI_SCORING: Final[bool] = False
 
 # Known keys per section (anything else triggers an "unknown field" warning).
 _SCHEDULING_KEYS: Final[frozenset[str]] = frozenset(
@@ -52,6 +55,7 @@ _SCHEDULING_KEYS: Final[frozenset[str]] = frozenset(
         "generator_workers",
         "verifier_workers",
         "codex_silent_timeout_seconds",
+        "use_voi_scoring",
     }
 )
 _DASHBOARD_KEYS: Final[frozenset[str]] = frozenset({"bind"})
@@ -67,6 +71,7 @@ class SchedulingConfig:
     generator_workers: int = DEFAULT_GENERATOR_WORKERS
     verifier_workers: int = DEFAULT_VERIFIER_WORKERS
     codex_silent_timeout_seconds: int = DEFAULT_CODEX_SILENT_TIMEOUT_SECONDS
+    use_voi_scoring: bool = DEFAULT_USE_VOI_SCORING
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +164,9 @@ def _parse_scheduling(raw: Mapping[str, Any]) -> SchedulingConfig:
             DEFAULT_CODEX_SILENT_TIMEOUT_SECONDS,
             minimum=60,
         ),
+        use_voi_scoring=_optional_bool(
+            raw, "use_voi_scoring", DEFAULT_USE_VOI_SCORING
+        ),
     )
 
 
@@ -188,6 +196,17 @@ def _positive_int(
     if value < minimum:
         raise ConfigError(
             f"[scheduling] {key} = {value} is below minimum {minimum} (§2.4)"
+        )
+    return value
+
+
+def _optional_bool(raw: Mapping[str, Any], key: str, default: bool) -> bool:
+    if key not in raw:
+        return default
+    value = raw[key]
+    if not isinstance(value, bool):
+        raise ConfigError(
+            f"[scheduling] {key} must be a boolean, got {type(value).__name__}"
         )
     return value
 
