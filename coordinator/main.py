@@ -25,7 +25,7 @@ import signal
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path
 from typing import Any
 
@@ -421,7 +421,20 @@ def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
         }
         if not sg_nodes:
             return None
-        sgraph = ProofGraph.build(sg_nodes)
+        # S6-F: two-pass build so each node's ``speculative_load`` reflects
+        # the number of descendants in the current snapshot. ``sem_blast``
+        # / ``Score.risk`` then scale with real downstream blast radius
+        # instead of a uniform 0.0. Cost: rebuild the children dict
+        # twice, O(N + edges) total — negligible for typical workspaces.
+        graph_pass1 = ProofGraph.build(sg_nodes)
+        sg_nodes_final = {
+            nid: _dc_replace(
+                n,
+                speculative_load=float(len(graph_pass1.descendants(nid))),
+            )
+            for nid, n in sg_nodes.items()
+        }
+        sgraph = ProofGraph.build(sg_nodes_final)
         return make_priority_fn(
             graph=sgraph,
             roc=perfect_verifier_roc(),

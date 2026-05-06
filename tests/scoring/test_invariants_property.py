@@ -304,3 +304,115 @@ def test_classify_returns_documented_state_property(
 ) -> None:
     s = classify(evidence)
     assert isinstance(s, NodeState)
+
+
+# ---------------------------------------------------------------------------
+# S6-E + S6-F — coordinator heuristic invariants.
+# ---------------------------------------------------------------------------
+from coordinator.main import _posterior_from_kb_signals
+from coordinator.precheck import CandidateInput
+
+
+def _candidate(pass_count: int, repair_count: int) -> CandidateInput:
+    return CandidateInput(
+        target="lem:x",
+        target_kind="lemma",
+        statement="claim x",
+        proof="",
+        statement_hash="0" * 64,
+        verification_hash="0" * 64,
+        pass_count=pass_count,
+        repair_count=repair_count,
+        repair_hint="",
+        verification_report="",
+        dep_statement_hashes={},
+        dep_pass_counts={},
+    )
+
+
+@_PROFILE
+@given(
+    pass_count=st.integers(min_value=-5, max_value=200),
+    repair_count=st.integers(min_value=0, max_value=200),
+)
+def test_posterior_heuristic_clamped_to_unit_interval(
+    pass_count: int, repair_count: int
+) -> None:
+    """``_posterior_from_kb_signals`` must return a value in
+    ``[0.10, 0.95]`` for **any** integer inputs (including negative
+    pass_count and absurdly large repair counts)."""
+    p = _posterior_from_kb_signals(_candidate(pass_count, repair_count))
+    assert 0.10 - 1e-12 <= p <= 0.95 + 1e-12
+
+
+@_PROFILE
+@given(
+    pc_a=st.integers(min_value=0, max_value=10),
+    pc_b=st.integers(min_value=0, max_value=10),
+)
+def test_posterior_heuristic_monotone_in_pass_count(
+    pc_a: int, pc_b: int
+) -> None:
+    """More passes → no lower posterior (monotone non-decreasing in
+    ``pass_count`` when ``repair_count`` is fixed)."""
+    p_a = _posterior_from_kb_signals(_candidate(pc_a, repair_count=0))
+    p_b = _posterior_from_kb_signals(_candidate(pc_b, repair_count=0))
+    if pc_a <= pc_b:
+        assert p_a <= p_b + 1e-12
+
+
+@_PROFILE
+@given(
+    rc_a=st.integers(min_value=0, max_value=10),
+    rc_b=st.integers(min_value=0, max_value=10),
+)
+def test_posterior_heuristic_monotone_in_repair_count(
+    rc_a: int, rc_b: int
+) -> None:
+    """More rejections → no higher posterior (monotone non-increasing
+    in ``repair_count`` when ``pass_count`` is fixed)."""
+    p_a = _posterior_from_kb_signals(_candidate(0, rc_a))
+    p_b = _posterior_from_kb_signals(_candidate(0, rc_b))
+    if rc_a <= rc_b:
+        assert p_a >= p_b - 1e-12
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher tier-strict property — never spill to higher tier while a
+# lower-tier candidate is non-busy.
+# ---------------------------------------------------------------------------
+from coordinator.dispatcher import VerifierCandidate, select_verifier_targets
+
+
+@_PROFILE
+@given(
+    pass_counts=st.lists(
+        st.integers(min_value=0, max_value=3),
+        min_size=1,
+        max_size=10,
+    ),
+    capacity=st.integers(min_value=1, max_value=5),
+)
+def test_dispatcher_tier_strict_property(
+    pass_counts: list[int], capacity: int
+) -> None:
+    """Every selected label must come from the lowest tier with
+    available (non-busy) candidates. Equivalently: the maximum
+    pass_count returned is no larger than the minimum pass_count among
+    not-yet-returned candidates that aren't in_flight."""
+    candidates = [
+        VerifierCandidate(label=f"lem:l{i}", pass_count=pc)
+        for i, pc in enumerate(pass_counts)
+    ]
+    out = select_verifier_targets(
+        candidates, capacity=capacity, in_flight_targets=set()
+    )
+    if not out:
+        return
+    by_label = {c.label: c.pass_count for c in candidates}
+    selected_pcs = [by_label[lbl] for lbl in out]
+    not_selected = {lbl for lbl in by_label if lbl not in out}
+    if not_selected:
+        leftover_min_pc = min(by_label[lbl] for lbl in not_selected)
+        # Anything we returned must be ≤ that leftover minimum (tier-strict).
+        assert max(selected_pcs) <= leftover_min_pc
