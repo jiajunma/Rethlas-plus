@@ -7,13 +7,13 @@
 # §10.1 — target pass_count before a node counts as verified.
 desired_pass_count             = 3
 # §10.3 — max concurrent generator jobs per workspace.
-generator_workers              = 2
+generator_workers              = 1
 # §10.3 — max concurrent verifier jobs per workspace.
 verifier_workers               = 2
 # Phase 3 — max concurrent learner jobs per workspace.
 learner_workers                = 1
 # Phase 3 — max concurrent referee jobs per workspace.
-referee_workers                = 0
+referee_workers                = 1
 # §7.4 — kill threshold (seconds) for a Codex subprocess whose
 # log mtime has gone stale.
 codex_silent_timeout_seconds   = 1800

@@ -2798,12 +2798,6 @@ async function refresh() {
   ]);
   const updated = document.getElementById("updated_at");
   updated.textContent = "refreshed " + new Date().toLocaleTimeString();
-  const healthHtml = [
-    stat("coordinator", pill(coord.liveness ?? "down")),
-    stat("librarian", pill(lib.liveness ?? "down")),
-    stat("dashboard", pill(dashboardHb.liveness ?? "down")),
-  ].join("");
-  setSectionHtml("health", healthHtml);
   setSectionHtml("learner_runs", rowsToTable(
     ["source_id", "learner_run", "status", "candidates", "issues", "hash"],
     (learnerRuns.runs ?? []).map(r => ({
@@ -2865,14 +2859,13 @@ async function refresh() {
   const nodes = await fetchJson("/api/nodes");
   const rejected = await fetchJson("/api/rejected");
   const events = await fetchJson("/api/events?limit=30");
-  const baseHealthHtml = [
+  let healthHtml = [
     stat("coordinator", pill(coord.liveness ?? "down")),
     stat("librarian", pill(lib.liveness ?? "down")),
     stat("dashboard", pill(dashboardHb.liveness ?? "down")),
   ].join("");
-  let healthHtml = baseHealthHtml;
   if (overview.coordinator) {
-    setSectionHtml("health", [
+    healthHtml = [
       stat("coordinator", pill(coord.liveness ?? "down")),
       stat("librarian", pill(lib.liveness ?? "down")),
       stat("dashboard", pill(dashboardHb.liveness ?? "down")),
@@ -2881,7 +2874,7 @@ async function refresh() {
     ].join(""));
   } else {
     const studyOk = studyKbReady(studyKb);
-    setSectionHtml("health", [
+    healthHtml = [
       stat("coordinator", pill(coord.liveness ?? "down")),
       stat("librarian", pill(lib.liveness ?? "down")),
       stat("dashboard", pill(dashboardHb.liveness ?? "down")),
@@ -2889,6 +2882,7 @@ async function refresh() {
       stat("phase 3 study kb", studyOk ? pill("healthy") : `<code>${escapeHtml(studyKb.__error || "unavailable")}</code>`),
     ].join(""));
   }
+  setSectionHtml("health", healthHtml);
   const kb = document.getElementById("kb");
   if (overview.kb) {
     const kinds = overview.kb.kind_counts || {};
@@ -2981,7 +2975,9 @@ async function refresh() {
   ));
   } finally {
   isAutoRefreshing = false;
-  if (scrollState) restoreScrollState(scrollState);
+  if (scrollState) {
+    requestAnimationFrame(() => restoreScrollState(scrollState));
+  }
   }
 }
 refresh();
