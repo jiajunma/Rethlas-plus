@@ -141,3 +141,30 @@ def test_action_for_candidate_under_honest_reconstruction_is_always_default_veri
     for pc in range(0, 3):
         cand = _ci_pc(f"lem:p{pc}", pass_count=pc)
         assert _action_for_candidate(cand, desired_pass=3) is Action.DEFAULT_VERIFY
+
+
+# ---------------------------------------------------------------------------
+# S5 — _action_for_candidate honours the supplied PolicyBudget.
+# ---------------------------------------------------------------------------
+from rethlas_scoring.policy import PolicyBudget
+
+
+def test_action_for_candidate_accepts_explicit_budget() -> None:
+    """Default budget signature is unchanged; explicit budget compiles."""
+    cand = _ci_pc("lem:a", pass_count=1)
+    out = _action_for_candidate(
+        cand,
+        desired_pass=3,
+        budget=PolicyBudget(max_refute=0, max_strong=0),
+    )
+    # PENDING node always returns DEFAULT_VERIFY regardless of budget.
+    assert out is Action.DEFAULT_VERIFY
+
+
+def test_action_for_candidate_default_budget_yields_same_as_none() -> None:
+    """Omitting ``budget`` is equivalent to passing ``PolicyBudget()``."""
+    cand = _ci_pc("lem:a", pass_count=2)
+    a1 = _action_for_candidate(cand, desired_pass=3)
+    a2 = _action_for_candidate(cand, desired_pass=3, budget=PolicyBudget())
+    a3 = _action_for_candidate(cand, desired_pass=3, budget=None)
+    assert a1 is a2 is a3

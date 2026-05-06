@@ -99,6 +99,7 @@ from rethlas_scoring.policy import (
     Action,
     Evidence,
     EvidenceKind,
+    PolicyBudget,
     VerdictKind,
     classify,
     next_action,
@@ -447,7 +448,10 @@ def _evidence_from_candidate(cand: CandidateInput) -> list[Evidence]:
 
 
 def _action_for_candidate(
-    cand: CandidateInput, *, desired_pass: int
+    cand: CandidateInput,
+    *,
+    desired_pass: int,
+    budget: PolicyBudget | None = None,
 ) -> Action:
     """Drive the L5 state machine for a verifier candidate.
 
@@ -458,6 +462,12 @@ def _action_for_candidate(
     reachable only once S4+ stores real Evidence (refute / strong
     verdicts) in the KB.
 
+    ``budget`` controls how many refute / strong escalations a node
+    may receive before falling through to ``user_blocked``. When
+    omitted the ``PolicyBudget()`` default is used (1 refute, 1
+    strong); production callers should pass a budget assembled from
+    ``state.config.scheduling`` so the rethlas.toml caps take effect.
+
     The dispatch site logs any non-``DEFAULT_VERIFY`` outcome so that
     when richer Evidence does appear the operator can see what the
     policy *would* have chosen before S4/S5 wire the actual workers.
@@ -465,7 +475,7 @@ def _action_for_candidate(
 
     evidence = _evidence_from_candidate(cand)
     state = classify(evidence, desired_pass=desired_pass)
-    return next_action(state, evidence)
+    return next_action(state, evidence, budget or PolicyBudget())
 
 
 # ---------------------------------------------------------------------------
@@ -1049,17 +1059,28 @@ def _tick(state: CoordinatorState) -> None:
         in_flight_targets.add(lbl)
         dispatched_gen += 1
 
+    # S5: assemble per-node policy budget from rethlas.toml caps so
+    # ``DISAGREEMENT`` walks ``REFUTE`` (≤max_refute) →
+    # ``STRONG_VERIFY`` (≤max_strong) → ``USER_BLOCKED`` per
+    # operator-tunable depth. Built once per tick — budgets are pure
+    # data, no per-node mutation.
+    policy_budget = PolicyBudget(
+        max_refute=state.config.scheduling.policy_max_refute_per_node,
+        max_strong=state.config.scheduling.policy_max_strong_per_node,
+    )
     for lbl in ver_targets:
         cand = by_label[lbl]
-        # S3 scaffold: ask the L5 policy what to do next. Under honest
-        # Evidence reconstruction (no per-call ledger in KB yet) every
-        # eligible candidate yields DEFAULT_VERIFY, so behaviour is
-        # byte-identical to before. The skip+log branch only ever fires
-        # once S4/S5 store real refute / strong evidence — it gives the
-        # operator visibility for what the policy *would* dispatch
-        # before the worker types are wired in.
+        # S3 scaffold + S5 budget: ask the L5 policy what to do next.
+        # Under honest Evidence reconstruction (no per-call ledger in
+        # KB yet) every eligible candidate yields DEFAULT_VERIFY, so
+        # behaviour is byte-identical to before. The skip+log branch
+        # only fires once S4/S5 store real refute / strong evidence —
+        # it gives the operator visibility for what the policy *would*
+        # dispatch before the worker types are wired in.
         action = _action_for_candidate(
-            cand, desired_pass=state.config.scheduling.desired_pass_count
+            cand,
+            desired_pass=state.config.scheduling.desired_pass_count,
+            budget=policy_budget,
         )
         if action is not Action.DEFAULT_VERIFY:
             _log_supervise(
