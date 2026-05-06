@@ -92,6 +92,7 @@ from coordinator.precheck import (
     precheck_verifier,
 )
 from librarian.heartbeat import PHASE_READY, read_heartbeat as read_librarian_hb
+from embedding import HashEmbeddingProvider
 from rethlas_scoring.calibration import perfect_verifier_roc
 from rethlas_scoring.cluster import ClusterIndex
 from rethlas_scoring.data import ProofGraph, ScoredNode
@@ -367,28 +368,39 @@ def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
     or when the import / construction itself fails — in any of those
     cases the dispatcher uses its legacy ``(pass_count, label)`` order.
 
-    Phase B uses placeholder fields:
+    Phase B / S6-B placeholders:
 
-    - ``embedding=()`` disables cluster propagation until the embedding
-      pipeline lands (Phase C — see ``docs/SCORING_AUDIT.md §4.3``).
-    - ``posterior_p=0.5`` is a neutral prior; without verifier
-      confidence + calibration, a real posterior cannot be inferred.
+    - ``embedding`` is now populated by the zero-dependency
+      ``HashEmbeddingProvider`` (S6-B) — cluster propagation gets a
+      real signal in development. Production swaps in a semantic
+      provider at this seam.
+    - ``posterior_p=0.5`` is still a neutral prior; without verifier
+      confidence + calibration a real posterior cannot be inferred.
     - ``perfect_verifier_roc()`` short-circuits the noise model — VOI
       will treat the verifier as oracle until ``VerifierROC`` has real
       ground-truth feedback to calibrate against.
 
-    Even with these placeholders, the priority function still pulls
-    ``relevance_cone`` (= the dependency closure) into Z, so nodes whose
-    closure is large or whose neighbours are uncertain rank higher.
+    Even with placeholders, the priority function pulls
+    ``relevance_cone`` (= the dependency closure) into Z, so nodes
+    whose closure is large or whose neighbours are uncertain rank
+    higher.
     """
 
     if not use_voi_scoring or not snapshot.candidates:
         return None
     try:
+        # S6-B: embed each candidate's statement so cluster_susp gets a
+        # real signal. ``HashEmbeddingProvider`` is the zero-dependency
+        # default; production deployments may swap a real provider in
+        # at this seam. Empty / placeholder statements degrade
+        # gracefully — ``HashEmbeddingProvider.embed("")`` returns the
+        # zero vector, which ``cluster.cosine`` treats as 0 similarity.
+        provider = HashEmbeddingProvider()
         sg_nodes = {
             c.target: ScoredNode(
                 id=c.target,
                 claim_text=c.statement or c.target,
+                embedding=provider.embed(c.statement or c.target),
                 # depends_on uses dep_statement_hashes keys (set of dep labels).
                 depends_on=tuple(sorted(c.dep_statement_hashes.keys())),
             )
