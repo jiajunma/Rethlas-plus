@@ -48,6 +48,7 @@ include = [
   "common*",
   "coordinator*",
   "dashboard*",
+  "embedding*",
   "generator*",
   "librarian*",
   "linter*",
