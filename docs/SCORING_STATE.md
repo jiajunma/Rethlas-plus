@@ -1,4 +1,8 @@
-# SCORING_STATE — 当前状态地图(2026-05-06)
+# SCORING_STATE — 当前状态地图(2026-05-06,持续更新)
+
+> **更新历史** —— 文档编辑跟最新 commit 同步。当前对齐到 `67cbec4`
+> (S6-F)。如果 Sprint 表里出现的 commit 在 `git log` 里看不到,先
+> ``git pull origin claude/youthful-goldberg-7369a8`` 同步。
 
 > 一站式 maintainer 视图:每个 sprint 落地了什么、哪些是真生效、哪些是
 > scaffold、哪些还没动。对照阅读 `SCORING_DESIGN.md`(数学规格)、
@@ -21,6 +25,8 @@
 | **S6-C** | factory + `OpenAIEmbeddingProvider`(lazy)+ env override | ✅ landed | `e25ffce` | ✅ 是,`OPENAI_API_KEY` 设了就自动升级 |
 | **S6-D** | `CachingEmbeddingProvider` LRU 包装 | ✅ landed | `d9fe961` | ✅ 是,跨 tick 复用 |
 | **S7-math** | Dawid-Skene aggregator property tests | ✅ landed | `d993097` | ✅ 测试时跑;production aggregate 等 S7-full 接 ensemble dispatch |
+| **S6-E** | `ScoredNode.posterior_p` 从 KB pass/repair 推 | ✅ landed | `a380cc1` | ✅ 是,cluster 不再是均场 0.5;含 `cluster.cosine` underflow drive-by 修复 |
+| **S6-F** | `ScoredNode.speculative_load` = 后代数 + 4 hypothesis property tests | ✅ landed | `67cbec4` | ✅ 是,`Score.risk` 按 blast radius 缩放 |
 | **S4-full** | refute role 二进制 + KB events + projector apply | 🔲 not started | — | 需 KB schema 改 |
 | **S5-full** | strong verifier role 二进制 + dispatch 真派 | 🔲 not started | — | 半天 |
 | **S7-full** | ensemble k=3 dispatch + Dawid-Skene 入库 | 🔲 not started | — | 需 `common/runtime/jobs.py` 改 |
@@ -53,6 +59,8 @@ export OPENAI_API_KEY=sk-...              # 设了 + 装了 openai SDK ⇒ 自�
 
 - **S1 BFS-by-tier**:`coordinator/dispatcher.py::select_verifier_targets` 不论 toggle 都按 `(pass_count asc, label asc)` 走;`use_voi_scoring=true` 时 priority_fn 在每 tier 内排序,严格保证低 tier 先满
 - **S6-B/C/D embedding pipeline**:`use_voi_scoring=true` 时,候选 statement 经 hash(或 OpenAI)provider 嵌入 → cluster_susp 真算非零值 → Pareto 前沿反映 cluster 信号;process-wide LRU 缓存避免重复计算
+- **S6-E posterior heuristic**:`ScoredNode.posterior_p` 从 `pass_count` / `repair_count` 推,clamp 到 `[0.10, 0.95]` —— cluster 信号有方向;repair-heavy 节点 + 似邻居被推到优先级前列
+- **S6-F speculative_load**:`ScoredNode.speculative_load = len(descendants)`,`Score.risk` 按真下游 blast radius 缩放 —— root-like 节点优于 leaf
 - **PolicyBudget 配置**:`policy_max_refute_per_node` / `policy_max_strong_per_node` 真进 `_action_for_candidate`
 
 ### Scaffold(代码就位但当前不实际改变行为):
@@ -74,9 +82,9 @@ export OPENAI_API_KEY=sk-...              # 设了 + 装了 openai SDK ⇒ 自�
 
 | 范围 | 文件数 | 用例数 | 备注 |
 |---|---|---|---|
-| `tests/scoring/` | 18 | ~330 | 包含 hypothesis property + 集成测试 |
+| `tests/scoring/` | 19 | ~360 | 包含 hypothesis property + 集成测试 |
 | `tests/unit/` 旧有 | 33 | ~140 | 没改,仍全绿 |
-| **总计** | 51 | **492** | 3.7 s 全跑完 |
+| **总计** | 52 | **502** | 3.7 s 全跑完 |
 
 排除:`tests/unit/test_m6_prompt.py`(`agents/generation/mcp/__init__.py` 先前 import 错误,不在本分支责任范围)。
 
