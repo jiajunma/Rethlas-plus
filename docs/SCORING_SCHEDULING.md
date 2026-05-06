@@ -377,8 +377,8 @@ worker 类型一目了然。
 | Sprint | 内容 | 依赖 | 估时 |
 |--------|------|------|------|
 | **S1** | L3 修复 —— `select_verifier_targets` 按 tier 分组,Phase B wiring 重新尊重 BFS;加 5 条测试 | 无 | 半天 |
-| **S2** | `Evidence` 数据模型 + `classify()` 纯函数 + 单测;**不**改 KB schema(evidence 可从现有 verdict 列表推导) | S1 | 1 天 |
-| **S3** | `next_action()` 纯函数 + 单测;coordinator 仍只派 default_verify(action 实际只用一个 case),但代码结构就位 | S2 | 半天 |
+| **S2** ✅ | `Evidence` 数据模型 + `classify()` 纯函数 + 单测(commit `1da747b`,32 测试) | S1 | 1 天 |
+| **S3** ✅ | `next_action()` 纯函数 + coordinator 接 evidence 重构 + dispatch site 调 policy(action ≠ DEFAULT_VERIFY 仅 log,不实派 —— S4/S5 接管) | S2 | 半天 |
 | **S4** | Refute role + worker 二进制;coordinator 接 `Action.REFUTE` 实派;独立 `refute_workers` 配置 | S3 + Y 切法 | 2 天 |
 | **S5** | Strong verifier role(只换模型,prompt 复用);coordinator 接 `Action.STRONG_VERIFY` | S4 | 半天 |
 | **S6** | Embedding pipeline:librarian 写 KB,scoring 真值 cluster 传播;`projector` 接 `propagate_failure` | 任意时刻可做(独立) | 2 天 |

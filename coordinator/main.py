@@ -95,6 +95,14 @@ from librarian.heartbeat import PHASE_READY, read_heartbeat as read_librarian_hb
 from rethlas_scoring.calibration import perfect_verifier_roc
 from rethlas_scoring.cluster import ClusterIndex
 from rethlas_scoring.data import ProofGraph, ScoredNode
+from rethlas_scoring.policy import (
+    Action,
+    Evidence,
+    EvidenceKind,
+    VerdictKind,
+    classify,
+    next_action,
+)
 from rethlas_scoring.scheduler import make_priority_fn
 
 
@@ -398,6 +406,66 @@ def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
         # Defence-in-depth: a buggy scorer must never starve dispatch.
         # The dispatcher itself also catches priority_fn exceptions.
         return None
+
+
+# ---------------------------------------------------------------------------
+# L5 policy adapter — Phase B/S3 scaffold (docs/SCORING_SCHEDULING.md §7).
+# ---------------------------------------------------------------------------
+def _evidence_from_candidate(cand: CandidateInput) -> list[Evidence]:
+    """Reconstruct an :class:`Evidence` ledger from existing KB fields.
+
+    The KB does not yet store per-call Evidence rows directly (a
+    schema change deferred to S6+). For each verifier candidate we
+    synthesise a list from ``pass_count`` (the count of consecutive
+    successful passes since the last revision).
+
+    ``repair_count`` past rejections happened on a *different* version
+    of the statement and are therefore NOT included as evidence on the
+    current statement — including them would conflate distinct claims.
+
+    Result for the typical verifier candidate
+    (``0 ≤ pass_count < desired_pass_count``):
+
+    - ``pass_count`` rows of ``(DEFAULT, OK)`` with synthetic worker
+      IDs ``legacy_pass_{i}``.
+
+    Once the KB stores per-call Evidence directly, this reconstruction
+    is replaced by a one-line read.
+    """
+
+    if cand.pass_count <= 0:
+        return []
+    return [
+        Evidence(
+            kind=EvidenceKind.DEFAULT,
+            worker_id=f"legacy_pass_{i}",
+            verdict=VerdictKind.OK,
+            ts_iso="",
+        )
+        for i in range(cand.pass_count)
+    ]
+
+
+def _action_for_candidate(
+    cand: CandidateInput, *, desired_pass: int
+) -> Action:
+    """Drive the L5 state machine for a verifier candidate.
+
+    Composes :func:`rethlas_scoring.policy.classify` and
+    :func:`rethlas_scoring.policy.next_action`. Under the S3 honest
+    reconstruction this returns ``DEFAULT_VERIFY`` for every candidate
+    that survives the eligibility filters; non-default actions become
+    reachable only once S4+ stores real Evidence (refute / strong
+    verdicts) in the KB.
+
+    The dispatch site logs any non-``DEFAULT_VERIFY`` outcome so that
+    when richer Evidence does appear the operator can see what the
+    policy *would* have chosen before S4/S5 wire the actual workers.
+    """
+
+    evidence = _evidence_from_candidate(cand)
+    state = classify(evidence, desired_pass=desired_pass)
+    return next_action(state, evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -983,6 +1051,22 @@ def _tick(state: CoordinatorState) -> None:
 
     for lbl in ver_targets:
         cand = by_label[lbl]
+        # S3 scaffold: ask the L5 policy what to do next. Under honest
+        # Evidence reconstruction (no per-call ledger in KB yet) every
+        # eligible candidate yields DEFAULT_VERIFY, so behaviour is
+        # byte-identical to before. The skip+log branch only ever fires
+        # once S4/S5 store real refute / strong evidence — it gives the
+        # operator visibility for what the policy *would* dispatch
+        # before the worker types are wired in.
+        action = _action_for_candidate(
+            cand, desired_pass=state.config.scheduling.desired_pass_count
+        )
+        if action is not Action.DEFAULT_VERIFY:
+            _log_supervise(
+                state,
+                f"policy: {lbl} -> {action.value} (S4+ will dispatch; skipping)",
+            )
+            continue
         ctx, fail = precheck_verifier(cand, in_flight_targets=in_flight_targets)
         if fail is not None:
             _log_supervise(state, "verifier precheck failed: %s -> %s: %s" % (
