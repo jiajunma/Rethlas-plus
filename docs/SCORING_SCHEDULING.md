@@ -411,15 +411,20 @@ wiring 给所有节点 `posterior_p = 0.5`(placeholder),所有节点 sem_blast
 
 ---
 
-## 11. 我现在的建议
+## 11. S1 状态:✅ 已完成
 
-**做 S1**(半天,纯调度协议修复,有测试,可独立 commit/push)。其它一律等用户拍板。
+S1(本文档主线 —— BFS-by-tier dispatcher 修复)已落地。
 
-S1 的范围:
-- 改 `coordinator/dispatcher.py::select_verifier_targets` 走 §3.1 选项 A
-- 加 5 条 dispatcher 集成测试
-- 现有 7 条 dispatcher 单测 + 49 条 scoring 测 + 10 条 wiring 测全绿
-- 更新 `SCORING_INTEGRATION.md §3` 反映 tier 协议
-- commit + push
+- ``coordinator/dispatcher.py::select_verifier_targets`` 按 §3.1 选项 A
+  改造 —— 候选按 ``pass_count`` 分组,从最低 tier 起逐 tier 调
+  ``priority_fn``,严格保证低 tier 先满。
+- ``tests/scoring/test_dispatcher_integration.py`` 新增 5 条覆盖:
+  - ``tier_constraint_lower_pass_count_first``
+  - ``voi_ordering_within_tier_still_applies``
+  - ``tier_constraint_spills_when_lower_tier_fully_busy``
+  - ``legacy_dispatcher_path_alphabetical_within_tier``
+  - ``priority_fn_failure_falls_back_per_tier_not_globally``
+- 全套回归 374/374 通过(原 369 + 新 5)。
+- ``SCORING_INTEGRATION.md §3`` 反映 tier 协议的小段说明已加。
 
-是否开做?
+下一档:S2(``Evidence`` 数据模型 + ``classify()`` 纯函数),需要用户拍板再开。

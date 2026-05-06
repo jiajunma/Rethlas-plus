@@ -68,6 +68,12 @@ site below it:
   is empty, or anything inside the scoring layer raises. The dispatcher
   itself also has a `try/except` guard, so two layers of defence keep
   the scoring path from starving dispatch.
+- **Tier-strict BFS by ``pass_count``** (S1, landed): the dispatcher
+  groups candidates by ``pass_count`` and walks tiers low → high,
+  invoking ``priority_fn`` once per tier. This guarantees no node enters
+  pass ``k+1`` while another node still has pass ``k`` outstanding —
+  the user's "all nodes get pass 1 before anyone starts pass 2"
+  constraint. See ``docs/SCORING_SCHEDULING.md §3``.
 
 Phase B intentionally uses neutral placeholders — `posterior_p=0.5`,
 `embedding=()`, `perfect_verifier_roc()`. Cluster propagation is

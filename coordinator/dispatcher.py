@@ -72,17 +72,28 @@ def select_verifier_targets(
     in_flight_targets: Iterable[str],
     priority_fn: PriorityFn | None = None,
 ) -> list[str]:
-    """§10.2.1 verifier ordering.
+    """§10.2.1 verifier ordering — **tier-strict BFS by ``pass_count``**.
 
-    Default ordering is ``(pass_count asc, label asc)``. When
-    ``priority_fn`` is supplied (rollback toggle ``use_voi_scoring=True``),
-    the deduplicated label set is reordered by the VOI-aware priority
-    function before the busy-target / capacity filter is applied. The
-    ``pass_count`` deduplication invariant (one entry per label, min
-    pass_count) and the ``in_flight_targets`` skip rule are preserved
-    in both branches so the dispatcher contract does not regress.
+    Hard constraint: walk pass_count tiers from lowest to highest;
+    never spill into tier ``k+1`` while tier ``k`` still has eligible
+    (non-busy) candidates. Within a single tier, ordering is either
+    alphabetical (``priority_fn=None`` legacy path) or VOI-driven
+    (``priority_fn`` supplied — typically built by
+    ``rethlas_scoring.scheduler.make_priority_fn`` when
+    ``use_voi_scoring=True``). See ``docs/SCORING_SCHEDULING.md §3``.
 
-    See ``docs/SCORING_INTEGRATION.md`` for the rollback procedure.
+    Recovery / rollback:
+
+    - The ``pass_count`` deduplication (one entry per label, min
+      pass_count) and the ``in_flight_targets`` skip are applied in
+      every code path.
+    - If ``priority_fn`` raises or returns nothing for a given tier,
+      that tier falls back to alphabetical ordering. Other tiers are
+      unaffected — a buggy scorer cannot starve any node.
+    - Labels the priority_fn omits within a tier are appended in
+      alphabetical order so they still get dispatched.
+
+    See ``docs/SCORING_INTEGRATION.md`` for the toggle procedure.
     """
 
     if capacity <= 0:
@@ -94,36 +105,38 @@ def select_verifier_targets(
         prev = by_label.get(c.label)
         if prev is None or c.pass_count < prev:
             by_label[c.label] = c.pass_count
+    if not by_label:
+        return []
 
-    if priority_fn is None:
-        ordered_labels = [
-            lbl for lbl, _pc in sorted(by_label.items(), key=lambda kv: (kv[1], kv[0]))
-        ]
-    else:
-        # Ask the VOI scorer for a priority order; fall back to legacy
-        # if it returns nothing or a label outside the candidate set.
-        candidate_labels = list(by_label.keys())
-        try:
-            voi_order = priority_fn(candidate_labels, capacity + len(busy))
-        except Exception:
-            voi_order = []
-        valid = [lbl for lbl in voi_order if lbl in by_label]
-        # Append any candidates the priority_fn omitted, in legacy order,
-        # so we never starve a node by accident.
-        leftover = sorted(
-            (lbl for lbl in by_label if lbl not in valid),
-            key=lambda lbl: (by_label[lbl], lbl),
-        )
-        ordered_labels = valid + leftover
+    # Group by tier (pass_count). Walk tiers low → high.
+    by_tier: dict[int, list[str]] = {}
+    for lbl, pc in by_label.items():
+        by_tier.setdefault(pc, []).append(lbl)
 
     out: list[str] = []
-    for lbl in ordered_labels:
-        if lbl in busy:
-            continue
-        out.append(lbl)
-        busy.add(lbl)
-        if len(out) >= capacity:
-            break
+    for tier in sorted(by_tier):
+        tier_labels_sorted = sorted(by_tier[tier])
+        if priority_fn is None:
+            ordered = tier_labels_sorted
+        else:
+            try:
+                voi_order = priority_fn(
+                    tier_labels_sorted, max(1, capacity - len(out) + len(busy))
+                )
+            except Exception:
+                voi_order = []
+            tier_set = set(tier_labels_sorted)
+            valid = [lbl for lbl in voi_order if lbl in tier_set]
+            leftover = [lbl for lbl in tier_labels_sorted if lbl not in valid]
+            ordered = valid + leftover
+
+        for lbl in ordered:
+            if lbl in busy:
+                continue
+            out.append(lbl)
+            busy.add(lbl)
+            if len(out) >= capacity:
+                return out
     return out
 
 
