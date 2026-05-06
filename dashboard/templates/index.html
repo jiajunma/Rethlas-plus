@@ -31,6 +31,14 @@
         // ``renderMath(root)`` after each detail-panel mount so
         // SSE-driven updates stay local to one subtree.
         typeset: false,
+        ready: () => {
+          MathJax.startup.defaultReady();
+          if (window.__pendingMathRoots) {
+            for (const root of window.__pendingMathRoots.splice(0)) {
+              if (root && root.isConnected) MathJax.typesetPromise([root]).catch(() => {});
+            }
+          }
+        },
       },
     };
   </script>
@@ -163,6 +171,23 @@
       overflow-x: auto;
     }
     .math-body mjx-container[display="true"] { margin: .5rem 0; }
+    .math-body.source-excerpt {
+      white-space: pre;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Noto Sans Mono CJK SC", monospace;
+      line-height: 1.48;
+      tab-size: 2;
+      max-height: 32rem;
+      overflow: auto;
+    }
+    .math-body.compact {
+      background: transparent;
+      padding: 0;
+      font-size: .84rem;
+      line-height: 1.42;
+      color: var(--muted);
+      max-height: 4.9rem;
+      overflow: hidden;
+    }
     .verdict-pill {
       display: inline-block;
       padding: .1rem .55rem;
@@ -327,7 +352,7 @@
     }
     .study-controls {
       display: grid;
-      grid-template-columns: minmax(16rem, 2fr) repeat(3, minmax(9rem, 1fr));
+      grid-template-columns: minmax(16rem, 2fr) repeat(4, minmax(9rem, 1fr));
       gap: .5rem;
       align-items: center;
     }
@@ -346,6 +371,128 @@
       grid-template-columns: minmax(18rem, .95fr) minmax(22rem, 1.35fr);
       gap: .75rem;
       align-items: start;
+    }
+    .study-graph-panel {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      min-height: 18rem;
+      overflow: auto;
+      background:
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 28px 28px;
+      background-color: color-mix(in oklab, var(--bg) 96%, var(--line));
+    }
+    .study-graph-toolbar {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      flex-wrap: wrap;
+      margin: .35rem 0 .4rem;
+    }
+    .study-graph-toolbar .footnote { margin-right: auto; }
+    .study-graph-toolbar button {
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--bg);
+      color: var(--fg);
+      padding: .24rem .55rem;
+      font: inherit;
+      font-size: .78rem;
+      cursor: pointer;
+    }
+    .study-graph-toolbar button:hover,
+    .study-graph-toolbar button:focus {
+      border-color: var(--accent);
+      outline: none;
+    }
+    .study-graph-svg {
+      display: block;
+      min-width: 100%;
+      height: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .study-graph-edge {
+      fill: none;
+      stroke: color-mix(in oklab, var(--muted) 70%, var(--line));
+      stroke-width: 1.6;
+      marker-end: url(#study-arrow);
+    }
+    .study-graph-edge.needs_bridge {
+      stroke: var(--bad);
+      stroke-dasharray: 5 4;
+      marker-end: url(#study-arrow-bad);
+    }
+    .study-graph-edge.local_context {
+      stroke-dasharray: 3 4;
+    }
+    .study-graph-edge.multi_relation {
+      stroke-width: 2.1;
+    }
+    .study-graph-node {
+      cursor: pointer;
+    }
+    .study-graph-node rect {
+      fill: var(--bg);
+      stroke: var(--line);
+      stroke-width: 1.3;
+      rx: 6;
+    }
+    .study-graph-node:hover rect,
+    .study-graph-node:focus rect {
+      stroke: var(--accent);
+      stroke-width: 2;
+      outline: none;
+    }
+    .study-graph-node.selected rect {
+      stroke: var(--accent);
+      stroke-width: 2.4;
+      fill: color-mix(in oklab, var(--accent) 8%, var(--bg));
+    }
+    .study-graph-node.virtual rect {
+      stroke-dasharray: 5 4;
+      fill: color-mix(in oklab, var(--warn) 8%, var(--bg));
+    }
+    .study-graph-node.bridge_request rect {
+      stroke: var(--bad);
+      stroke-dasharray: 5 4;
+    }
+    .study-graph-node text {
+      fill: var(--fg);
+      font-size: 11px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      pointer-events: none;
+    }
+    .study-graph-node .graph-kind {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      fill: var(--muted);
+    }
+    .study-graph-node .graph-proof {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 9px;
+      fill: var(--muted);
+    }
+    .study-graph-node .graph-toggle circle {
+      fill: var(--code-bg);
+      stroke: var(--line);
+      stroke-width: 1.2;
+    }
+    .study-graph-node .graph-toggle text {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      text-anchor: middle;
+      dominant-baseline: central;
+      fill: var(--accent);
+    }
+    .study-graph-node .graph-toggle:hover circle,
+    .study-graph-node .graph-toggle:focus circle {
+      stroke: var(--accent);
+      stroke-width: 2;
     }
     .study-list {
       border: 1px solid var(--line);
@@ -397,15 +544,64 @@
     .study-kind.lemma { background: var(--pt-kind-lemma); }
     .study-kind.proposition { background: var(--pt-kind-proposition); }
     .study-kind.theorem { background: var(--pt-kind-theorem); color: #1f2937; }
+    .study-status {
+      border-radius: 999px;
+      padding: .08rem .42rem;
+      font-size: .7rem;
+      font-weight: 700;
+      background: var(--code-bg);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .study-status.needs_bridge,
+    .study-status.needs_revision,
+    .study-status.blocks_acceptance {
+      background: color-mix(in oklab, var(--bad) 18%, var(--bg));
+      color: var(--bad);
+    }
+    .study-status.proof_incomplete,
+    .study-status.statement_only,
+    .study-status.missing_candidate {
+      background: color-mix(in oklab, var(--warn) 18%, var(--bg));
+      color: color-mix(in oklab, var(--warn) 78%, var(--fg));
+    }
+    .study-status.reviewed,
+    .study-status.accepted,
+    .study-status.source_proof_extracted {
+      background: color-mix(in oklab, var(--good) 16%, var(--bg));
+      color: var(--good);
+    }
     .study-label {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: .82rem;
+      font-size: .84rem;
+      font-weight: 650;
       overflow-wrap: anywhere;
+    }
+    .study-raw-label code {
+      font-size: .68rem;
+      color: var(--muted);
+      background: transparent;
+      padding: 0;
     }
     .study-row-statement {
       color: var(--muted);
       font-size: .82rem;
       line-height: 1.35;
+    }
+    .study-entry-head {
+      display: grid;
+      gap: .3rem;
+      margin-bottom: .65rem;
+    }
+    .study-entry-title {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem;
+      align-items: baseline;
+    }
+    .study-entry-title h3 {
+      margin: 0;
+      font-size: .98rem;
+      line-height: 1.25;
     }
     .study-detail {
       border: 1px solid var(--line);
@@ -425,6 +621,20 @@
       margin: .4rem 0 .7rem;
     }
     .study-meta code { font-size: .78rem; }
+    .study-detail-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .45rem;
+      margin: .25rem 0 .45rem;
+    }
+    .study-detail-toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      color: var(--muted);
+      font-size: .78rem;
+    }
     .study-detail-grid {
       display: grid;
       gap: .7rem;
@@ -446,6 +656,7 @@
       .study-layout {
         grid-template-columns: 1fr;
       }
+      .study-graph-panel { min-height: 15rem; }
       .study-list { max-height: 24rem; }
     }
     .proof-tree-node > summary {
@@ -687,8 +898,8 @@
     <div id="learner_runs"></div>
   </section>
   <section>
-    <h2>Study KB</h2>
-    <div class="footnote">Learner-proposed source-backed candidates. These are not referee-approved KB nodes. Citations from published sources are treated as provisional premises; the main check is whether the extracted statement matches the local context.</div>
+    <h2>Phase 3 Knowledge Base</h2>
+    <div class="footnote">Source-backed knowledge entries organized from learner/referee artifacts. Entries remain distinct from verified Kuzu nodes until admitted by the normal verification pipeline.</div>
     <div class="grid" id="study_kb_summary"></div>
     <div class="study-browser">
       <div class="study-controls">
@@ -696,6 +907,17 @@
         <select id="study_kind_filter" aria-label="Filter by kind"></select>
         <select id="study_source_filter" aria-label="Filter by source"></select>
         <select id="study_run_filter" aria-label="Filter by learner run"></select>
+        <select id="study_repair_filter" aria-label="Filter by repair state"></select>
+      </div>
+      <div>
+        <div class="study-graph-toolbar">
+          <div id="study_graph_meta" class="footnote"></div>
+          <button id="study_graph_expand" type="button">Expand selected</button>
+          <button id="study_graph_collapse" type="button">Collapse selected</button>
+          <button id="study_graph_attention" type="button">Load attention</button>
+          <button id="study_graph_reset" type="button">Reset graph</button>
+        </div>
+        <div id="study_graph" class="study-graph-panel"></div>
       </div>
       <div class="study-layout">
         <div>
@@ -709,6 +931,11 @@
   <section>
     <h2>Phase 3 referee</h2>
     <div id="reviews"></div>
+  </section>
+  <section>
+    <h2>Study discovery</h2>
+    <div class="grid" id="study_discovery_summary"></div>
+    <div id="study_discovery"></div>
   </section>
   <section>
     <h2>Human attention</h2>
@@ -766,6 +993,102 @@ function shortHash(h) {
   if (!h || typeof h !== "string") return "—";
   return h.length > 14 ? h.slice(0, 14) + "…" : h;
 }
+function formatBibliography(bib) {
+  if (!bib || typeof bib !== "object") return "";
+  const authors = Array.isArray(bib.authors) ? bib.authors.join(", ") : (bib.authors || "");
+  const title = bib.title || "";
+  const venueParts = [bib.venue, bib.volume, bib.year ? `(${bib.year})` : "", bib.pages].filter(Boolean);
+  const primary = [authors, title, venueParts.join(" ")].filter(Boolean).join(", ");
+  const identifiers = [
+    bib.doi ? `doi:${bib.doi}` : "",
+    bib.arxiv ? `arXiv:${bib.arxiv}` : "",
+    bib.url || "",
+  ].filter(Boolean);
+  const citation = primary || bib.citation_text || "";
+  return [
+    citation ? `<div class="math-body">${renderStudyText(citation)}</div>` : "",
+    identifiers.length ? `<div class="footnote">${identifiers.map(escapeHtml).join(" · ")}</div>` : "",
+  ].filter(Boolean).join("");
+}
+function renderNotationContext(ctx) {
+  if (!ctx || typeof ctx !== "object") return "";
+  const rows = [];
+  for (const s of ctx.canonical_symbols || []) {
+    if (!s || typeof s !== "object") continue;
+    const variants = Array.isArray(s.source_variants)
+      ? s.source_variants.join(", ")
+      : (s.source_variants || "");
+    rows.push(`<tr>
+      <td><code>${escapeHtml(s.symbol || "")}</code></td>
+      <td>${renderStudyText(s.meaning || "")}${variants ? `<div class="footnote">source variants: ${escapeHtml(variants)}</div>` : ""}</td>
+    </tr>`);
+  }
+  if (!rows.length && ctx.canonical_notation && typeof ctx.canonical_notation === "object") {
+    for (const key of Object.keys(ctx.canonical_notation).sort()) {
+      rows.push(`<tr><td><code>${escapeHtml(key)}</code></td><td>${renderStudyText(ctx.canonical_notation[key])}</td></tr>`);
+    }
+  }
+  return `<details class="verification-report">
+    <summary>${escapeHtml(ctx.context_id || ctx.id || "notation")}${ctx.scope ? ` <span class="footnote">${escapeHtml(ctx.scope)}</span>` : ""}</summary>
+    ${rows.length ? `<table><thead><tr><th>Symbol</th><th>Meaning</th></tr></thead><tbody>${rows.join("")}</tbody></table>` : `<div class="empty">no canonical symbols</div>`}
+  </details>`;
+}
+function studyNotationContextsFor(n) {
+  const ids = new Set(n.notation_context_ids || (n.latest_version || {}).notation_context_ids || []);
+  return (studyKbState.notationContexts || []).filter(ctx => ids.has(ctx.context_id || ctx.id));
+}
+function renderExternalSourceRefs(refs) {
+  const rows = (refs || []).map(ref => {
+    if (!ref || typeof ref !== "object") return "";
+    const head = `<code>${escapeHtml(ref.span_id || "")}</code> <span class="footnote">${escapeHtml(shortHash(ref.span_hash || ""))}</span>`;
+    const meta = [ref.page_range, ref.locator, ref.description].filter(Boolean).map(escapeHtml).join(" · ");
+    return `<div>${head}${meta ? `<div class="footnote">${meta}</div>` : ""}</div>`;
+  }).filter(Boolean);
+  return rows.join("") || "";
+}
+function extractionLabel(n) {
+  const kind = n.extraction_kind || (n.latest_version || {}).extraction_kind || "";
+  if (!kind) return "";
+  return kind === "implicit_paragraph" ? "implicit paragraph" : kind.replaceAll("_", " ");
+}
+function primaryStudyText(n) {
+  const latest = n.latest_version || {};
+  return n.display_source_excerpt || latest.display_source_excerpt
+    || n.source_excerpt || latest.source_excerpt || n.statement || latest.statement || "";
+}
+function formulaStudyText(n) {
+  const latest = n.latest_version || {};
+  return n.display_formula_excerpt || latest.display_formula_excerpt
+    || n.formula_excerpt || latest.formula_excerpt || "";
+}
+function rawSourceStudyText(n) {
+  const latest = n.latest_version || {};
+  return n.source_excerpt || latest.source_excerpt || "";
+}
+function formattedSourceStudyText(n) {
+  const latest = n.latest_version || {};
+  return n.display_source_excerpt || latest.display_source_excerpt || "";
+}
+function rawFormulaStudyText(n) {
+  const latest = n.latest_version || {};
+  return n.formula_excerpt || latest.formula_excerpt || "";
+}
+function formattedFormulaStudyText(n) {
+  const latest = n.latest_version || {};
+  return n.display_formula_excerpt || latest.display_formula_excerpt || "";
+}
+function renderStudyBlock(text, opts = {}) {
+  if (!text) return "";
+  if (opts.raw || opts.mode === "preformatted") {
+    return `<pre class="math-body source-excerpt">${escapeHtml(text)}</pre>`;
+  }
+  return `<div class="math-body">${renderStudyText(text)}</div>`;
+}
+function studyVersionCount(n) {
+  const raw = n.version_count ?? (Array.isArray(n.versions) ? n.versions.length : n.versions) ?? 0;
+  const count = Number(raw);
+  return Number.isFinite(count) ? count : 0;
+}
 function elapsed(iso) {
   if (!iso) return "—";
   const t = Date.parse(iso);
@@ -790,40 +1113,235 @@ function isKbLabel(s) {
 }
 const studyKbState = {
   nodes: [],
+  entries: [],
+  notationContexts: [],
+  graph: {nodes: [], edges: [], total: 0, truncated: false},
   selectedLabel: "",
   query: "",
   kind: "",
   source: "",
   run: "",
+  repair: "",
+  showRawEvidence: false,
   controlsBound: false,
+  visibleNodes: new Map(),
+  visibleEdges: new Map(),
+  expanded: new Set(),
+  collapsed: new Set(),
+  totalMatches: 0,
+  graphTruncated: false,
 };
+const renderCache = new Map();
+let isAutoRefreshing = false;
+
+function setSectionHtml(id, html) {
+  const el = document.getElementById(id);
+  if (!el) return false;
+  const prev = renderCache.get(id);
+  if (prev === html) return false;
+  el.innerHTML = html;
+  renderCache.set(id, html);
+  return true;
+}
+function captureScrollState() {
+  return {
+    x: window.scrollX,
+    y: window.scrollY,
+    activeId: document.activeElement && document.activeElement.id ? document.activeElement.id : "",
+  };
+}
+function restoreScrollState(state) {
+  if (!state) return;
+  window.scrollTo(state.x || 0, state.y || 0);
+  if (state.activeId) {
+    const el = document.getElementById(state.activeId);
+    if (el && typeof el.focus === "function") {
+      try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+    }
+  }
+}
 function optionList(values, current, label) {
   const opts = [`<option value="">All ${escapeHtml(label)}</option>`]
     .concat(values.map(v => `<option value="${escapeHtml(v)}"${v === current ? " selected" : ""}>${escapeHtml(v)}</option>`));
   return opts.join("");
 }
 function studyNodeKey(n) {
-  return `${n.event_id || ""}:${n.label || ""}`;
+  return n.version_count != null || n.knowledge_status ? (n.label || "") : `${n.event_id || ""}:${n.label || ""}`;
+}
+function graphNodeKey(n) {
+  return n ? (n.label || n.id || "") : "";
 }
 function selectedStudyNode() {
-  return studyKbState.nodes.find(n => studyNodeKey(n) === studyKbState.selectedLabel)
-    || studyKbState.nodes.find(n => n.label === studyKbState.selectedLabel)
-    || studyKbState.nodes[0]
+  const rows = studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes;
+  if (!studyKbState.selectedLabel) return rows[0] || null;
+  return rows.find(n => studyNodeKey(n) === studyKbState.selectedLabel)
+    || rows.find(n => n.label === studyKbState.selectedLabel)
     || null;
+}
+function selectedStudyLabel() {
+  const current = selectedStudyNode();
+  if (current && current.label) return current.label;
+  return studyKbState.selectedLabel.includes(":")
+    ? studyKbState.selectedLabel.split(":").slice(1).join(":")
+    : studyKbState.selectedLabel;
+}
+function selectedStudyGraphNode() {
+  const label = selectedStudyLabel();
+  return studyKbState.visibleNodes.get(label) || null;
+}
+function hasStudyEntry(label) {
+  return (studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes).some(n => n.label === label);
+}
+function selectStudyEntry(label) {
+  if (!label) return false;
+  const row = (studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes).find(n => n.label === label);
+  if (!row) return false;
+  studyKbState.selectedLabel = studyNodeKey(row);
+  if (!studyKbState.visibleNodes.has(label)) {
+    studyKbState.visibleNodes.set(label, {
+      label,
+      kind: row.kind,
+      proof_status: row.proof_status,
+      status: row.status,
+      statement: row.statement,
+      source_ids: row.source_ids || [row.source_id].filter(Boolean),
+      learner_runs: row.learner_runs || [row.learner_run].filter(Boolean),
+      span_ids: row.span_ids || [],
+      versions: studyVersionCount(row),
+      dependency_count: row.dependency_count ?? (row.dependencies || []).length,
+      bridge_count: row.bridge_count ?? (row.bridges || []).length,
+      context_count: row.context_count ?? (row.context || []).length,
+      knowledge_status: row.knowledge_status,
+    });
+  }
+  renderStudyKbBrowser();
+  renderStudyGraph();
+  if (!isAutoRefreshing) {
+    document.getElementById("study_kb_detail")?.scrollIntoView({block: "nearest"});
+  }
+  return true;
+}
+function studyEntryLink(label) {
+  label = String(label || "");
+  if (!label) return "";
+  const title = studyLabelDisplayName(label) || label;
+  const attr = hasStudyEntry(label) ? "data-study-label" : "data-node";
+  return `<a href="#" ${attr}="${escapeHtml(label)}">${escapeHtml(title)}</a> <code>${escapeHtml(label)}</code>`;
 }
 function filteredStudyNodes() {
   const q = studyKbState.query.trim().toLowerCase();
-  return studyKbState.nodes.filter(n => {
+  const rows = studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes;
+  return rows.filter(n => {
     if (studyKbState.kind && n.kind !== studyKbState.kind) return false;
-    if (studyKbState.source && n.source_id !== studyKbState.source) return false;
-    if (studyKbState.run && n.learner_run !== studyKbState.run) return false;
+    if (studyKbState.source && !(n.source_ids || [n.source_id]).includes(studyKbState.source)) return false;
+    if (studyKbState.run && !(n.learner_runs || [n.learner_run]).includes(studyKbState.run)) return false;
+    if (studyKbState.repair === "repaired" && !n.has_repair_overlay) return false;
+    if (studyKbState.repair === "needs_visual" && !n.needs_visual_check) return false;
+    if (studyKbState.repair === "unrepaired" && n.has_repair_overlay) return false;
     if (!q) return true;
     const hay = [
-      n.kind, n.label, n.statement, n.remark, n.source_note,
-      n.source_id, n.learner_run, ...(n.span_ids || []),
+      n.kind, n.label, n.statement, n.source_excerpt, n.formula_excerpt,
+      n.display_source_excerpt, n.display_formula_excerpt, n.typesetting_notes,
+      n.remark, n.source_note,
+      n.knowledge_status, n.review_status, n.source_id, n.learner_run,
+      ...(n.source_ids || []), ...(n.learner_runs || []), ...(n.span_ids || []),
     ].join(" ").toLowerCase();
     return hay.includes(q);
   });
+}
+function studyGraphQueryParams(extra = {}) {
+  const p = new URLSearchParams();
+  if (studyKbState.query.trim()) p.set("q", studyKbState.query.trim());
+  if (studyKbState.kind) p.set("kind", studyKbState.kind);
+  if (studyKbState.source) p.set("source", studyKbState.source);
+  if (studyKbState.run) p.set("run", studyKbState.run);
+  for (const [k, v] of Object.entries(extra)) {
+    if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+  }
+  return p.toString();
+}
+function edgeKey(e) {
+  return `${e.source || e.dependent || ""}->${e.target || e.dependency || ""}:${e.relation || ""}`;
+}
+function resetVisibleStudyGraph() {
+  studyKbState.visibleNodes = new Map();
+  studyKbState.visibleEdges = new Map();
+  studyKbState.expanded = new Set();
+  studyKbState.collapsed = new Set();
+  studyKbState.totalMatches = 0;
+  studyKbState.graphTruncated = false;
+}
+function mergeVisibleStudyGraph(payload) {
+  for (const n of payload.nodes || []) {
+    const label = graphNodeKey(n);
+    if (label) studyKbState.visibleNodes.set(label, n);
+  }
+  for (const e of payload.edges || []) {
+    const source = e.source || e.dependent || "";
+    const target = e.target || e.dependency || "";
+    if (source && target) studyKbState.visibleEdges.set(edgeKey(e), e);
+  }
+  if (payload.total != null) studyKbState.totalMatches = payload.total;
+  if (payload.truncated != null) studyKbState.graphTruncated = !!payload.truncated;
+  if (Array.isArray(payload.notation_contexts)) studyKbState.notationContexts = payload.notation_contexts;
+  studyKbState.graph = payload;
+}
+async function loadStudyGraphRoots() {
+  resetVisibleStudyGraph();
+  const payload = await fetchJson("/api/study/roots?" + studyGraphQueryParams({limit: 40}));
+  if (!payload.__error) mergeVisibleStudyGraph({nodes: payload.nodes || [], edges: [], total: payload.total, truncated: payload.truncated});
+  renderStudyGraph();
+}
+async function loadStudyGraphAttention() {
+  resetVisibleStudyGraph();
+  const payload = await fetchJson("/api/study/attention?" + studyGraphQueryParams({limit: 60}));
+  if (!payload.__error) mergeVisibleStudyGraph({nodes: payload.nodes || [], edges: [], total: payload.total, truncated: payload.truncated});
+  renderStudyGraph();
+}
+async function expandStudyGraphNode(label, direction = "dependencies") {
+  if (!label) return;
+  const payload = await fetchJson("/api/study/neighborhood?" + new URLSearchParams({
+    root: label,
+    direction,
+    depth: "1",
+    limit: "80",
+  }).toString());
+  if (payload.__error) return;
+  mergeVisibleStudyGraph(payload);
+  studyKbState.expanded.add(label);
+  studyKbState.collapsed.delete(label);
+  renderStudyGraph();
+}
+function collapseStudyGraphNode(label) {
+  if (!label) return;
+  const outgoing = new Map();
+  for (const e of studyKbState.visibleEdges.values()) {
+    const source = e.source || e.dependent || "";
+    const target = e.target || e.dependency || "";
+    if (!outgoing.has(source)) outgoing.set(source, []);
+    outgoing.get(source).push(target);
+  }
+  const remove = new Set();
+  const walk = (cur) => {
+    for (const dep of outgoing.get(cur) || []) {
+      if (dep === label || remove.has(dep)) continue;
+      remove.add(dep);
+      walk(dep);
+    }
+  };
+  walk(label);
+  remove.delete(label);
+  for (const dep of remove) studyKbState.visibleNodes.delete(dep);
+  for (const [k, e] of [...studyKbState.visibleEdges.entries()]) {
+    const source = e.source || e.dependent || "";
+    const target = e.target || e.dependency || "";
+    if (remove.has(source) || remove.has(target) || source === label) {
+      studyKbState.visibleEdges.delete(k);
+    }
+  }
+  studyKbState.expanded.delete(label);
+  studyKbState.collapsed.add(label);
+  renderStudyGraph();
 }
 function bindStudyKbControls() {
   if (studyKbState.controlsBound) return;
@@ -832,21 +1350,31 @@ function bindStudyKbControls() {
   const kind = document.getElementById("study_kind_filter");
   const source = document.getElementById("study_source_filter");
   const run = document.getElementById("study_run_filter");
+  const repair = document.getElementById("study_repair_filter");
   if (search) search.addEventListener("input", () => {
     studyKbState.query = search.value || "";
     renderStudyKbBrowser();
+    loadStudyGraphRoots();
   });
   if (kind) kind.addEventListener("change", () => {
     studyKbState.kind = kind.value || "";
     renderStudyKbBrowser();
+    loadStudyGraphRoots();
   });
   if (source) source.addEventListener("change", () => {
     studyKbState.source = source.value || "";
     renderStudyKbBrowser();
+    loadStudyGraphRoots();
   });
   if (run) run.addEventListener("change", () => {
     studyKbState.run = run.value || "";
     renderStudyKbBrowser();
+    loadStudyGraphRoots();
+  });
+  if (repair) repair.addEventListener("change", () => {
+    studyKbState.repair = repair.value || "";
+    renderStudyKbBrowser();
+    loadStudyGraphRoots();
   });
   document.addEventListener("click", (e) => {
     const row = e.target.closest("[data-study-key]");
@@ -854,30 +1382,92 @@ function bindStudyKbControls() {
     e.preventDefault();
     studyKbState.selectedLabel = row.dataset.studyKey || "";
     renderStudyKbBrowser();
+    const label = selectedStudyLabel();
+    if (label && !studyKbState.visibleNodes.has(label)) {
+      selectStudyEntry(label);
+      return;
+    }
+    renderStudyGraph();
   });
+  const expand = document.getElementById("study_graph_expand");
+  const collapse = document.getElementById("study_graph_collapse");
+  const attention = document.getElementById("study_graph_attention");
+  const reset = document.getElementById("study_graph_reset");
+  if (expand) expand.addEventListener("click", () => expandStudyGraphNode(selectedStudyLabel(), "dependencies"));
+  if (collapse) collapse.addEventListener("click", () => collapseStudyGraphNode(selectedStudyLabel()));
+  if (attention) attention.addEventListener("click", () => loadStudyGraphAttention());
+  if (reset) reset.addEventListener("click", () => loadStudyGraphRoots());
 }
 function renderStudyKbSummary(payload) {
+  if (!payload || payload.__error) {
+    return [
+      stat("entries", 0),
+      stat("status", `<code>${escapeHtml(payload?.__error || "unavailable")}</code>`),
+    ].join("");
+  }
   const kinds = payload.kind_counts || {};
   const issues = payload.issue_counts_by_type || {};
+  const status = payload.knowledge_status_counts || {};
+  const reviews = payload.review_status_counts || {};
   const sourceCount = Object.keys(payload.source_counts || {}).length;
-  document.getElementById("study_kb_summary").innerHTML = [
-    stat("candidates", payload.count ?? 0),
+  studyKbState.notationContexts = payload.notation_contexts || [];
+  return [
+    stat("entries", payload.entry_count ?? payload.count ?? 0),
+    stat("versions", payload.count ?? 0),
     stat("batches", payload.batch_count ?? 0),
     stat("sources", sourceCount),
+    stat("notation", studyKbState.notationContexts.length),
+    stat("needs bridge", status.needs_bridge ?? 0),
+    stat("needs revision", status.needs_revision ?? 0),
+    stat("reviewed", (status.reviewed ?? 0) + (reviews.accepted ?? 0)),
     ...Object.keys(kinds).sort().map(k => stat(k, kinds[k])),
     stat("issues", Object.values(issues).reduce((a, b) => a + Number(b || 0), 0)),
   ].join("");
 }
+function studyKbReady(payload) {
+  return !!payload && !payload.__error && (
+    Array.isArray(payload.entries) || Array.isArray(payload.nodes) || payload.entry_count != null || payload.count != null
+  );
+}
+function renderPhase3KbStats(payload) {
+  const kinds = payload.kind_counts || {};
+  const status = payload.knowledge_status_counts || {};
+  const reviews = payload.review_status_counts || {};
+  const orderedKinds = ["theorem", "proposition", "lemma", "definition", "external_theorem", "remark", "bridge_request"];
+  const kindStats = orderedKinds
+    .filter(k => (kinds[k] || 0) > 0)
+    .map(k => stat(k, kinds[k]));
+  return [
+    stat("study entries", payload.entry_count ?? payload.count ?? 0),
+    stat("versions", payload.count ?? 0),
+    stat("learner batches", payload.batch_count ?? 0),
+    stat("notation contexts", (payload.notation_contexts || []).length),
+    ...kindStats,
+    stat("proof extracted", status.source_proof_extracted ?? 0),
+    stat("statement only", status.statement_only ?? 0),
+    stat("reviewed", (status.reviewed ?? 0) + (reviews.accepted ?? 0)),
+  ].join("");
+}
 function syncStudyKbControls() {
-  const kinds = [...new Set(studyKbState.nodes.map(n => n.kind).filter(Boolean))].sort();
-  const sources = [...new Set(studyKbState.nodes.map(n => n.source_id).filter(Boolean))].sort();
-  const runs = [...new Set(studyKbState.nodes.map(n => n.learner_run).filter(Boolean))].sort();
+  const rows = studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes;
+  const kinds = [...new Set(rows.map(n => n.kind).filter(Boolean))].sort();
+  const sources = [...new Set(rows.flatMap(n => n.source_ids || [n.source_id]).filter(Boolean))].sort();
+  const runs = [...new Set(rows.flatMap(n => n.learner_runs || [n.learner_run]).filter(Boolean))].sort();
   const kind = document.getElementById("study_kind_filter");
   const source = document.getElementById("study_source_filter");
   const run = document.getElementById("study_run_filter");
+  const repair = document.getElementById("study_repair_filter");
   if (kind) kind.innerHTML = optionList(kinds, studyKbState.kind, "kinds");
   if (source) source.innerHTML = optionList(sources, studyKbState.source, "sources");
   if (run) run.innerHTML = optionList(runs, studyKbState.run, "runs");
+  if (repair) {
+    repair.innerHTML = [
+      `<option value=""${studyKbState.repair === "" ? " selected" : ""}>All repair states</option>`,
+      `<option value="repaired"${studyKbState.repair === "repaired" ? " selected" : ""}>Repaired display</option>`,
+      `<option value="needs_visual"${studyKbState.repair === "needs_visual" ? " selected" : ""}>Needs visual check</option>`,
+      `<option value="unrepaired"${studyKbState.repair === "unrepaired" ? " selected" : ""}>No repair overlay</option>`,
+    ].join("");
+  }
 }
 function renderStudyKbBrowser() {
   const list = document.getElementById("study_kb");
@@ -885,73 +1475,542 @@ function renderStudyKbBrowser() {
   const meta = document.getElementById("study_kb_meta");
   if (!list || !detail || !meta) return;
   const rows = filteredStudyNodes();
-  const current = selectedStudyNode();
-  if (!studyKbState.selectedLabel && current) {
+  let current = selectedStudyNode();
+  if (!current || !rows.some(n => studyNodeKey(n) === studyNodeKey(current))) {
+    current = rows[0] || null;
+    studyKbState.selectedLabel = current ? studyNodeKey(current) : "";
+  } else if (!studyKbState.selectedLabel && current) {
     studyKbState.selectedLabel = studyNodeKey(current);
   }
-  meta.textContent = `${rows.length} of ${studyKbState.nodes.length} candidates`;
+  const totalEntries = (studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes).length;
+  meta.textContent = `${rows.length} of ${totalEntries} knowledge entries`;
   if (!rows.length) {
-    list.innerHTML = `<div class="empty">no matching study candidates</div>`;
-    detail.innerHTML = `<div class="empty">select a candidate</div>`;
+    setSectionHtml("study_kb", `<div class="empty">no matching knowledge entries</div>`);
+    setSectionHtml("study_kb_detail", `<div class="empty">select a knowledge entry</div>`);
     return;
   }
   const selectedKey = current ? studyNodeKey(current) : "";
-  list.innerHTML = `<div class="study-list" role="listbox">${
+  const listHtml = `<div class="study-list" role="listbox">${
     rows.map(n => {
       const key = studyNodeKey(n);
+      const status = n.knowledge_status || n.proof_status || "proposed";
+      const review = n.review_status || "unreviewed";
+      const refs = (n.span_ids || []).length;
+      const versions = studyVersionCount(n);
+      const versionLabel = versions ? `v${versions}` : "virtual";
+      const depCount = n.dependency_count ?? (n.dependencies || []).length ?? 0;
+      const bridgeCount = n.bridge_count ?? (n.bridges || []).length ?? 0;
+      const contextCount = n.context_count ?? (n.context || []).length ?? 0;
+      const extraction = extractionLabel(n);
+      const previewText = primaryStudyText(n);
       return `<button class="study-row" type="button" role="option" data-study-key="${escapeHtml(key)}" aria-selected="${key === selectedKey ? "true" : "false"}">
         <div class="study-row-head">
           <span class="study-kind ${escapeHtml(n.kind || "")}">${escapeHtml(n.kind || "unknown")}</span>
-          <span class="footnote">${escapeHtml(n.proof_status || "—")} · ${escapeHtml((n.span_ids || []).length)} ref${(n.span_ids || []).length === 1 ? "" : "s"}</span>
+          <span class="study-status ${escapeHtml(status)}">${escapeHtml(status)}</span>
         </div>
-        <div class="study-label">${escapeHtml(n.label || "")}</div>
-        <div class="study-row-statement">${escapeHtml(ellipsize(n.statement || "", 160))}</div>
+        <div class="study-label">${escapeHtml(graphNodeTitle(n))} <span class="study-raw-label"><code>${escapeHtml(n.label || "")}</code></span></div>
+        <div class="footnote">${escapeHtml(review)} · ${escapeHtml(versionLabel)} · ${escapeHtml(refs)} ref${refs === 1 ? "" : "s"} · deps ${escapeHtml(depCount)}${bridgeCount ? ` · bridges ${escapeHtml(bridgeCount)}` : ""}${contextCount ? ` · ctx ${escapeHtml(contextCount)}` : ""}${extraction ? ` · ${escapeHtml(extraction)}` : ""}</div>
+        <div class="study-row-statement math-body compact">${renderStudyText(ellipsize(previewText || "", 220))}</div>
       </button>`;
     }).join("")
   }</div>`;
-  renderStudyKbDetail(current);
+  const listChanged = setSectionHtml("study_kb", listHtml);
+  if (listChanged) renderMath(list);
+  if (current) renderStudyKbDetail(current);
+  else renderStudyGraphNodeDetail(selectedStudyGraphNode());
+}
+function graphNodeKindClass(kind) {
+  return String(kind || "missing_candidate").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+function titleCaseStudyLabel(s) {
+  const smallWords = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "the", "to", "with"]);
+  return String(s || "").split(/\s+/).filter(Boolean).map((word, i) => {
+    if (/^[IVX]+(\.\d+)+$/.test(word)) return word;
+    if (/^[A-Z][A-Z0-9_^-]*$/.test(word)) return word;
+    const lower = word.toLowerCase();
+    if (lower === "bch") return "BCH";
+    if (lower === "gl") return "GL";
+    if (lower === "sp") return "Sp";
+    if (lower === "p-adic") return "p-adic";
+    if (smallWords.has(lower) && i > 0) return lower;
+    return lower.charAt(0).toUpperCase() + lower.slice(1);
+  }).join(" ");
+}
+function studyLabelDisplayName(label) {
+  let raw = String(label || "").trim();
+  if (!raw) return "";
+  raw = raw.replace(/^[a-z]+:/i, "");
+  let prefix = "";
+  if (/^bridge_req_/i.test(raw)) {
+    prefix = "Bridge ";
+    raw = raw.replace(/^bridge_req_/i, "");
+  }
+  raw = raw.replace(/^mw_/i, "");
+  raw = raw.replace(/^(i|ii|iii|iv|v|vi|vii|viii|ix|x)((?:_\d+)+)_/i, (_, roman, nums) =>
+    `${prefix}${roman.toUpperCase()}${nums.replace(/_/g, ".")} `
+  );
+  if (prefix && !raw.toLowerCase().startsWith(prefix.trim().toLowerCase())) raw = prefix + raw;
+  raw = raw.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  return titleCaseStudyLabel(raw)
+    .replace(/\bHarish Chandra\b/g, "Harish-Chandra")
+    .replace(/\bMoeglin Waldspurger\b/g, "Moeglin-Waldspurger")
+    .replace(/\bGL N\b/g, "GL_n");
+}
+function graphNodeTitle(n) {
+  const label = typeof n === "string" ? n : graphNodeKey(n);
+  const title = studyLabelDisplayName(label) || label;
+  return ellipsize(title, 38);
+}
+function studyRelationPhrase(relations) {
+  const rels = relations && relations.length ? relations : ["depends_on"];
+  if (rels.some(r => r === "needs_bridge")) return "bridge needed by";
+  if (rels.every(r => r === "local_context")) return "is context for";
+  if (rels.some(r => r === "local_context")) return "is related context for";
+  return "supports";
+}
+function aggregateStudyGraphEdges(edges) {
+  const merged = new Map();
+  for (const edge of edges) {
+    const dependent = edge.source || edge.dependent || "";
+    const dependency = edge.target || edge.dependency || "";
+    if (!dependent || !dependency) continue;
+    const source = dependency;
+    const target = dependent;
+    const key = `${source}->${target}`;
+    if (!merged.has(key)) {
+      merged.set(key, {
+        source,
+        target,
+        dependent,
+        dependency,
+        relations: [],
+        source_types: [],
+        event_ids: [],
+        learner_runs: [],
+      });
+    }
+    const row = merged.get(key);
+    const relation = edge.relation || "depends_on";
+    if (!row.relations.includes(relation)) row.relations.push(relation);
+    for (const field of ["source_types", "event_ids", "learner_runs"]) {
+      for (const value of edge[field] || []) {
+        if (value && !row[field].includes(value)) row[field].push(value);
+      }
+    }
+  }
+  return [...merged.values()].map(edge => ({
+    ...edge,
+    relation: edge.relations.length === 1 ? edge.relations[0] : "multi_relation",
+    relations: edge.relations.sort(),
+  })).sort((a, b) =>
+    a.source.localeCompare(b.source)
+    || a.target.localeCompare(b.target)
+    || a.relations.join(",").localeCompare(b.relations.join(","))
+  );
+}
+function computeStudyGraphLayout(nodes, edges) {
+  const byLabel = new Map(nodes.map(n => [graphNodeKey(n), n]));
+  const children = new Map();
+  const indegree = new Map(nodes.map(n => [graphNodeKey(n), 0]));
+  for (const edge of edges) {
+    const source = edge.source || "";
+    const target = edge.target || "";
+    if (!byLabel.has(source) || !byLabel.has(target)) continue;
+    if (!children.has(source)) children.set(source, new Set());
+    if (!children.get(source).has(target)) {
+      children.get(source).add(target);
+      indegree.set(target, (indegree.get(target) || 0) + 1);
+    }
+  }
+  const queue = [...indegree.entries()]
+    .filter(([, degree]) => degree === 0)
+    .map(([label]) => label)
+    .sort();
+  const rank = new Map(queue.map(label => [label, 0]));
+  let seen = 0;
+  while (queue.length) {
+    const label = queue.shift();
+    seen += 1;
+    const nextRank = (rank.get(label) || 0) + 1;
+    for (const child of children.get(label) || []) {
+      rank.set(child, Math.max(rank.get(child) || 0, nextRank));
+      indegree.set(child, (indegree.get(child) || 0) - 1);
+      if (indegree.get(child) === 0) queue.push(child);
+    }
+    queue.sort();
+  }
+  for (const n of nodes) {
+    const label = graphNodeKey(n);
+    if (!rank.has(label)) rank.set(label, seen ? 1 : 0);
+  }
+  const layers = new Map();
+  for (const n of nodes) {
+    const layer = rank.get(graphNodeKey(n)) || 0;
+    if (!layers.has(layer)) layers.set(layer, []);
+    layers.get(layer).push(n);
+  }
+  const nodeW = 250;
+  const nodeH = 70;
+  const gapX = 70;
+  const gapY = 34;
+  const margin = 30;
+  const positions = new Map();
+  const orderedLayers = [...layers.keys()].sort((a, b) => a - b);
+  orderedLayers.forEach(layer => {
+    const row = layers.get(layer).sort((a, b) => graphNodeKey(a).localeCompare(graphNodeKey(b)));
+    row.forEach((n, i) => {
+      positions.set(graphNodeKey(n), {
+        x: margin + layer * (nodeW + gapX),
+        y: margin + i * (nodeH + gapY),
+        w: nodeW,
+        h: nodeH,
+      });
+    });
+  });
+  const maxLayer = Math.max(0, ...orderedLayers);
+  const maxRows = Math.max(1, ...[...layers.values()].map(row => row.length));
+  return {
+    positions,
+    width: margin * 2 + (maxLayer + 1) * nodeW + maxLayer * gapX,
+    height: margin * 2 + maxRows * nodeH + Math.max(0, maxRows - 1) * gapY,
+  };
+}
+function renderStudyGraph() {
+  const root = document.getElementById("study_graph");
+  const meta = document.getElementById("study_graph_meta");
+  if (!root || !meta) return;
+  const nodes = [...studyKbState.visibleNodes.values()];
+  const visible = new Set(nodes.map(n => graphNodeKey(n)));
+  const rawEdges = [...studyKbState.visibleEdges.values()].filter(e =>
+    visible.has(e.source || e.dependent || "") && visible.has(e.target || e.dependency || "")
+  );
+  const visualEdges = aggregateStudyGraphEdges(rawEdges);
+  const total = studyKbState.totalMatches || studyKbState.graph.total || studyKbState.graph.node_count || nodes.length;
+  const truncated = studyKbState.graphTruncated ? " · truncated" : "";
+  const relationNote = visualEdges.length === rawEdges.length ? "" : ` / ${rawEdges.length} relations`;
+  meta.textContent = `${nodes.length} visible of ${total} matches · ${visualEdges.length} links${relationNote}${truncated}`;
+  if (!nodes.length) {
+    root.innerHTML = `<div class="empty" style="padding:.8rem;">no matching graph nodes</div>`;
+    return;
+  }
+  const layout = computeStudyGraphLayout(nodes, visualEdges);
+  const selected = selectedStudyLabel();
+  const dependencyCounts = new Map();
+  for (const e of visualEdges) {
+    const dependent = e.dependent || e.target || "";
+    dependencyCounts.set(dependent, (dependencyCounts.get(dependent) || 0) + 1);
+  }
+  const edgeSvg = visualEdges.map(edge => {
+    const source = edge.source || "";
+    const target = edge.target || "";
+    const sp = layout.positions.get(source);
+    const tp = layout.positions.get(target);
+    if (!sp || !tp) return "";
+    const forward = sp.x <= tp.x;
+    const x1 = forward ? sp.x + sp.w : sp.x;
+    const y1 = sp.y + sp.h / 2;
+    const x2 = forward ? tp.x : tp.x + tp.w;
+    const y2 = tp.y + tp.h / 2;
+    const bend = Math.max(28, Math.abs(x2 - x1) / 2);
+    const c1 = forward ? x1 + bend : x1 - bend;
+    const c2 = forward ? x2 - bend : x2 + bend;
+    const relations = edge.relations && edge.relations.length ? edge.relations : [edge.relation || "depends_on"];
+    const cls = relations.map(graphNodeKindClass).concat(relations.length > 1 ? ["multi_relation"] : []).join(" ");
+    const phrase = studyRelationPhrase(relations);
+    return `<path class="study-graph-edge ${escapeHtml(cls)}" d="M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}">
+      <title>${escapeHtml(source)} ${escapeHtml(phrase)} ${escapeHtml(target)} · ${escapeHtml(relations.join(", "))}</title>
+    </path>`;
+  }).join("");
+  const nodeSvg = nodes.map(n => {
+    const label = graphNodeKey(n);
+    const p = layout.positions.get(label);
+    if (!p) return "";
+    const cls = [
+      "study-graph-node",
+      graphNodeKindClass(n.kind),
+      n.virtual ? "virtual" : "",
+      label === selected ? "selected" : "",
+    ].filter(Boolean).join(" ");
+    const proof = n.proof_status || n.status || "";
+    const versions = Number(n.versions || 0) > 1 ? ` · v${n.versions}` : "";
+    const refs = (n.span_ids || []).length ? ` · ${(n.span_ids || []).length} refs` : "";
+    const expanded = studyKbState.expanded.has(label);
+    const knownDeps = dependencyCounts.get(label) || 0;
+    const totalDeps = Number((n.dependency_count ?? knownDeps) || 0);
+    const bridgeCount = Number(n.bridge_count || 0);
+    const contextCount = Number(n.context_count || 0);
+    const expandableCount = totalDeps + bridgeCount + contextCount;
+    const toggle = expandableCount > 0
+      ? `<g class="graph-toggle" data-graph-toggle="${escapeHtml(label)}" tabindex="0" role="button" transform="translate(${p.w - 22},18)">
+          <circle r="10"></circle>
+          <text y="0">${expanded ? "−" : "+"}</text>
+        </g>`
+      : "";
+    const extraCounts = [
+      `${totalDeps} deps`,
+      bridgeCount ? `${bridgeCount} bridges` : "",
+      contextCount ? `${contextCount} ctx` : "",
+    ].filter(Boolean).join(" · ");
+    const extraction = extractionLabel(n);
+    const graphCounts = `${proof || "no proof status"} · ${extraCounts}${refs}${extraction ? ` · ${extraction}` : ""}`;
+    return `<g class="${escapeHtml(cls)}" tabindex="0" role="button" data-graph-label="${escapeHtml(label)}" transform="translate(${p.x},${p.y})">
+      <rect width="${p.w}" height="${p.h}"></rect>
+      <text class="graph-kind" x="12" y="17">${escapeHtml(n.kind || "unknown")}${escapeHtml(versions)}</text>
+      <text x="12" y="38">${escapeHtml(graphNodeTitle(n))}</text>
+      <text class="graph-proof" x="12" y="58">${escapeHtml(graphCounts)}</text>
+      ${toggle}
+      <title>${escapeHtml(label)}\n${escapeHtml(n.statement || "")}</title>
+    </g>`;
+  }).join("");
+  root.innerHTML = `<svg class="study-graph-svg" viewBox="0 0 ${layout.width} ${layout.height}" width="${layout.width}" height="${layout.height}" aria-label="Study knowledge graph">
+    <defs>
+      <marker id="study-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+      </marker>
+      <marker id="study-arrow-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--bad)"></path>
+      </marker>
+    </defs>
+    ${edgeSvg}
+    ${nodeSvg}
+  </svg>`;
+  root.querySelectorAll("[data-graph-toggle]").forEach(el => {
+    const toggle = (e) => {
+      e.stopPropagation();
+      const label = el.getAttribute("data-graph-toggle") || "";
+      if (studyKbState.expanded.has(label)) collapseStudyGraphNode(label);
+      else expandStudyGraphNode(label, "dependencies");
+    };
+    el.addEventListener("click", toggle);
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle(e);
+      }
+    });
+  });
+  root.querySelectorAll("[data-graph-label]").forEach(el => {
+    const select = () => {
+      const label = el.getAttribute("data-graph-label") || "";
+      const candidate = (studyKbState.entries.length ? studyKbState.entries : studyKbState.nodes).find(n => n.label === label);
+      studyKbState.selectedLabel = candidate ? studyNodeKey(candidate) : label;
+      renderStudyKbBrowser();
+      renderStudyGraph();
+    };
+    el.addEventListener("click", select);
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        select();
+      }
+    });
+  });
 }
 function renderStudyKbDetail(n) {
   const detail = document.getElementById("study_kb_detail");
   if (!detail) return;
   if (!n) {
-    detail.innerHTML = `<div class="empty">select a candidate</div>`;
+    setSectionHtml("study_kb_detail", `<div class="empty">select a knowledge entry</div>`);
     return;
   }
-  const refs = (n.source_refs || []).map(ref => {
+  const latest = n.latest_version || n;
+  const sourceRefs = n.source_refs || latest.source_refs || [];
+  const refs = (sourceRefs || []).map(ref => {
     if (!ref || typeof ref !== "object") return "";
     return `<div><code>${escapeHtml(ref.span_id || "")}</code><br><code>${escapeHtml(shortHash(ref.span_hash || ""))}</code></div>`;
   }).filter(Boolean).join("");
-  detail.innerHTML = `
-    <h3><code>${escapeHtml(n.label || "")}</code></h3>
+  const status = n.knowledge_status || n.proof_status || "proposed";
+  const review = n.latest_review || null;
+  const dependencies = n.dependencies || (n.depends_on || []).map(label => ({label, relations: ["depends_on"]}));
+  const dependents = n.dependents || [];
+  const bridges = n.bridges || [];
+  const bridgeUsers = n.bridge_users || [];
+  const context = n.context || [];
+  const contextUsers = n.context_users || [];
+  const versions = n.versions || [];
+  const reviewRows = n.reviews || [];
+  const proof = n.proof || latest.proof || "";
+  const proofSteps = n.proof_steps || latest.proof_steps || [];
+  const notationContexts = studyNotationContextsFor(n);
+  const bibliography = n.bibliography || latest.bibliography || {};
+  const bibliographyHtml = n.kind === "external_theorem" ? formatBibliography(bibliography) : "";
+  const externalRefsHtml = n.kind === "external_theorem" ? renderExternalSourceRefs(n.external_source_refs || latest.external_source_refs || []) : "";
+  const citationStatus = n.citation_status || latest.citation_status || "";
+  const extraction = extractionLabel(n);
+  const sourceLocator = n.source_locator || latest.source_locator || "";
+  const formattedSourceExcerpt = formattedSourceStudyText(n);
+  const rawSourceExcerpt = rawSourceStudyText(n);
+  const sourceExcerpt = (studyKbState.showRawEvidence ? rawSourceExcerpt : formattedSourceExcerpt)
+    || rawSourceExcerpt || primaryStudyText(n);
+  const formattedFormulaExcerpt = formattedFormulaStudyText(n);
+  const rawFormulaExcerpt = rawFormulaStudyText(n);
+  const formulaExcerpt = (studyKbState.showRawEvidence ? rawFormulaExcerpt : formattedFormulaExcerpt)
+    || rawFormulaExcerpt;
+  const summaryStatement = n.statement || latest.statement || "";
+  const needsVisualCheck = !!(n.needs_visual_check || latest.needs_visual_check);
+  const canToggleEvidence = !!(formattedSourceExcerpt && rawSourceExcerpt && formattedSourceExcerpt !== rawSourceExcerpt)
+    || !!(formattedFormulaExcerpt && rawFormulaExcerpt && formattedFormulaExcerpt !== rawFormulaExcerpt);
+  const detailHtml = `
+    <div class="study-entry-head">
+      <div class="study-entry-title">
+        <h3>${escapeHtml(graphNodeTitle(n))}</h3>
+        <span class="study-raw-label"><code>${escapeHtml(n.label || "")}</code></span>
+      </div>
+      <div class="study-meta">
+        <span class="study-kind ${escapeHtml(n.kind || "")}">${escapeHtml(n.kind || "unknown")}</span>
+        <span class="study-status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+        <span class="study-status ${escapeHtml(n.review_status || "unreviewed")}">${escapeHtml(n.review_status || "unreviewed")}</span>
+        ${extraction ? `<span class="study-status">${escapeHtml(extraction)}</span>` : ""}
+        ${sourceLocator ? `<code>${escapeHtml(sourceLocator)}</code>` : ""}
+        ${n.has_repair_overlay ? `<span class="study-status accepted">repaired display</span>` : ""}
+        ${needsVisualCheck ? `<span class="study-status needs_revision">visual check</span>` : ""}
+        <code>${escapeHtml((n.source_ids || [n.source_id]).filter(Boolean).join(", ") || "no_source")}</code>
+      </div>
+      ${canToggleEvidence ? `<div class="study-detail-toolbar"><label><input id="study_raw_toggle" type="checkbox"${studyKbState.showRawEvidence ? " checked" : ""} /> Show raw evidence</label></div>` : ""}
+      ${renderStudyBlock(sourceExcerpt || summaryStatement || "", {raw: studyKbState.showRawEvidence || (!!rawSourceExcerpt && !formattedSourceExcerpt), mode: studyKbState.showRawEvidence ? "preformatted" : (n.display_render_mode || latest.display_render_mode || "")})}
+    </div>
+    <div class="study-detail-grid">
+      ${formulaExcerpt ? `<div class="study-detail-block"><h4>${studyKbState.showRawEvidence ? "Raw Formula Evidence" : "Formula Excerpt"}</h4>${renderStudyBlock(formulaExcerpt, {raw: studyKbState.showRawEvidence || (!!rawFormulaExcerpt && !formattedFormulaExcerpt), mode: studyKbState.showRawEvidence ? "preformatted" : (n.formula_display_render_mode || latest.formula_display_render_mode || "")})}</div>` : ""}
+      ${n.has_repair_overlay ? `<div class="study-detail-block"><h4>Repair Overlay</h4><div class="footnote"><code>${escapeHtml(n.repair_id || "")}</code>${n.repair_version != null ? ` · v${escapeHtml(n.repair_version)}` : ""}${n.repair_ts ? ` · ${escapeHtml(n.repair_ts)}` : ""}${(n.repair_actions || []).length ? ` · ${escapeHtml((n.repair_actions || []).join(", "))}` : ""}${(n.repair_supersedes || []).length ? ` · supersedes ${escapeHtml((n.repair_supersedes || []).length)}` : ""}</div>${n.typesetting_notes ? `<div class="math-body">${renderStudyText(n.typesetting_notes)}</div>` : ""}</div>` : ""}
+      ${summaryStatement && summaryStatement !== sourceExcerpt ? `<div class="study-detail-block"><h4>Referee Summary</h4><div class="math-body">${renderStudyText(summaryStatement)}</div></div>` : ""}
+      ${review ? `<div class="study-detail-block"><h4>Latest Review</h4><div class="footnote">
+        <a href="/api/review/${encodeURIComponent(review.review_id || review.event_id || "")}"><code>${escapeHtml(review.review_id || review.event_id || "")}</code></a>
+        · <code>${escapeHtml(review.verdict || "")}</code>
+        · issues ${escapeHtml(review.issue_count ?? 0)}
+        · blocks ${review.blocks_acceptance ? "yes" : "no"}
+      </div></div>` : `<div class="study-detail-block"><h4>Latest Review</h4><div class="empty">unreviewed</div></div>`}
+      ${proof ? `<div class="study-detail-block"><h4>Proof Skeleton</h4><div class="math-body">${renderStudyText(proof)}</div></div>` : ""}
+      ${(proofSteps || []).length ? `<div class="study-detail-block"><h4>Proof Steps</h4><ol>${proofSteps.map(s => `<li>${renderStudyText(s.step || "")}${(s.depends_on || []).length ? `<div class="footnote">uses ${(s.depends_on || []).map(label => studyEntryLink(label)).join(", ")}</div>` : ""}</li>`).join("")}</ol></div>` : ""}
+      ${notationContexts.length ? `<div class="study-detail-block"><h4>Notation</h4>${notationContexts.map(renderNotationContext).join("")}</div>` : ""}
+      ${dependencies.length ? `<div class="study-detail-block"><h4>Depends On</h4><div>${dependencies.map(d => `${studyEntryLink(d.label || d)}${(d.relations || []).length ? ` <span class="footnote">${escapeHtml((d.relations || []).join(", "))}</span>` : ""}`).join("<br>")}</div></div>` : ""}
+      ${dependents.length ? `<div class="study-detail-block"><h4>Used By</h4><div>${dependents.slice(0, 24).map(d => `${studyEntryLink(d.label || d)}${(d.relations || []).length ? ` <span class="footnote">${escapeHtml((d.relations || []).join(", "))}</span>` : ""}`).join("<br>")}</div></div>` : ""}
+      ${bridges.length ? `<div class="study-detail-block"><h4>Bridge Needs</h4><div>${bridges.map(d => `${studyEntryLink(d.label || d)}${(d.relations || []).length ? ` <span class="footnote">${escapeHtml((d.relations || []).join(", "))}</span>` : ""}`).join("<br>")}</div></div>` : ""}
+      ${bridgeUsers.length ? `<div class="study-detail-block"><h4>Blocks</h4><div>${bridgeUsers.slice(0, 24).map(d => `${studyEntryLink(d.label || d)}${(d.relations || []).length ? ` <span class="footnote">${escapeHtml((d.relations || []).join(", "))}</span>` : ""}`).join("<br>")}</div></div>` : ""}
+      ${context.length ? `<div class="study-detail-block"><h4>Context</h4><div>${context.map(d => `${studyEntryLink(d.label || d)}${(d.relations || []).length ? ` <span class="footnote">${escapeHtml((d.relations || []).join(", "))}</span>` : ""}`).join("<br>")}</div></div>` : ""}
+      ${contextUsers.length ? `<div class="study-detail-block"><h4>Used As Context By</h4><div>${contextUsers.slice(0, 24).map(d => `${studyEntryLink(d.label || d)}${(d.relations || []).length ? ` <span class="footnote">${escapeHtml((d.relations || []).join(", "))}</span>` : ""}`).join("<br>")}</div></div>` : ""}
+      ${bibliographyHtml ? `<div class="study-detail-block"><h4>Bibliography</h4>${bibliographyHtml}${citationStatus ? `<div class="footnote">citation ${escapeHtml(citationStatus)}</div>` : ""}</div>` : ""}
+      ${externalRefsHtml ? `<div class="study-detail-block"><h4>Source Evidence</h4><div class="study-ref-list">${externalRefsHtml}</div></div>` : ""}
+      ${n.remark ? `<div class="study-detail-block"><h4>Remark</h4><div class="math-body">${renderStudyText(n.remark)}</div></div>` : ""}
+      ${n.source_note ? `<div class="study-detail-block"><h4>Source Note</h4><div class="math-body">${renderStudyText(n.source_note)}</div></div>` : ""}
+      <div class="study-detail-block">
+        <h4>Source Refs</h4>
+        <div class="study-ref-list">${refs || `<div class="empty">none</div>`}</div>
+      </div>
+      ${versions.length ? `<div class="study-detail-block"><h4>Versions</h4>${rowsToTable(["run", "proof", "refs", "issues"], versions.slice(0, 8).map(v => ({
+        run: `<a href="/api/learner/run/${encodeURIComponent(v.learner_run || v.event_id || "")}"><code>${escapeHtml(ellipsize(v.learner_run || v.event_id || "", 44))}</code></a>`,
+        proof: `<code>${escapeHtml(v.proof_status || "—")}</code>`,
+        refs: (v.span_ids || []).length,
+        issues: v.batch_issue_count ?? 0,
+      })))}</div>` : `<div class="study-detail-block"><h4>Batch</h4><div class="footnote">event <code>${escapeHtml(n.event_id || "")}</code> · batch issues ${escapeHtml(n.batch_issue_count ?? 0)}</div></div>`}
+      ${reviewRows.length > 1 ? `<div class="study-detail-block"><h4>Review History</h4>${rowsToTable(["review", "verdict", "issues", "blocks"], reviewRows.map(r => ({
+        review: `<a href="/api/review/${encodeURIComponent(r.review_id || r.event_id || "")}"><code>${escapeHtml(ellipsize(r.review_id || r.event_id || "", 40))}</code></a>`,
+        verdict: `<code>${escapeHtml(r.verdict || "")}</code>`,
+        issues: r.issue_count ?? 0,
+        blocks: r.blocks_acceptance ? "yes" : "no",
+      })))}</div>` : ""}
+    </div>
+  `;
+  const changed = setSectionHtml("study_kb_detail", detailHtml);
+  const rawToggle = document.getElementById("study_raw_toggle");
+  if (rawToggle) rawToggle.addEventListener("change", () => {
+    studyKbState.showRawEvidence = !!rawToggle.checked;
+    renderStudyKbDetail(n);
+  });
+  if (changed) renderMath(detail);
+}
+function renderStudyGraphNodeDetail(n) {
+  const detail = document.getElementById("study_kb_detail");
+  if (!detail) return;
+  if (!n) {
+    setSectionHtml("study_kb_detail", `<div class="empty">select a candidate</div>`);
+    return;
+  }
+  const sources = (n.source_ids || []).map(s => `<code>${escapeHtml(s)}</code>`).join(", ");
+  const runs = (n.learner_runs || []).map(s => `<code>${escapeHtml(s)}</code>`).join(", ");
+  const spans = (n.span_ids || []).map(s => `<code>${escapeHtml(s)}</code>`).join(", ");
+  const detailHtml = `
+    <h3>${escapeHtml(graphNodeTitle(n))}</h3>
+    <div class="footnote"><code>${escapeHtml(n.label || "")}</code></div>
     <div class="study-meta">
       <span class="study-kind ${escapeHtml(n.kind || "")}">${escapeHtml(n.kind || "unknown")}</span>
-      <code>${escapeHtml(n.status || "proposed")}</code>
+      <code>${escapeHtml(n.status || "graph_node")}</code>
       <code>${escapeHtml(n.proof_status || "no_proof_status")}</code>
-      <code>${escapeHtml(n.source_id || "")}</code>
-      <a href="/api/learner/run/${encodeURIComponent(n.learner_run || n.event_id || "")}"><code>${escapeHtml(n.learner_run || n.event_id || "")}</code></a>
     </div>
     <div class="study-detail-grid">
       <div class="study-detail-block">
         <h4>Statement</h4>
         <div class="math-body">${linkifyRefs(n.statement || "")}</div>
       </div>
-      ${n.proof ? `<div class="study-detail-block"><h4>Proof Skeleton</h4><div class="math-body">${linkifyRefs(n.proof)}</div></div>` : ""}
-      ${(n.proof_steps || []).length ? `<div class="study-detail-block"><h4>Proof Steps</h4><ol>${(n.proof_steps || []).map(s => `<li>${linkifyRefs(s.step || "")}</li>`).join("")}</ol></div>` : ""}
-      ${(n.depends_on || []).length ? `<div class="study-detail-block"><h4>Depends On</h4><div>${(n.depends_on || []).map(d => isKbLabel(d) ? `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>` : `<code>${escapeHtml(d)}</code>`).join(", ")}</div></div>` : ""}
       ${n.remark ? `<div class="study-detail-block"><h4>Remark</h4><div class="math-body">${linkifyRefs(n.remark)}</div></div>` : ""}
       ${n.source_note ? `<div class="study-detail-block"><h4>Source Note</h4><div class="math-body">${linkifyRefs(n.source_note)}</div></div>` : ""}
       <div class="study-detail-block">
-        <h4>Source Refs</h4>
-        <div class="study-ref-list">${refs || `<div class="empty">none</div>`}</div>
+        <h4>Graph</h4>
+        <div class="footnote">
+          dependencies ${escapeHtml(n.dependency_count ?? 0)} · bridges ${escapeHtml(n.bridge_count ?? 0)} · dependents ${escapeHtml(n.dependent_count ?? 0)} · versions ${escapeHtml(n.versions ?? 0)}
+        </div>
       </div>
       <div class="study-detail-block">
-        <h4>Batch</h4>
-        <div class="footnote">event <code>${escapeHtml(n.event_id || "")}</code> · batch issues ${escapeHtml(n.batch_issue_count ?? 0)}</div>
+        <h4>Sources</h4>
+        <div class="footnote">${sources || "none"}</div>
+        <div class="footnote">${runs || ""}</div>
+        <div class="study-ref-list">${spans || `<div class="empty">none</div>`}</div>
       </div>
     </div>
   `;
-  renderMath(detail);
+  const changed = setSectionHtml("study_kb_detail", detailHtml);
+  if (changed) renderMath(detail);
+}
+function renderStudyDiscovery(payload) {
+  if (!payload || payload.__error) {
+    return { summary: "", body: `<div class="empty">study discovery unavailable</div>` };
+  }
+  const review = payload.review_coverage || {};
+  const summary = [
+    stat("duplicate labels", payload.duplicate_count ?? 0),
+    stat("source spans", payload.source_span_count ?? 0),
+    stat("uncovered spans", payload.uncovered_source_span_count ?? 0),
+    stat("reviews", review.review_count ?? 0),
+    stat("unreviewed", review.unreviewed_count ?? 0),
+  ].join("");
+  const duplicates = rowsToTable(
+    ["label", "versions", "proof_statuses", "runs"],
+    (payload.duplicates || []).slice(0, 12).map(d => ({
+      label: `<code>${escapeHtml(d.label || "")}</code>`,
+      versions: d.version_count ?? 0,
+      proof_statuses: (d.proof_statuses || []).map(s => `<code>${escapeHtml(s || "—")}</code>`).join(" "),
+      runs: (d.learner_runs || []).map(r => `<code>${escapeHtml(ellipsize(r, 36))}</code>`).join(" "),
+    }))
+  );
+  const sourceCoverage = rowsToTable(
+    ["span", "candidates", "issues"],
+    (payload.source_coverage || []).slice(0, 16).map(s => ({
+      span: `<code>${escapeHtml(s.span_id || "")}</code>`,
+      candidates: `${s.candidate_count ?? 0}${s.covered ? "" : " · uncovered"}`,
+      issues: s.issue_count ?? 0,
+    }))
+  );
+  const unreviewed = rowsToTable(
+    ["label", "reasons"],
+    (review.unreviewed_attention || []).slice(0, 16).map(n => ({
+      label: `<code>${escapeHtml(n.label || "")}</code>`,
+      reasons: (n.attention_reasons || []).map(r => `<code>${escapeHtml(r)}</code>`).join(" "),
+    }))
+  );
+  const body = `
+    <h3 class="footnote">Duplicate / version labels</h3>
+    ${duplicates}
+    <h3 class="footnote">Source coverage</h3>
+    ${sourceCoverage}
+    <h3 class="footnote">Unreviewed attention</h3>
+    ${unreviewed}
+  `;
+  return { summary, body };
+}
+function renderStudyDiscoveryToDOM(payload) {
+  const rendered = renderStudyDiscovery(payload);
+  if (!rendered) return;
+  setSectionHtml("study_discovery_summary", rendered.summary || "");
+  setSectionHtml("study_discovery", rendered.body || "");
 }
 // Why: agents write internal references as `\ref{lem:foo}` (LaTeX style)
 // and sometimes as bare `lem:foo` (verifier external_reference_checks).
@@ -984,6 +2043,49 @@ function linkifyRefs(s) {
       return '<a href="#" data-node="' + label + '">' + label + '</a>';
     },
   );
+}
+function renderInlineMathTokens(html) {
+  const protectedRe = /(\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^$]*\$|<a\b[^>]*>[\s\S]*?<\/a>|<[^>]+>)/g;
+  const parts = String(html || "").split(protectedRe);
+  const tokenRe = /\b(?:sum_[A-Za-z0-9]+|Wn|cO|[A-Za-z]{1,8}(?:_[A-Za-z0-9]+|\^[A-Za-z0-9+\-*()]+)+|(?:GL|SL|SO|Sp|PGL|PSL)_[A-Za-z0-9]+|[A-Za-z](?:\([A-Za-z0-9_^+\-*()]+\))|[A-Za-z][0-9]+)\b/g;
+  return parts.map(part => {
+    if (
+      !part
+      || part.startsWith("<")
+      || part.startsWith("\\(")
+      || part.startsWith("\\[")
+      || part.startsWith("$")
+    ) return part;
+    return part.replace(tokenRe, token => {
+      let raw = token;
+      if (raw === "Wn") raw = "W_n";
+      if (raw === "cO") raw = "c_O";
+      if (/^sum_/.test(raw)) raw = raw.replace(/^sum_/, "\\sum_");
+      if (!/[_^()0-9]/.test(raw)) return token;
+      if (/^span:/.test(token) || /^sha256:/.test(token)) return token;
+      if (/^[A-Za-z]{2,}[0-9]+$/.test(token) && !/^(W|X|Y|Z|V|T|H|G|F|E|D|O|c)[A-Za-z]?[0-9]+$/.test(token)) return token;
+      const tex = raw
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&amp;/g, "&")
+        .replace(/^GL_/, "\\mathrm{GL}_")
+        .replace(/^SL_/, "\\mathrm{SL}_")
+        .replace(/^SO_/, "\\mathrm{SO}_")
+        .replace(/^Sp_/, "\\mathrm{Sp}_")
+        .replace(/^PGL_/, "\\mathrm{PGL}_")
+        .replace(/^PSL_/, "\\mathrm{PSL}_")
+        .replace(/^([A-Za-z])([A-Za-z])([0-9]+)$/, "$1_{$2,$3}")
+        .replace(/^([A-Za-z])([0-9]+)$/, "$1_{$2}")
+        .replace(/\^-\(([^)]+)\)/g, "^{-$1}")
+        .replace(/\^\(([^)]+)\)/g, "^{$1}")
+        .replace(/\^([A-Za-z0-9+\-*]+)/g, "^{$1}")
+        .replace(/_([A-Za-z0-9]+)/g, "_{$1}");
+      return "\\(" + tex + "\\)";
+    });
+  }).join("");
+}
+function renderStudyText(s) {
+  return renderInlineMathTokens(linkifyRefs(s));
 }
 async function showNode(label) {
   const sec = document.getElementById("node_detail_section");
@@ -1115,11 +2217,13 @@ function renderVerificationReport(node) {
 
 function renderMath(root) {
   // MathJax v3: typeset only the subtree we just patched, never the
-  // whole document. Best-effort — if MathJax hasn't loaded yet (defer
-  // + slow CDN) the call is a no-op; the next detail-panel mount will
-  // pick it up. M12.D's SSE-patch path will reuse this helper so each
-  // verdict-driven badge update only re-typesets the one node card.
-  if (!window.MathJax || !window.MathJax.typesetPromise) return;
+  // whole document. If MathJax is still loading, queue this subtree so
+  // startup.ready can typeset it once instead of leaving raw TeX on screen.
+  if (!window.MathJax || !window.MathJax.typesetPromise) {
+    window.__pendingMathRoots = window.__pendingMathRoots || [];
+    if (root) window.__pendingMathRoots.push(root);
+    return;
+  }
   try {
     window.MathJax.typesetPromise([root]).catch(() => {});
   } catch (e) { /* swallow — render best-effort */ }
@@ -1348,7 +2452,17 @@ async function loadProofTree(root = null, options = {}) {
   }
   const payload = await fetchJson(path);
   if (payload.__error) {
-    body.innerHTML = `<div class="empty">proof tree unavailable: ${escapeHtml(payload.__error)}</div>`;
+    const fallbackPath = root
+      ? "/api/study/neighborhood?" + new URLSearchParams({root, direction: "dependencies", depth: "2", limit: "80"}).toString()
+      : "/api/study/graph?limit=80";
+    const fallback = await fetchJson(fallbackPath);
+    if (!fallback.__error) {
+      renderStudyGraphFallbackInProofTree(fallback, body, meta, payload.__error);
+      proofTreeState.loaded = true;
+      return;
+    }
+    meta.textContent = "legacy proof tree unavailable";
+    body.innerHTML = `<div class="empty">proof tree unavailable: ${escapeHtml(payload.__error)} · study graph unavailable: ${escapeHtml(fallback.__error)}</div>`;
     return;
   }
   if (options.splice && root) {
@@ -1366,6 +2480,37 @@ async function loadProofTree(root = null, options = {}) {
   proofTreeState.loaded = true;
   expandAttentionPaths();
   applyProofTreeFilters();
+}
+
+function renderStudyGraphFallbackInProofTree(payload, body, meta, legacyError) {
+  const nodes = payload.nodes || [];
+  const edges = aggregateStudyGraphEdges(payload.edges || []);
+  meta.textContent = `Phase 3 study graph · ${nodes.length} nodes · ${edges.length} links · legacy tree unavailable`;
+  if (!nodes.length) {
+    body.innerHTML = `<div class="empty">legacy proof tree unavailable; Phase 3 study graph has no matching nodes</div>`;
+    return;
+  }
+  const outgoing = new Map();
+  for (const edge of edges) {
+    if (!outgoing.has(edge.source)) outgoing.set(edge.source, []);
+    outgoing.get(edge.source).push(edge);
+  }
+  body.innerHTML = rowsToTable(
+    ["kind", "entry", "status", "supports"],
+    nodes.slice(0, 80).map(n => {
+      const label = graphNodeKey(n);
+      const links = (outgoing.get(label) || []).slice(0, 4).map(edge =>
+        `${studyEntryLink(edge.target)} <span class="footnote">${escapeHtml(studyRelationPhrase(edge.relations))}</span>`
+      ).join("<br>");
+      return {
+        kind: `<span class="study-kind ${escapeHtml(n.kind || "")}">${escapeHtml(n.kind || "unknown")}</span>`,
+        entry: studyEntryLink(label),
+        status: `<code>${escapeHtml(n.knowledge_status || n.proof_status || n.status || "proposed")}</code>`,
+        supports: links || `<span class="footnote">no visible dependents</span>`,
+      };
+    })
+  );
+  renderMath(body);
 }
 
 function spliceProofTreeRoot(root, payload, openLabels) {
@@ -1538,10 +2683,15 @@ function initProofTreeControls() {
   });
 }
 document.addEventListener("click", (e) => {
+  const study = e.target.closest("[data-study-label]");
+  if (study) {
+    e.preventDefault();
+    if (selectStudyEntry(study.dataset.studyLabel || "")) return;
+  }
   const a = e.target.closest("[data-node]");
   if (a) {
     e.preventDefault();
-    showNode(a.dataset.node);
+    if (!selectStudyEntry(a.dataset.node || "")) showNode(a.dataset.node);
   }
   if (e.target.id === "node_detail_close") {
     e.preventDefault();
@@ -1551,6 +2701,7 @@ document.addEventListener("click", (e) => {
 
 async function renderActiveSection(active, overview, nodes) {
   const jobs = active.jobs ?? [];
+  const staleJobs = active.stale_jobs ?? [];
   const co = (overview && overview.coordinator && overview.coordinator.data) || {};
   // Header summary so the user always sees worker pool state at a glance.
   const summary = `<div class="grid">
@@ -1561,9 +2712,13 @@ async function renderActiveSection(active, overview, nodes) {
     ${stat("dispatchable", `gen ${co.dispatchable_generator_count ?? 0} · ver ${co.dispatchable_verifier_count ?? 0} · learn ${co.dispatchable_learner_count ?? 0} · ref ${co.dispatchable_referee_count ?? 0}`)}
     ${stat("idle reason", `<code>${escapeHtml(co.idle_reason_code || "—")}</code>`)}
     ${stat("detail", escapeHtml(co.idle_reason_detail || ""))}
+    ${stat("stale role jobs", staleJobs.length)}
   </div>`;
 
   const root = document.getElementById("active");
+  const staleNotice = staleJobs.length
+    ? `<div class="empty">ignored ${staleJobs.length} stale role job${staleJobs.length === 1 ? "" : "s"} whose wrapper process has exited.</div>`
+    : "";
 
   if (jobs.length === 0) {
     const unfinished = (nodes.nodes ?? [])
@@ -1577,7 +2732,7 @@ async function renderActiveSection(active, overview, nodes) {
                 <span class="footnote">${escapeHtml(n.status)} · pass=${n.pass_count}</span></li>
           `).join("")}</ul></div>`
       : `<div class="empty">no active jobs · all nodes done</div>`;
-    root.innerHTML = summary + queued;
+    setSectionHtml("active", summary + staleNotice + queued);
     return;
   }
 
@@ -1614,52 +2769,42 @@ async function renderActiveSection(active, overview, nodes) {
     </div>`;
   }).join("");
 
-  root.innerHTML = summary + cards;
-  renderMath(root);
+  const changed = setSectionHtml("active", summary + staleNotice + cards);
+  if (changed) renderMath(root);
 }
 
 async function refresh() {
-  const overview = await fetchJson("/api/overview");
-  const active = await fetchJson("/api/active");
-  const attention = await fetchJson("/api/attention");
-  const theorems = await fetchJson("/api/theorems");
-  const nodes = await fetchJson("/api/nodes");
-  const rejected = await fetchJson("/api/rejected");
-  const events = await fetchJson("/api/events?limit=30");
-  const learnerRuns = await fetchJson("/api/learner/runs");
-  const studyKb = await fetchJson("/api/study/kb");
-  const reviews = await fetchJson("/api/reviews");
+  const scrollState = captureScrollState();
+  isAutoRefreshing = true;
+  try {
+  const [
+    learnerRuns,
+    studyKb,
+    studyRoots,
+    studyDiscovery,
+    reviews,
+    dashboardHb,
+    coord,
+    lib,
+  ] = await Promise.all([
+    fetchJson("/api/learner/runs"),
+    fetchJson("/api/study/kb"),
+    fetchJson("/api/study/roots?limit=40"),
+    fetchJson("/api/study/discovery"),
+    fetchJson("/api/reviews"),
+    fetchJson("/api/dashboard"),
+    fetchJson("/api/coordinator"),
+    fetchJson("/api/librarian"),
+  ]);
   const updated = document.getElementById("updated_at");
   updated.textContent = "refreshed " + new Date().toLocaleTimeString();
-
-  const dashboardHb = await fetchJson("/api/dashboard");
-  const health = document.getElementById("health");
-  if (overview.coordinator) {
-    health.innerHTML = [
-      stat("coordinator", pill(overview.coordinator.liveness ?? "down")),
-      stat("librarian", pill(overview.librarian.liveness ?? "down")),
-      stat("dashboard", pill(dashboardHb.liveness ?? "down")),
-      stat("loop_seq", overview.coordinator.data?.loop_seq ?? 0),
-      stat("idle_reason", overview.coordinator.data?.idle_reason_code || "—"),
-    ].join("");
-  }
-  const kb = document.getElementById("kb");
-  if (overview.kb) {
-    const kinds = overview.kb.kind_counts || {};
-    const orderedKinds = ["theorem", "proposition", "lemma", "definition", "external_theorem"];
-    const kindStats = orderedKinds
-      .filter(k => (kinds[k] || 0) > 0)
-      .map(k => stat(k, kinds[k]));
-    kb.innerHTML = [
-      stat("nodes", overview.kb.node_count),
-      ...kindStats,
-      stat("done", overview.kb.done_count),
-      stat("unfinished", overview.kb.unfinished_count),
-      stat("in-flight targets", overview.in_flight_target_count ?? 0),
-    ].join("");
-  }
-  await renderActiveSection(active, overview, nodes);
-  document.getElementById("learner_runs").innerHTML = rowsToTable(
+  const healthHtml = [
+    stat("coordinator", pill(coord.liveness ?? "down")),
+    stat("librarian", pill(lib.liveness ?? "down")),
+    stat("dashboard", pill(dashboardHb.liveness ?? "down")),
+  ].join("");
+  setSectionHtml("health", healthHtml);
+  setSectionHtml("learner_runs", rowsToTable(
     ["source_id", "learner_run", "status", "candidates", "issues", "hash"],
     (learnerRuns.runs ?? []).map(r => ({
       source_id: `<code>${escapeHtml(r.source_id || "")}</code>`,
@@ -1669,14 +2814,23 @@ async function refresh() {
       issues: r.issue_count ?? 0,
       hash: `<code>${escapeHtml(shortHash(r.hash || ""))}</code>`,
     }))
-  );
-  renderStudyKbSummary(studyKb);
+  ));
+  const studySummaryHtml = renderStudyKbSummary(studyKb);
+  setSectionHtml("study_kb_summary", studySummaryHtml);
   studyKbState.nodes = studyKb.nodes ?? [];
+  studyKbState.entries = studyKb.entries ?? [];
   bindStudyKbControls();
   syncStudyKbControls();
   renderStudyKbBrowser();
-  document.getElementById("reviews").innerHTML = rowsToTable(
-    ["review_id", "target", "verdict", "issues", "blocks", "hash"],
+  if (!studyKbState.visibleNodes.size) {
+    resetVisibleStudyGraph();
+    if (!studyRoots.__error) {
+      mergeVisibleStudyGraph({nodes: studyRoots.nodes || [], edges: [], total: studyRoots.total, truncated: studyRoots.truncated});
+    }
+  }
+  renderStudyGraph();
+  setSectionHtml("reviews", rowsToTable(
+    ["review_id", "target", "verdict", "issues", "blocks", "graph", "typos", "repairs", "hash"],
     (reviews.reviews ?? []).map(r => {
       const s = r.issue_summary || {};
       const reviewId = r.review_id || r.event_id || "";
@@ -1686,31 +2840,99 @@ async function refresh() {
         verdict: escapeHtml(r.verdict || ""),
         issues: s.issue_count ?? 0,
         blocks: s.blocks_acceptance ? "yes" : "no",
+        graph: `<a href="/api/review/${encodeURIComponent(reviewId)}/graph">${escapeHtml(r.theorem_node_count ?? 0)} nodes · ${escapeHtml(r.dependency_edge_count ?? 0)} edges</a>`,
+        typos: `<a href="/api/review/${encodeURIComponent(reviewId)}/typos">${escapeHtml(r.typo_count ?? 0)}</a>`,
+        repairs: (() => {
+          const nodeCount = r.repair_count ?? 0;
+          const versions = r.repair_version_count ?? 0;
+          const visual = r.repair_needs_visual_check_count ?? 0;
+          const latest = r.latest_repair_id ? `<br><code>${escapeHtml(shortHash(r.latest_repair_id || ""))}</code>` : "";
+          const versionText = versions ? ` · ${escapeHtml(versions)} version${versions === 1 ? "" : "s"}` : "";
+          const visualText = visual ? ` · ${escapeHtml(visual)} visual` : "";
+          const history = reviewId ? `<br><a href="/api/review/${encodeURIComponent(reviewId)}/repairs">history</a>` : "";
+          return `${escapeHtml(nodeCount)} nodes${versionText}${visualText}${latest}${history}`;
+        })(),
         hash: `<code>${escapeHtml(shortHash(r.hash || ""))}</code>`,
       };
     })
-  );
-  document.getElementById("attention").innerHTML = rowsToTable(
+  ));
+  renderStudyDiscoveryToDOM(studyDiscovery);
+
+  const overview = await fetchJson("/api/overview");
+  const active = await fetchJson("/api/active");
+  const attention = await fetchJson("/api/attention");
+  const theorems = await fetchJson("/api/theorems");
+  const nodes = await fetchJson("/api/nodes");
+  const rejected = await fetchJson("/api/rejected");
+  const events = await fetchJson("/api/events?limit=30");
+  const baseHealthHtml = [
+    stat("coordinator", pill(coord.liveness ?? "down")),
+    stat("librarian", pill(lib.liveness ?? "down")),
+    stat("dashboard", pill(dashboardHb.liveness ?? "down")),
+  ].join("");
+  let healthHtml = baseHealthHtml;
+  if (overview.coordinator) {
+    setSectionHtml("health", [
+      stat("coordinator", pill(coord.liveness ?? "down")),
+      stat("librarian", pill(lib.liveness ?? "down")),
+      stat("dashboard", pill(dashboardHb.liveness ?? "down")),
+      stat("loop_seq", overview.coordinator.data?.loop_seq ?? 0),
+      stat("idle_reason", overview.coordinator.data?.idle_reason_code || "—"),
+    ].join(""));
+  } else {
+    const studyOk = studyKbReady(studyKb);
+    setSectionHtml("health", [
+      stat("coordinator", pill(coord.liveness ?? "down")),
+      stat("librarian", pill(lib.liveness ?? "down")),
+      stat("dashboard", pill(dashboardHb.liveness ?? "down")),
+      stat("legacy Kuzu kb", `<span class="pill degraded">unavailable</span>`),
+      stat("phase 3 study kb", studyOk ? pill("healthy") : `<code>${escapeHtml(studyKb.__error || "unavailable")}</code>`),
+    ].join(""));
+  }
+  const kb = document.getElementById("kb");
+  if (overview.kb) {
+    const kinds = overview.kb.kind_counts || {};
+    const orderedKinds = ["theorem", "proposition", "lemma", "definition", "external_theorem"];
+    const kindStats = orderedKinds
+      .filter(k => (kinds[k] || 0) > 0)
+      .map(k => stat(k, kinds[k]));
+    setSectionHtml("kb", [
+      stat("nodes", overview.kb.node_count),
+      ...kindStats,
+      stat("done", overview.kb.done_count),
+      stat("unfinished", overview.kb.unfinished_count),
+      stat("in-flight targets", overview.in_flight_target_count ?? 0),
+    ].join(""));
+  } else if (studyKbReady(studyKb)) {
+    setSectionHtml("kb", renderPhase3KbStats(studyKb));
+  } else {
+    setSectionHtml("kb", [
+      stat("nodes", 0),
+      stat("status", `<code>${escapeHtml(studyKb.__error || overview.__error || overview.status || "unavailable")}</code>`),
+    ].join(""));
+  }
+  await renderActiveSection(active, overview.status || overview.__error ? {coordinator: {data: {}}} : overview, nodes.status || nodes.__error ? {nodes: []} : nodes);
+  setSectionHtml("attention", rowsToTable(
     ["kind", "message"],
     (attention.items ?? []).map(i => ({ kind: i.kind, message: i.message }))
-  );
-  document.getElementById("theorems").innerHTML = rowsToTable(
+  ));
+  setSectionHtml("theorems", rowsToTable(
     ["label", "status", "pass_count", "repair_count", "deps"],
-    (theorems.theorems ?? []).map(t => ({
+    ((theorems.__error ? [] : theorems.theorems) ?? []).map(t => ({
       label: `<a href="#" data-node="${escapeHtml(t.label)}">${escapeHtml(t.label)}</a>`,
       status: t.status, pass_count: t.pass_count, repair_count: t.repair_count,
       deps: (t.deps || []).map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", "),
     }))
-  );
-  document.getElementById("nodes").innerHTML = rowsToTable(
+  ));
+  setSectionHtml("nodes", rowsToTable(
     ["kind", "label", "status", "pass_count", "repair_count", "deps"],
-    (nodes.nodes ?? []).map(n => ({
+    ((nodes.__error ? [] : nodes.nodes) ?? []).map(n => ({
       kind: n.kind,
       label: `<a href="#" data-node="${escapeHtml(n.label)}">${escapeHtml(n.label)}</a>`,
       status: n.status, pass_count: n.pass_count, repair_count: n.repair_count,
       deps: (n.deps || []).map(d => `<a href="#" data-node="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join(", "),
     }))
-  );
+  ));
   // Recent rejections / apply failures / drift alerts (most recent first).
   const allRej = []
     .concat((rejected.rejected_writes ?? []).map(r => ({
@@ -1729,7 +2951,7 @@ async function refresh() {
       detail: ellipsize(r.detail, 200),
     })))
     .sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
-  document.getElementById("rejected").innerHTML = rowsToTable(
+  setSectionHtml("rejected", rowsToTable(
     ["ts", "kind", "target", "reason", "detail"],
     allRej.map(r => ({
       ts: `<code>${escapeHtml(r.ts || "")}</code>`,
@@ -1740,9 +2962,9 @@ async function refresh() {
       reason: `<code>${escapeHtml(r.reason || "")}</code>`,
       detail: `<code style="white-space:pre-wrap;">${escapeHtml(r.detail || "")}</code>`,
     }))
-  );
+  ));
   // Recent truth events (most recent first per /api/events default).
-  document.getElementById("events").innerHTML = rowsToTable(
+  setSectionHtml("events", rowsToTable(
     ["ts", "type", "target", "actor", "event_id"],
     (events.events ?? []).map(e => {
       const ts = (e.event_id || "").split("-")[0] || "";
@@ -1756,7 +2978,11 @@ async function refresh() {
         event_id: `<code>${escapeHtml((e.event_id || "").slice(-16))}</code>`,
       };
     })
-  );
+  ));
+  } finally {
+  isAutoRefreshing = false;
+  if (scrollState) restoreScrollState(scrollState);
+  }
 }
 refresh();
 initProofTreeControls();

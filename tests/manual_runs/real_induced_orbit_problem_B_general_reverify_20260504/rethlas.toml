@@ -1,0 +1,23 @@
+# Rethlas workspace configuration (ARCHITECTURE §2.4).
+# Every field shown below is OPTIONAL — missing values fall back to the
+# documented default. The file is read once at process startup; edit and
+# restart `rethlas supervise` to take effect (no hot-reload).
+
+[scheduling]
+# §10.1 — target pass_count before a node counts as verified.
+desired_pass_count             = 3
+# §10.3 — max concurrent generator jobs per workspace.
+generator_workers              = 2
+# §10.3 — max concurrent verifier jobs per workspace.
+verifier_workers               = 2
+# Phase 3 — max concurrent learner jobs per workspace.
+learner_workers                = 1
+# Phase 3 — max concurrent referee jobs per workspace.
+referee_workers                = 0
+# §7.4 — kill threshold (seconds) for a Codex subprocess whose
+# log mtime has gone stale.
+codex_silent_timeout_seconds   = 1800
+
+[dashboard]
+# §6.7.1 — host:port for the read-only dashboard HTTP server.
+bind                           = "127.0.0.1:8771"
