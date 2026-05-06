@@ -33,6 +33,9 @@ test = [
   "pytest>=7.4",
   "pytest-timeout>=2.2",
   "build>=1.2",
+  # Property-based testing for ``rethlas_scoring`` invariants I1-I4
+  # (see docs/SCORING_DESIGN.md §12 and tests/scoring/test_invariants_property.py).
+  "hypothesis>=6.0",
 ]
 
 [tool.setuptools]
