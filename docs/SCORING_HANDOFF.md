@@ -9,7 +9,7 @@
 ## 用户身份与上下文
 
 我是一个数学家。当前在做 Rethlas-plus(LLM 辅助证明系统)的 phase 2/3 重审。
-当前主体是**自然语言证明**,verifier 由 LLM 担任(LLM-as-judge)。长期目标接 Lean 4。
+主体是**自然语言证明**,verifier 由 LLM 担任(LLM-as-judge)。**本项目不使用 Lean kernel**(2026-05-06 用户指令)—— 终极仲裁来自强模型一致或人审。
 
 ## 任务的根本目标
 
@@ -67,10 +67,6 @@ NL 特异性漏洞:
 - 退火 `λ_t` 关于 verified_fraction 单调非增
 - verifier 完全无用(`p_tpr = p_fpr`)时 VOI 恒为 0
 - `p̂ → 0` 或 `p̂ → 1` 时 VOI → 0
-
-## 与 Lean 4 的迁移
-
-verifier 切到 Lean 时,`(p_tpr, p_fpr) = (1, 0)`,calibration 跳过,bridge 用 `is_def_eq` 替代 LLM judge,其余架构不变。NL 阶段的设计是 Lean 阶段的真子集。
 
 ## 默认参数
 

@@ -96,9 +96,10 @@
   - [verifier/decoder.py:170-215](../verifier/decoder.py) 解码后丢掉所有 LLM 自报的不确定性
   - projector ([librarian/projector.py](../librarian/projector.py)) 把 verdict 当作 ground truth 入 KB
 - **风险**:`p_fpr` 实际可能远大于 0,系统当 0 处理 → 错的命题悄悄被吸收。
-- **新模块对策**:`calibration.py::VerifierROC` 维护按难度桶的 `(p_tpr, p_fpr)` Beta 后验。集成需:
-  1. verifier 输出补上 `confidence: float`
-  2. 5% 抽样人工 / 强 verifier 复审作为 ground truth 反馈,经 `VerifierROC.update` 进 ROC
+- **新模块对策(2026-05-06 修订)**:
+  1. **不**用统计校准估 verifier 噪声率(audit-sampling 已驳回 —— 见 `SCORING_INTEGRATION.md §5` 设计注)。
+  2. 改走 **L5 升迁阶梯**(详见 `SCORING_SCHEDULING.md §7`):一致 ok 接受 / 分歧立刻 refute / 仍分歧升强模型 / 终极兜底进 `user_blocked` 等人审。
+  3. `VerifierROC` 仅在拥有真 ground truth(人工 spot-check)时才更新;稳态下保持 Beta(1,1) 先验,VOI 主项归零,系统靠 cluster susp / blast / refute severity 排序。
 
 ### H10 — 没有 unification 的 bridge 判定
 

@@ -113,8 +113,9 @@ Three rollback levels, smallest blast first:
 > and any LLM-vs-LLM audit just kicks the ground-truth question up a
 > level. Calibration learning (`VerifierROC.update`,
 > `IsotonicCalibrator.add`) is reserved for the cases where real
-> ground truth is available: Lean kernel, or human spot-check on
-> demand. In pure-LLM mode the scheduler does not estimate noise —
+> ground truth is available — in this project that means **human
+> spot-check only** (Lean is out of scope per the user's "纯自然语言"
+> directive). In pure-LLM mode the scheduler does not estimate noise —
 > it **escalates verification depth** instead.
 
 These items are **out of scope** for this branch:
@@ -133,30 +134,14 @@ degrades gracefully (cluster disabled when embeddings are empty,
 `BridgeAudit` simply isn't called, policy falls back to fixed
 `desired_pass_count`) until they exist.
 
-### 5.1 Adaptive verifier policy — sketch
+### 5.1 Adaptive verifier policy
 
-State per node: `verifier_history: list[(worker_id, verdict, ts)]`.
-After every new verdict the policy returns one of:
+详见 [`SCORING_SCHEDULING.md §7`](SCORING_SCHEDULING.md) —— 那里有完
+整的 deterministic state machine 设计(`Evidence` 累积 + `classify` /
+`next_action` 纯函数,无任何概率阈值)。本节(以前的草稿)已合并过去。
 
-- `accept` — k consecutive `ok` from independent workers; advance to
-  `verified`.
-- `another_llm_pass` — verdict count below `desired_pass_count`,
-  schedule one more LLM call.
-- `refute` — disagreement seen (≥1 `ok` and ≥1 `critical`); spawn the
-  refute task before any more LLM verifier passes. A concrete
-  counterexample → `refuted` + cluster propagation. Clean refute → fall
-  through to next rung.
-- `escalate_model` — still split after refute; re-run the k passes with
-  a stronger model (e.g. Opus-thinking instead of default).
-- `escalate_lean` — formalisable subgoal; hand off to Lean kernel for a
-  definitive yes/no. (Long-horizon — DESIGN §11.)
-- `user_blocked` — exhausted all rungs, evidence trail recorded, leave
-  for human review.
-
-The policy is a pure function of `(node, verifier_history,
-budget_remaining)`. It plugs into the coordinator alongside the VOI
-priority function: VOI picks **which** node, the policy picks **what
-verification step** to run for it.
+集成关系:VOI(L4)决定**哪个**节点先动,policy(L5)决定那个节点
+**下一步做什么动作**(default verify / refute / strong / user_blocked)。
 
 ---
 

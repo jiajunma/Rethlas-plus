@@ -1,6 +1,6 @@
 # Rethlas-plus 打分与调度重设计(自然语言证明场景)
 
-> 适用场景:当前主体是自然语言证明,verifier 由 LLM 担任(或 LLM panel),长期目标接 Lean 4 kernel。
+> 适用场景:**纯自然语言证明**,verifier 由 LLM 担任(或 LLM panel)。**本项目不使用 Lean kernel**(2026-05-06 用户指令)—— 终极仲裁来自强模型一致或人审。
 > 本文档对应代码:`rethlas_scoring/` 模块。
 
 ---
@@ -71,6 +71,20 @@ DAG 上还维护两个集合:
 
 ## 3. 核心:Verifier 噪声模型与 calibration
 
+> **重要 caveat(2026-05-06 修订)**:本节描述的 calibration 学习
+> (`VerifierROC.update`、`IsotonicCalibrator.add`)**只在拥有真 ground
+> truth 的场合**才能起作用。本项目当前只有一种 ground truth 来源:
+> **人工 spot-check**。原稿提议的"5% LLM-vs-LLM 抽样审计"已被驳回
+> —— 证明对就是对错就是错,不是概率问题(见 `SCORING_INTEGRATION.md
+> §5` 设计注)。
+>
+> 在没有人审反馈进入的稳态下,`VerifierROC` 的 Beta 后验保持在
+> Beta(1, 1) 先验(均值 0.5),likelihood ratio 退化成 1。VOI 公式仍
+> 成立,但 verifier "信号强度" 等于 0 → VOI 主项归零,系统靠 cluster
+> susp / blast radius / refute severity 排序。
+>
+> 这一节因此应被读作:**"有真值反馈时怎么吸收"** —— 而非"产线常态"。
+
 设 verifier 是一个随机函数 `Verify : Node → {ok, fail}`,真值是 `T(v) ∈ {0, 1}`。
 
 定义两个关键率:
@@ -83,7 +97,7 @@ DAG 上还维护两个集合:
 ### 3.1 在线维护
 
 按节点难度桶维护 `(p_tpr, p_fpr)`:难度通过 `claim_text` 的 token 长度 + LLM 自评 hardness 离散化为 5 桶。
-每个桶维护 Beta 分布,verifier 给 ground truth(由更强的 verifier 或人工抽样 ~5%)时更新。
+每个桶维护 Beta 分布,**当人工 spot-check 提供 ground truth 时**更新。
 
 ```
 class VerifierROC:
@@ -230,6 +244,18 @@ Else:
 
 ## 7. 多 verifier 与 Dawid-Skene
 
+> **caveat(同族 ensemble 隐患)**:Dawid-Skene 的数学前提是**worker
+> 错误彼此独立**。当 k=3 verifier 都是同族 LLM(Claude Sonnet × 3 不同
+> seed,或 Claude Sonnet + Claude Haiku + Claude Opus 同 prompt),它们
+> 的失败模式高度相关 —— 都被同一个 prompt 偏置或 token 模式骗。这种
+> "假独立" 让聚合后验过度自信。
+>
+> 缓解:k=3 至少跨 **两个不同模型族**(例如 Claude × 2 + GPT × 1),且
+> prompt 模板做对偶变体(中立陈述 / 鼓励反驳 / 鼓励重述)。
+>
+> 终极兜底仍是 §8 refute task —— 它问的是不同问题(找反例),不是
+> verifier 的副本。
+
 ### 7.1 ensemble
 
 对一个节点跑 k 次独立 verifier(不同 seed,可能不同模型):
@@ -359,20 +385,7 @@ while P(Z=1 | S verified) < 1 − ε:
 
 ---
 
-## 11. 与 Lean 4 的迁移路径
-
-当 verifier 切换到 Lean 4 kernel:
-- `VerifierROC` 退化成 `(p_tpr=1, p_fpr=0)` —— TPR/FPR 都被钉死,calibration 跳过
-- VOI 公式自然退化(似然比变成 0/∞,样本权重归一)
-- Cluster 邻接可补充用 expr hash 而非纯 embedding(更精)
-- Bridge audit 由 `is_def_eq` / `decide` 替代 LLM-as-judge
-- Refute task 仍保留(找反例 = 找 counter-example term),但作为可选
-
-这意味着 NL 阶段的所有架构决策**对 Lean 阶段都是非负的**:Lean 阶段是这个框架的特例,不需要重写。
-
----
-
-## 12. 参数默认值
+## 11. 参数默认值
 
 ```
 embedding_threshold τ        = 0.65
@@ -388,7 +401,7 @@ refute_severity_threshold    = 0.4 (≥ 此触发回归 verifier 高预算)
 
 ---
 
-## 13. 不变式(测试核对清单)
+## 12. 不变式(测试核对清单)
 
 代码必须保证:
 
@@ -401,7 +414,7 @@ refute_severity_threshold    = 0.4 (≥ 此触发回归 verifier 高预算)
 
 ---
 
-## 14. 文件索引
+## 13. 文件索引
 
 ```
 rethlas_scoring/

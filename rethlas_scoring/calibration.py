@@ -221,13 +221,25 @@ class VerifierROC:
 
 
 # ---------------------------------------------------------------------------
-# Lean-mode helper: a perfect verifier (calibration short-circuited).
+# Idealised verifier ROC — placeholder / test fixture.
 # ---------------------------------------------------------------------------
 def perfect_verifier_roc(n_buckets: int = 5) -> VerifierROC:
     """Return a VerifierROC pinned at (p_tpr=1, p_fpr=0) for every bucket.
 
-    Used when the verifier is a Lean kernel (DESIGN §11). Posterior means
-    are forced to the corner of ROC space by stuffing a huge α / β.
+    Two intended uses:
+
+    1. **Test fixture** — used by ``tests/scoring/`` to exercise VOI's
+       boundary behaviour against an oracle verifier.
+    2. **Phase B placeholder** — used by ``coordinator/main.py::
+       _build_priority_fn`` while real verifier confidence + ground-truth
+       feedback are not yet plumbed through. The "noise = 0" assumption
+       is intentionally optimistic so that VOI ranking is driven by graph
+       topology + prior_p, not by a half-learned ROC.
+
+    **Not** a Lean-mode helper — this project does not use Lean
+    (2026-05-06 user directive); ground truth in production comes only
+    from human spot-check, and ``VerifierROC`` updates only happen when
+    that feedback is supplied.
     """
 
     roc = VerifierROC(n_buckets=n_buckets)

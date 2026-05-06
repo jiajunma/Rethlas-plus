@@ -227,7 +227,7 @@ VOI MC 在 N=200 / 100~500 节点的图上 ~50ms。选项 A 把它从"每 tick 1
 | **L2 资格** | "现在能不能验" —— `verifier_deps_strictly_ahead` 等硬约束 | ✅ 现成 | [coordinator/precheck.py](../coordinator/precheck.py), [coordinator/main.py:836-851](../coordinator/main.py:836) |
 | **L3 Tier(BFS)** | 强保证 "所有节点过 r 遍 → 才有节点开始 r+1" | ⚠️ Legacy 对,Phase B 错 | [coordinator/dispatcher.py:77](../coordinator/dispatcher.py:77) — 见 §3 |
 | **L4 同 tier 内排序** | 软偏好 —— VOI / cluster susp / blast radius | ✅ 已写,❌ 未生效(被 L3 越过) | [rethlas_scoring/scorer.py](../rethlas_scoring/scorer.py), [scheduler.py](../rethlas_scoring/scheduler.py) |
-| **L5 节点动作策略** | 给一个节点选下一步是 LLM 重验 / refute / 强模型 / Lean / user_blocked | 🔲 设计中,见 §7 | 尚未实现 |
+| **L5 节点动作策略** | 给一个节点选下一步是 LLM 重验 / refute / 强模型 / user_blocked | 🔲 设计中,见 §7 | 尚未实现 |
 | **L6 终止判据** | 何时宣告 verified / refuted / done | ✅ 简单版(`pass_count ≥ desired`),🔲 高级版(certifying set) | [common/kb/types.Node.initial_count](../common/kb/types.py:93), [scheduler.py::certifying_set_done](../rethlas_scoring/scheduler.py) |
 
 ### 6.1 调度一次 tick 的流程(目标态)
@@ -240,7 +240,7 @@ VOI MC 在 N=200 / 100~500 节点的图上 ~50ms。选项 A 把它从"每 tick 1
      a. 调 priority_fn(tier_labels, capacity_left) → VOI 排序 (L4)
      b. 跳过 in_flight,逐个填入,capacity 满即返回
 5. 对每个被选中的节点,调 policy.decide_next_action(node, evidence) → action (L5)
-     - action ∈ {default_verify, refute, strong_verify, lean, user_blocked}
+     - action ∈ {default_verify, refute, strong_verify, user_blocked}
 6. 派 worker 执行该 action
 7. Worker 回报 → 入 KB → 触发 L4 cluster 传播 + L5 状态更新
 8. 检查 L6 终止 → 若 done,关 supervise
@@ -269,7 +269,7 @@ KB 每条 verifier 输出存为一行 `Evidence`:
 ```python
 @dataclass(frozen=True, slots=True)
 class Evidence:
-    kind: EvidenceKind          # default | refute | strong | lean
+    kind: EvidenceKind          # default | refute | strong
     worker_id: str              # 来自哪个 verifier 实例
     verdict: VerdictKind        # ok | gap | critical | abstain
     ts_iso: str
@@ -284,16 +284,12 @@ Critical / refute / strong 走旁路,不计入 `pass_count`,但都进 evidence
 
 ```python
 def classify(evidence: list[Evidence], desired_pass: int = 3) -> NodeState:
-    if any(e.kind == LEAN and e.verdict == OK for e in evidence):
-        return VERIFIED                      # Lean 一锤定音
-    if any(e.kind == LEAN and e.verdict == CRITICAL for e in evidence):
-        return REFUTED
     if any(e.kind == REFUTE and e.counterexample for e in evidence):
         return REFUTED                       # 反例 = 真错
     n_strong_ok    = sum(1 for e in evidence if e.kind == STRONG  and e.verdict == OK)
     n_strong_crit  = sum(1 for e in evidence if e.kind == STRONG  and e.verdict == CRITICAL)
     if n_strong_ok >= 1 and n_strong_crit == 0:
-        return VERIFIED                      # 强模型 1 票 = 默认模型 3 票
+        return VERIFIED                      # 强模型 1 票 ≈ 默认模型 ≥desired 票
     if n_strong_crit >= 1:
         return USER_BLOCKED                  # 强模型说错,且没反例 = 必须人审
     n_default_ok   = sum(1 for e in evidence if e.kind == DEFAULT and e.verdict == OK)
@@ -320,7 +316,6 @@ def next_action(state: NodeState, evidence: list[Evidence],
     if state == DISAGREEMENT:
         if n_refute < budget.max_refute:    return Action.REFUTE
         if n_strong < budget.max_strong:    return Action.STRONG_VERIFY
-        if budget.lean_available:           return Action.LEAN
         return Action.USER_BLOCKED          # 升迁阶梯走完仍然分歧
     # state == PENDING
     return Action.DEFAULT_VERIFY            # 老老实实下一遍
@@ -329,10 +324,14 @@ def next_action(state: NodeState, evidence: list[Evidence],
 ### 7.4 为什么这样设计满足"binary truth"原则
 
 - 状态机里**没有任何概率比较**(比如 "p_tpr > 0.8 才算 verified")
-- "verified" 只来自三种证据:Lean ✓ / 强模型 ✓ / 默认模型 ≥3 致同意
-- "refuted" 只来自硬证据:反例 / Lean ✗
-- 模糊地带(分歧)走升迁阶梯,而不是估算 verifier 噪声率
+- "verified" 只来自两种证据:强模型 ✓ / 默认模型 ≥3 致同意
+- "refuted" 只来自硬证据:反例
+- 模糊地带(分歧)走升迁阶梯(refute → strong),而不是估算 verifier 噪声率
 - 升迁阶梯走完仍然分歧 → 退给人,**不让系统自主"概率上判定"**
+
+**关于 Lean**:本项目**不使用 Lean kernel**(2026-05-06 用户指令)。
+所有终极仲裁要么来自强模型一致,要么进入 ``user_blocked`` 等人审。
+``DESIGN.md §11`` 的 Lean 迁移路径作废。
 
 ---
 
@@ -384,8 +383,7 @@ worker 类型一目了然。
 | **S5** | Strong verifier role(只换模型,prompt 复用);coordinator 接 `Action.STRONG_VERIFY` | S4 | 半天 |
 | **S6** | Embedding pipeline:librarian 写 KB,scoring 真值 cluster 传播;`projector` 接 `propagate_failure` | 任意时刻可做(独立) | 2 天 |
 | **S7** | Ensemble k=3:同 node 同 pass 派 k 个独立 default worker,Dawid-Skene 聚合 | S2 | 1.5 天 |
-| **S8** | Lean 接口:`Action.LEAN` 派 Lean kernel(M14+ 同步) | S5 | 长远 |
-| **S9** | Certifying-set 终止(DESIGN §10):VOI 跑动态终止判据替代固定 `pass_count` | S6 + S7 | 1 天 |
+| **S8** | Certifying-set 终止(DESIGN §10):VOI 跑动态终止判据替代固定 `pass_count` | S6 + S7 | 1 天 |
 
 **最小可发集**:S1 单独发 → 立刻把 Phase B 的 BFS bug 修掉。其他不阻塞。
 
