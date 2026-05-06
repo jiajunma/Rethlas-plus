@@ -92,7 +92,7 @@ from coordinator.precheck import (
     precheck_verifier,
 )
 from librarian.heartbeat import PHASE_READY, read_heartbeat as read_librarian_hb
-from embedding import HashEmbeddingProvider
+from embedding import default_provider as _default_embedding_provider
 from rethlas_scoring.calibration import perfect_verifier_roc
 from rethlas_scoring.cluster import ClusterIndex
 from rethlas_scoring.data import ProofGraph, ScoredNode
@@ -389,13 +389,17 @@ def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
     if not use_voi_scoring or not snapshot.candidates:
         return None
     try:
-        # S6-B: embed each candidate's statement so cluster_susp gets a
-        # real signal. ``HashEmbeddingProvider`` is the zero-dependency
-        # default; production deployments may swap a real provider in
-        # at this seam. Empty / placeholder statements degrade
-        # gracefully — ``HashEmbeddingProvider.embed("")`` returns the
-        # zero vector, which ``cluster.cosine`` treats as 0 similarity.
-        provider = HashEmbeddingProvider()
+        # S6-B + S6-C: embed each candidate's statement so cluster_susp
+        # gets a real signal. The provider is selected by
+        # ``embedding.factory.default_provider`` — auto-detects an
+        # OpenAI backend when ``OPENAI_API_KEY`` + ``openai`` are
+        # available, otherwise falls back to the zero-dependency
+        # ``HashEmbeddingProvider``. Operators can pin via
+        # ``RETHLAS_EMBEDDING_PROVIDER=hash|openai``. Empty /
+        # placeholder statements degrade gracefully — both providers
+        # return the zero vector, which ``cluster.cosine`` treats as
+        # 0 similarity.
+        provider = _default_embedding_provider()
         sg_nodes = {
             c.target: ScoredNode(
                 id=c.target,
