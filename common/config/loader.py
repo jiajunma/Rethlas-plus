@@ -47,15 +47,6 @@ DEFAULT_DASHBOARD_BIND: Final[str] = "127.0.0.1:8765"
 # Phase B rollback toggle (docs/SCORING_INTEGRATION.md §3). Default OFF
 # preserves the legacy ``(pass_count, label)`` ordering byte-for-byte.
 DEFAULT_USE_VOI_SCORING: Final[bool] = False
-# L5 PolicyBudget defaults (docs/SCORING_SCHEDULING.md §7.3). Refute and
-# strong-model escalations are capped per node so a stuck DISAGREEMENT
-# eventually flows to ``user_blocked`` instead of looping forever.
-DEFAULT_POLICY_MAX_REFUTE_PER_NODE: Final[int] = 1
-DEFAULT_POLICY_MAX_STRONG_PER_NODE: Final[int] = 1
-# When ``Action.STRONG_VERIFY`` is taken (S5-full), the dispatcher
-# launches a verifier worker pinned to this model id. Empty string =
-# disabled / fall back to the default verifier model.
-DEFAULT_STRONG_VERIFIER_MODEL_ID: Final[str] = ""
 
 # Known keys per section (anything else triggers an "unknown field" warning).
 _SCHEDULING_KEYS: Final[frozenset[str]] = frozenset(
@@ -65,9 +56,6 @@ _SCHEDULING_KEYS: Final[frozenset[str]] = frozenset(
         "verifier_workers",
         "codex_silent_timeout_seconds",
         "use_voi_scoring",
-        "policy_max_refute_per_node",
-        "policy_max_strong_per_node",
-        "strong_verifier_model_id",
     }
 )
 _DASHBOARD_KEYS: Final[frozenset[str]] = frozenset({"bind"})
@@ -84,9 +72,6 @@ class SchedulingConfig:
     verifier_workers: int = DEFAULT_VERIFIER_WORKERS
     codex_silent_timeout_seconds: int = DEFAULT_CODEX_SILENT_TIMEOUT_SECONDS
     use_voi_scoring: bool = DEFAULT_USE_VOI_SCORING
-    policy_max_refute_per_node: int = DEFAULT_POLICY_MAX_REFUTE_PER_NODE
-    policy_max_strong_per_node: int = DEFAULT_POLICY_MAX_STRONG_PER_NODE
-    strong_verifier_model_id: str = DEFAULT_STRONG_VERIFIER_MODEL_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,21 +167,6 @@ def _parse_scheduling(raw: Mapping[str, Any]) -> SchedulingConfig:
         use_voi_scoring=_optional_bool(
             raw, "use_voi_scoring", DEFAULT_USE_VOI_SCORING
         ),
-        policy_max_refute_per_node=_positive_int(
-            raw,
-            "policy_max_refute_per_node",
-            DEFAULT_POLICY_MAX_REFUTE_PER_NODE,
-            minimum=0,
-        ),
-        policy_max_strong_per_node=_positive_int(
-            raw,
-            "policy_max_strong_per_node",
-            DEFAULT_POLICY_MAX_STRONG_PER_NODE,
-            minimum=0,
-        ),
-        strong_verifier_model_id=_optional_str(
-            raw, "strong_verifier_model_id", DEFAULT_STRONG_VERIFIER_MODEL_ID
-        ),
     )
 
 
@@ -237,17 +207,6 @@ def _optional_bool(raw: Mapping[str, Any], key: str, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ConfigError(
             f"[scheduling] {key} must be a boolean, got {type(value).__name__}"
-        )
-    return value
-
-
-def _optional_str(raw: Mapping[str, Any], key: str, default: str) -> str:
-    if key not in raw:
-        return default
-    value = raw[key]
-    if not isinstance(value, str):
-        raise ConfigError(
-            f"[scheduling] {key} must be a string, got {type(value).__name__}"
         )
     return value
 

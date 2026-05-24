@@ -13,14 +13,8 @@ Covers four of the six invariants from ``docs/SCORING_DESIGN.md §12``:
 - I3: cluster propagation only decreases posteriors
 - I4: ``anneal_lambda`` monotone non-increasing in verified_fraction
 
-Plus deterministic-state-machine properties for ``policy.py``:
-
-- ``classify`` is order-independent over the evidence ledger
-- ``pass_count_from_evidence`` equals the cardinality of the
-  ``{worker_id : DEFAULT-OK}`` set
-- ``next_action`` never raises for any valid (state, evidence, budget)
-- terminal states always yield ``Action.NONE``
-- ``classify`` always returns a valid ``NodeState``
+Plus S6-E/F coordinator heuristic invariants (posterior clamping,
+monotonicity, tier-strict dispatcher).
 """
 
 from __future__ import annotations
@@ -39,17 +33,6 @@ from rethlas_scoring.calibration import (
 )
 from rethlas_scoring.cluster import ClusterIndex, propagate_failure
 from rethlas_scoring.data import ProofGraph, ScoredNode
-from rethlas_scoring.policy import (
-    Action,
-    Evidence,
-    EvidenceKind,
-    NodeState,
-    PolicyBudget,
-    VerdictKind,
-    classify,
-    next_action,
-    pass_count_from_evidence,
-)
 from rethlas_scoring.scorer import anneal_lambda
 from rethlas_scoring.voi import voi_node
 
@@ -115,31 +98,6 @@ def _proof_graph_strategy(draw, *, max_nodes: int = 6, embed_dim: int = 0):
             embedding=emb,
         )
     return ProofGraph.build(nodes)
-
-
-_evidence_kind_strat = st.sampled_from(list(EvidenceKind))
-_verdict_kind_strat = st.sampled_from(list(VerdictKind))
-
-
-@st.composite
-def _evidence_strategy(draw):
-    kind = draw(_evidence_kind_strat)
-    verdict = draw(_verdict_kind_strat)
-    counterex = (
-        draw(st.one_of(st.none(), st.text(min_size=1, max_size=10)))
-        if kind is EvidenceKind.REFUTE
-        else None
-    )
-    return Evidence(
-        kind=kind,
-        worker_id=draw(st.sampled_from([f"w{i}" for i in range(5)])),
-        verdict=verdict,
-        ts_iso="2026-05-06T00:00:00Z",
-        counterexample=counterex,
-    )
-
-
-_evidence_list_strat = st.lists(_evidence_strategy(), min_size=0, max_size=8)
 
 
 # ---------------------------------------------------------------------------
@@ -223,87 +181,6 @@ def test_anneal_lambda_monotone_property(fractions: list[float]) -> None:
     for prev, nxt in zip(lams, lams[1:]):
         assert nxt <= prev + 1e-12
     assert all(0.1 <= x <= 1.0 for x in lams)
-
-
-# ---------------------------------------------------------------------------
-# policy — classify is order-independent
-# ---------------------------------------------------------------------------
-@_PROFILE
-@given(evidence=_evidence_list_strat, seed=st.integers(0, 2**31 - 1))
-def test_classify_order_independent_property(
-    evidence: list[Evidence], seed: int
-) -> None:
-    rng = _random.Random(seed)
-    shuffled = evidence[:]
-    rng.shuffle(shuffled)
-    s1 = classify(evidence)
-    s2 = classify(shuffled)
-    assert s1 is s2
-
-
-# ---------------------------------------------------------------------------
-# policy — pass_count == |{worker_id : DEFAULT && OK}|
-# ---------------------------------------------------------------------------
-@_PROFILE
-@given(evidence=_evidence_list_strat)
-def test_pass_count_matches_dedup_set_property(evidence: list[Evidence]) -> None:
-    expected = len(
-        {
-            e.worker_id
-            for e in evidence
-            if e.kind is EvidenceKind.DEFAULT and e.verdict is VerdictKind.OK
-        }
-    )
-    assert pass_count_from_evidence(evidence) == expected
-
-
-# ---------------------------------------------------------------------------
-# policy — next_action never raises and returns a valid Action
-# ---------------------------------------------------------------------------
-@_PROFILE
-@given(
-    evidence=_evidence_list_strat,
-    state=st.sampled_from(list(NodeState)),
-    max_refute=st.integers(min_value=0, max_value=5),
-    max_strong=st.integers(min_value=0, max_value=5),
-)
-def test_next_action_total_function_property(
-    evidence: list[Evidence],
-    state: NodeState,
-    max_refute: int,
-    max_strong: int,
-) -> None:
-    budget = PolicyBudget(max_refute=max_refute, max_strong=max_strong)
-    action = next_action(state, evidence, budget)
-    assert isinstance(action, Action)
-
-
-# ---------------------------------------------------------------------------
-# policy — terminal states always yield NONE
-# ---------------------------------------------------------------------------
-@_PROFILE
-@given(
-    evidence=_evidence_list_strat,
-    state=st.sampled_from(
-        [NodeState.VERIFIED, NodeState.REFUTED, NodeState.USER_BLOCKED]
-    ),
-)
-def test_next_action_terminal_property(
-    evidence: list[Evidence], state: NodeState
-) -> None:
-    assert next_action(state, evidence) is Action.NONE
-
-
-# ---------------------------------------------------------------------------
-# Sanity — classify returns one of the documented states
-# ---------------------------------------------------------------------------
-@_PROFILE
-@given(evidence=_evidence_list_strat)
-def test_classify_returns_documented_state_property(
-    evidence: list[Evidence],
-) -> None:
-    s = classify(evidence)
-    assert isinstance(s, NodeState)
 
 
 # ---------------------------------------------------------------------------

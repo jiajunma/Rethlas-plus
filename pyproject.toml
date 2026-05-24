@@ -52,7 +52,6 @@ include = [
   "generator*",
   "librarian*",
   "linter*",
-  "refute*",
   "rethlas_scoring*",
   "verifier*",
 ]

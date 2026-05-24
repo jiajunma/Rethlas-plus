@@ -96,15 +96,6 @@ from embedding import default_provider as _default_embedding_provider
 from rethlas_scoring.calibration import perfect_verifier_roc
 from rethlas_scoring.cluster import ClusterIndex
 from rethlas_scoring.data import ProofGraph, ScoredNode
-from rethlas_scoring.policy import (
-    Action,
-    Evidence,
-    EvidenceKind,
-    PolicyBudget,
-    VerdictKind,
-    classify,
-    next_action,
-)
 from rethlas_scoring.scheduler import make_priority_fn
 
 
@@ -447,43 +438,10 @@ def _build_priority_fn(snapshot: _KBSnapshot, *, use_voi_scoring: bool):
 
 
 # ---------------------------------------------------------------------------
-# L5 policy adapter — Phase B/S3 scaffold (docs/SCORING_SCHEDULING.md §7).
+# Posterior heuristic (S6-E) — placeholder mapping from KB signals to
+# ``ScoredNode.posterior_p`` until verifier confidence + ground-truth
+# feedback land.
 # ---------------------------------------------------------------------------
-def _evidence_from_candidate(cand: CandidateInput) -> list[Evidence]:
-    """Reconstruct an :class:`Evidence` ledger from existing KB fields.
-
-    The KB does not yet store per-call Evidence rows directly (a
-    schema change deferred to S6+). For each verifier candidate we
-    synthesise a list from ``pass_count`` (the count of consecutive
-    successful passes since the last revision).
-
-    ``repair_count`` past rejections happened on a *different* version
-    of the statement and are therefore NOT included as evidence on the
-    current statement — including them would conflate distinct claims.
-
-    Result for the typical verifier candidate
-    (``0 ≤ pass_count < desired_pass_count``):
-
-    - ``pass_count`` rows of ``(DEFAULT, OK)`` with synthetic worker
-      IDs ``legacy_pass_{i}``.
-
-    Once the KB stores per-call Evidence directly, this reconstruction
-    is replaced by a one-line read.
-    """
-
-    if cand.pass_count <= 0:
-        return []
-    return [
-        Evidence(
-            kind=EvidenceKind.DEFAULT,
-            worker_id=f"legacy_pass_{i}",
-            verdict=VerdictKind.OK,
-            ts_iso="",
-        )
-        for i in range(cand.pass_count)
-    ]
-
-
 def _posterior_from_kb_signals(cand: CandidateInput) -> float:
     """Heuristic mapping of KB fields to a ``ScoredNode.posterior_p``.
 
@@ -512,37 +470,6 @@ def _posterior_from_kb_signals(cand: CandidateInput) -> float:
 
     p = 0.5 + 0.10 * max(0, cand.pass_count) - 0.05 * max(0, cand.repair_count)
     return max(0.10, min(0.95, p))
-
-
-def _action_for_candidate(
-    cand: CandidateInput,
-    *,
-    desired_pass: int,
-    budget: PolicyBudget | None = None,
-) -> Action:
-    """Drive the L5 state machine for a verifier candidate.
-
-    Composes :func:`rethlas_scoring.policy.classify` and
-    :func:`rethlas_scoring.policy.next_action`. Under the S3 honest
-    reconstruction this returns ``DEFAULT_VERIFY`` for every candidate
-    that survives the eligibility filters; non-default actions become
-    reachable only once S4+ stores real Evidence (refute / strong
-    verdicts) in the KB.
-
-    ``budget`` controls how many refute / strong escalations a node
-    may receive before falling through to ``user_blocked``. When
-    omitted the ``PolicyBudget()`` default is used (1 refute, 1
-    strong); production callers should pass a budget assembled from
-    ``state.config.scheduling`` so the rethlas.toml caps take effect.
-
-    The dispatch site logs any non-``DEFAULT_VERIFY`` outcome so that
-    when richer Evidence does appear the operator can see what the
-    policy *would* have chosen before S4/S5 wire the actual workers.
-    """
-
-    evidence = _evidence_from_candidate(cand)
-    state = classify(evidence, desired_pass=desired_pass)
-    return next_action(state, evidence, budget or PolicyBudget())
 
 
 # ---------------------------------------------------------------------------
@@ -1126,35 +1053,8 @@ def _tick(state: CoordinatorState) -> None:
         in_flight_targets.add(lbl)
         dispatched_gen += 1
 
-    # S5: assemble per-node policy budget from rethlas.toml caps so
-    # ``DISAGREEMENT`` walks ``REFUTE`` (≤max_refute) →
-    # ``STRONG_VERIFY`` (≤max_strong) → ``USER_BLOCKED`` per
-    # operator-tunable depth. Built once per tick — budgets are pure
-    # data, no per-node mutation.
-    policy_budget = PolicyBudget(
-        max_refute=state.config.scheduling.policy_max_refute_per_node,
-        max_strong=state.config.scheduling.policy_max_strong_per_node,
-    )
     for lbl in ver_targets:
         cand = by_label[lbl]
-        # S3 scaffold + S5 budget: ask the L5 policy what to do next.
-        # Under honest Evidence reconstruction (no per-call ledger in
-        # KB yet) every eligible candidate yields DEFAULT_VERIFY, so
-        # behaviour is byte-identical to before. The skip+log branch
-        # only fires once S4/S5 store real refute / strong evidence —
-        # it gives the operator visibility for what the policy *would*
-        # dispatch before the worker types are wired in.
-        action = _action_for_candidate(
-            cand,
-            desired_pass=state.config.scheduling.desired_pass_count,
-            budget=policy_budget,
-        )
-        if action is not Action.DEFAULT_VERIFY:
-            _log_supervise(
-                state,
-                f"policy: {lbl} -> {action.value} (S4+ will dispatch; skipping)",
-            )
-            continue
         ctx, fail = precheck_verifier(cand, in_flight_targets=in_flight_targets)
         if fail is not None:
             _log_supervise(state, "verifier precheck failed: %s -> %s: %s" % (

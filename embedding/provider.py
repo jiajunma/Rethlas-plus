@@ -1,7 +1,7 @@
 """Embedding provider Protocol (S6-A).
 
-Minimal contract that decouples ``rethlas_scoring.cluster`` /
-``rethlas_scoring.bridge`` from any specific embedding backend.
+Minimal contract that decouples ``rethlas_scoring.cluster`` from any
+specific embedding backend.
 Implementations only need to expose a stable ``dim`` and a
 ``embed(text)`` that returns a tuple of floats.
 
