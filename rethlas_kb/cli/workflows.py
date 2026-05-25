@@ -373,6 +373,15 @@ def _add_fill_gap(sub) -> None:
         "--no-write-review", action="store_true",
         help="Don't persist a review file under docs/knowledge/reviews/.",
     )
+    fg.add_argument(
+        "--allow-same-backend", action="store_true",
+        help=(
+            "Suppress the cross-backend-isolation check (issue #13). "
+            "Recommended only for single-machine debugging when only one "
+            "CLI is installed; production runs should use different "
+            "backends for proof-gap-filler vs proof-verifier."
+        ),
+    )
     fg.set_defaults(include_staged_context=True, handler=_cmd_fill_gap)
 
 
