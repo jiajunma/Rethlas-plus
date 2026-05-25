@@ -8,27 +8,63 @@ KB 上**,不再持续运行的 daemon + Kuzu DB,而是 batch CLI 对 markdown �
 > difficulty-adaptive 验证 + multi-backend 隔离 + 研究数学(非形式化已有)
 > 工作场景。
 
-## v1 — Walking skeleton + 5 agents(本次工作)
+## ✅ v1 — Walking skeleton + 5 agents — **SHIPPED 2026-05-25**
 
-目标:**在 `~/mydoc/sheavesonbuilding` 真实研究节点上,通过 CLI 跑通**
+12 issues closed. 352 tests passing. `rethlas-kb install-commands`
++ Mode A slash commands for claude / codex / opencode.
+
+目标已达成:**在 `~/mydoc/sheavesonbuilding` 真实研究节点上,通过 CLI 跑通**
 verify-stmt / verify-proof / fill-gap / hunt-counterexample / audit-source
-五个核心命令,输出 mdblueprint 格式的 review 文件。
+五个核心命令,输出 mdblueprint 格式的 review 文件。同时 Mode A
+(agentic CLI 编排) + Mode B (Python 编排) 双轨。
 
-| # | Title | Track |
+| # | Title | Status |
 |---|---|---|
-| 1 | scaffold rethlas-kb uv workspace + README + AGENTS.md | v1 |
-| 2 | pyproject + mdblueprint editable source | v1 |
-| 3 | backends: AgentBackend Protocol + registry + factory | v1 |
-| 4 | backends: codex wrapper(port codex_runner) | v1 |
-| 5 | backends: claude wrapper | v1 |
-| 6 | adapter: mdblueprint KB read/write | v1 |
-| 7 | agent: statement-verifier | v1 |
-| 8 | CLI: rethlas-kb verify-stmt + sheavesonbuilding smoke | v1 |
-| 9 | agent: proof-verifier(QED-style 3-stage + --depth) | v1 |
-| 10 | agent: proof-gap-filler | v1 |
-| 11 | agent: counterexample-hunter | v1 |
-| 12 | agent: source-claim-verifier(PDF extractor + alignment + verify) | v1 |
-| 13 | config: cross-backend constraint enforcement | v1 |
+| 1 | scaffold rethlas-kb uv workspace + README + AGENTS.md | ✅ closed |
+| 2 | pyproject + mdblueprint editable source | ✅ closed |
+| 3 | backends: AgentBackend Protocol + registry + factory | ✅ closed |
+| 4 | backends: codex wrapper (port codex_runner) | ✅ closed |
+| 5 | backends: claude wrapper | ✅ closed |
+| 6 | adapter: mdblueprint KB read/write | ✅ closed |
+| 7 | agent: statement-verifier (hardened with QED discipline) | ✅ closed |
+| 8 | CLI: rethlas-kb verify-stmt + sheavesonbuilding smoke | ✅ closed |
+| 9 | agent: proof-verifier (QED-style 3-stage + --depth) | ✅ closed |
+| 10 | agent: proof-gap-filler (generator discipline) | ✅ closed |
+| 11 | agent: counterexample-hunter (inverse search) | ✅ closed |
+| 12 | agent: source-claim-verifier (PDF extractor deferred — see notes) | ✅ closed |
+| 13 | config: cross-backend isolation library hook | ✅ closed |
+| 19 | CLI: primitives for Mode A orchestration | ✅ closed |
+| 20 | commands: slash templates + install-commands | ✅ closed |
+| 21 | docs: pivot README + AGENTS.md to Mode A primary path | ✅ closed |
+| 22 | adapter: project-rules sidecar | ✅ closed |
+
+### v1 architectural pivots (mid-flight)
+
+- **Mode A primary, Mode B batch/CI** (after design discussion):
+  rethlas-kb became a toolkit for agentic CLIs (codex / claude /
+  opencode) to call, not a Python orchestrator that treats LLMs as
+  inference services. Mode B remains for batch / CI / determinism.
+  See `AGENTS.md` "Two Orchestration Modes".
+- **Generator vs Verifier taxonomy** (after studying QED + Rethlas-original):
+  the 5 agents split into two categories with opposing discipline.
+  Verifiers are scope-restricted + conservative-by-default + anti-paraphrase.
+  Generators are repair-aware + anti-handwave + counterexample-first.
+- **QED-learned prompt discipline** baked into every verifier prompt:
+  conservative stance, verbatim-quote discipline, anti-pattern catalog,
+  discriminated-union outputs (decoder enforces), context_insufficient
+  escape hatch, confidence calibration bands.
+
+### v1 deferrals (intentional)
+
+- **PDF extractor in source-claim-verifier** — v1 takes pre-extracted
+  source passages as input; deterministic extractor deferred to v1.5+
+- **ProofVerifier chaining inside source-claim-verifier** — v1 emits one
+  combined verdict; for deeper checking run `verify-proof` separately
+  on a staged copy
+- **Cross-backend isolation enforcement** — library hook ships in
+  `rethlas_kb/config.py` for v1; startup enforcement waits for v1.3's
+  config file (issues #14/#15) since today there's no single CLI
+  invocation that activates both roles in a constrained pair
 
 ## v1.3 — Project 概念
 
@@ -64,7 +100,10 @@ verify-stmt / verify-proof / fill-gap / hunt-counterexample / audit-source
 | counterexample-hunter | claude opus-thinking | — |
 | source-claim-verifier | codex(detailed)/ claude(structural) | proof-gap-filler |
 
-约束在 config 校验阶段强制(commit 13);违反 → 启动报错,不静默。
+约束位于 `rethlas_kb/config.py::validate_backend_isolation()` —
+Mode B 通过 issue #14/#15 引入 config 文件时挂钩启动校验。Mode A
+靠用户约定(选哪个 agentic CLI 跑哪个 /verb),工具不强制 —
+Mode A 的价值就来自 agentic CLI 的行动自由。
 
 ### QED 风格 difficulty-adaptive 验证
 
