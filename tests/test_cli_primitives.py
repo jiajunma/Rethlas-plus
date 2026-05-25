@@ -227,6 +227,24 @@ def test_compose_prompt_unknown_role_rejected_by_argparse(kb: Path) -> None:
     assert exc_info.value.code == cli.EXIT_USAGE
 
 
+def test_compose_prompt_includes_project_rules_when_sidecar_present(
+    kb: Path,
+) -> None:
+    """Sidecar rules under docs/knowledge/rules/ are appended automatically."""
+    rules_dir = kb / "docs" / "knowledge" / "rules"
+    rules_dir.mkdir(parents=True)
+    (rules_dir / "_global.md").write_text("- Global rule for the blueprint.\n")
+    (rules_dir / "statement-verifier.md").write_text(
+        "- Role-specific rule for statement-verifier.\n"
+    )
+    rc, out, _ = _run(["compose-prompt", "statement-verifier",
+                       "algebra.quotient_group", "--project", str(kb)])
+    assert rc == cli.EXIT_OK
+    assert "Additional project rules" in out
+    assert "Global rule" in out
+    assert "Role-specific rule" in out
+
+
 # ---------------------------------------------------------------------------
 # list-staged / list-admitted
 # ---------------------------------------------------------------------------

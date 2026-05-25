@@ -49,13 +49,20 @@ class StatementVerifier:
         return AGENT_ROLE
 
     def run(self, node_id: str, adapter: KbAdapter) -> StatementReview:
-        """Verify one node's statement; return the typed review."""
+        """Verify one node's statement; return the typed review.
+
+        Project-specific rules from ``docs/knowledge/rules/_global.md``
+        and ``docs/knowledge/rules/statement-verifier.md`` are read via
+        the adapter and appended to the prompt as a hard-requirement
+        section (issue #22, QED-style Phase-5 pattern).
+        """
         node = adapter.read_node(node_id)
         context = adapter.context_pack(
             target_id=node_id,
             include_staged=self.include_staged_context,
         )
-        prompt_text = compose(node, context)
+        project_rules = adapter.read_project_rules_combined(AGENT_ROLE)
+        prompt_text = compose(node, context, project_rules=project_rules)
 
         result: AgentResult = self.backend.run(
             agent_role=AGENT_ROLE,

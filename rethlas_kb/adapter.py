@@ -84,6 +84,11 @@ class KbAdapter:
         self.reviews_dir = self.knowledge_dir / "reviews"
         self.requests_dir = self.knowledge_dir / "requests"
         self.sources_dir = self.knowledge_dir / "sources"
+        # QED-style sidecar for project-specific rules — every agent's
+        # prompt appends the union of (global rules) + (role rules) so
+        # users can tighten an agent's behaviour per blueprint without
+        # forking the base prompt. Both files are optional (issue #22).
+        self.rules_dir = self.knowledge_dir / "rules"
 
     # -- reads ------------------------------------------------------------
     def read_node(self, node_id: str) -> Node:
@@ -129,6 +134,54 @@ class KbAdapter:
             n for n in self.list_staged()
             if topic_id in leaf_topic_ids_for_node(n)
         ]
+
+    # -- project-rules sidecar (issue #22) ---------------------------------
+    def read_project_rules_global(self) -> str:
+        """Read ``docs/knowledge/rules/_global.md`` if it exists; '' otherwise.
+
+        Rules listed here apply to every agent's prompt. Used for
+        project-wide conventions like notation defaults or citation
+        bans. Returns the raw markdown body (stripped of any YAML
+        frontmatter), so it slots straight into the prompt.
+        """
+        return self._read_rules_file(self.rules_dir / "_global.md")
+
+    def read_project_rules(self, role: str) -> str:
+        """Read ``docs/knowledge/rules/{role}.md`` if it exists; '' otherwise.
+
+        Rules here apply only to one agent role (e.g. ``proof-verifier``).
+        Concatenate with :meth:`read_project_rules_global` before passing
+        to ``prompt.compose``.
+        """
+        if not role or "/" in role or role.startswith("."):
+            # Defensive — don't let a malformed role escape the rules dir.
+            return ""
+        return self._read_rules_file(self.rules_dir / f"{role}.md")
+
+    def read_project_rules_combined(self, role: str) -> str:
+        """Convenience: global + role-specific rules joined with a blank line.
+
+        Returns ``""`` if neither file exists. Empty fragments are dropped.
+        """
+        parts = [
+            self.read_project_rules_global().strip(),
+            self.read_project_rules(role).strip(),
+        ]
+        return "\n\n".join(p for p in parts if p)
+
+    def _read_rules_file(self, path: Path) -> str:
+        """Read a rules file, stripping a YAML frontmatter block if present."""
+        if not path.exists():
+            return ""
+        text = path.read_text(encoding="utf-8")
+        # Allow optional YAML frontmatter (so the file can carry metadata
+        # like 'description:' for human reference) but only the body is
+        # injected into prompts.
+        if text.startswith("---\n"):
+            end = text.find("\n---\n", 4)
+            if end != -1:
+                text = text[end + 5 :]
+        return text.strip()
 
     # -- writes -----------------------------------------------------------
     def write_review(

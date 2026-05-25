@@ -186,3 +186,35 @@ def test_run_decoder_failure_does_not_swallow_backend_response(
     verifier = StatementVerifier(backend=backend)
     with pytest.raises(StatementReviewParseError, match="invalid_decision"):
         verifier.run("algebra.quotient_group", adapter)
+
+
+# ---------------------------------------------------------------------------
+# Project-rules sidecar wiring (issue #22)
+# ---------------------------------------------------------------------------
+def test_run_injects_project_rules_into_prompt(adapter: KbAdapter) -> None:
+    """Both global and role-specific rules files land in the prompt."""
+    adapter.rules_dir.mkdir(parents=True, exist_ok=True)
+    (adapter.rules_dir / "_global.md").write_text(
+        "- Project-wide notation: `(G,N)` denotes group / normal subgroup pair.\n"
+    )
+    (adapter.rules_dir / "statement-verifier.md").write_text(
+        "- Reject any cardinality claim without a finiteness hypothesis.\n"
+    )
+    backend = MockBackend(canned_response=json.dumps({
+        "decision": "accepted", "rationale": "ok"}))
+    verifier = StatementVerifier(backend=backend)
+    verifier.run("algebra.quotient_group", adapter)
+    prompt = backend.last_call["prompt"]
+    assert "Additional project rules" in prompt
+    assert "(G,N)" in prompt
+    assert "cardinality claim" in prompt
+
+
+def test_run_does_not_add_rules_section_when_no_files(
+    adapter: KbAdapter,
+) -> None:
+    backend = MockBackend(canned_response=json.dumps({
+        "decision": "accepted", "rationale": "ok"}))
+    verifier = StatementVerifier(backend=backend)
+    verifier.run("algebra.quotient_group", adapter)
+    assert "Additional project rules" not in backend.last_call["prompt"]

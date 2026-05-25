@@ -233,7 +233,10 @@ def _cmd_compose_prompt(ns: argparse.Namespace) -> int:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
 
-    sys.stdout.write(composer(node, bundle))
+    # Project-rules sidecar (issue #22) — appended automatically; the
+    # agentic CLI doesn't need to know it exists.
+    project_rules = adapter.read_project_rules_combined(ns.role)
+    sys.stdout.write(composer(node, bundle, project_rules=project_rules))
     return EXIT_OK
 
 

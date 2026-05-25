@@ -164,7 +164,12 @@ Do not wrap the JSON in markdown fences. Do not add prose after it.
 """
 
 
-def compose(node: "Node", context: ContextBundle) -> str:
+def compose(
+    node: "Node",
+    context: ContextBundle,
+    *,
+    project_rules: str = "",
+) -> str:
     """Build the full prompt string for one node.
 
     Layout:
@@ -175,14 +180,35 @@ def compose(node: "Node", context: ContextBundle) -> str:
          flagged when present).
       4. Output contract (with verbatim-quote requirement +
          confidence guidance + per-decision required fields).
+      5. Project-specific rules sidecar (issue #22) — appended only
+         when ``project_rules`` is non-empty. Treated as hard
+         requirements per QED's Phase-5 pattern.
     """
-    sections = [
+    sections: list[str] = [
         _SYSTEM_BLOCK,
         _render_target(node),
         _render_context(context),
         _OUTPUT_CONTRACT,
     ]
+    rules_block = _render_project_rules(project_rules)
+    if rules_block:
+        sections.append(rules_block)
     return "\n\n".join(s.rstrip() for s in sections) + "\n"
+
+
+def _render_project_rules(project_rules: str) -> str:
+    """Render the optional project-rules sidecar as a final prompt section."""
+    body = (project_rules or "").strip()
+    if not body:
+        return ""
+    return (
+        "## Additional project rules (hard requirements)\n\n"
+        "The blueprint maintainer has supplied the following project-"
+        "specific rules. Treat every rule below as a hard requirement: "
+        "if the target statement violates any rule, choose the "
+        "decision that flags the violation (do not silently override).\n\n"
+        + body
+    )
 
 
 # ---------------------------------------------------------------------------

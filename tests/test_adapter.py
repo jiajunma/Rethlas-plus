@@ -379,3 +379,86 @@ def test_compose_markdown_without_body() -> None:
     out = _compose_markdown({"id": "x.y"}, "")
     assert out.endswith("---\n")
     assert "x.y" in out
+
+
+# ---------------------------------------------------------------------------
+# project-rules sidecar (issue #22)
+# ---------------------------------------------------------------------------
+def test_read_project_rules_global_missing_returns_empty(kb: KbAdapter) -> None:
+    assert kb.read_project_rules_global() == ""
+
+
+def test_read_project_rules_role_missing_returns_empty(kb: KbAdapter) -> None:
+    assert kb.read_project_rules("statement-verifier") == ""
+
+
+def test_read_project_rules_combined_returns_empty_when_neither_exists(
+    kb: KbAdapter,
+) -> None:
+    assert kb.read_project_rules_combined("statement-verifier") == ""
+
+
+def test_read_project_rules_global_returns_body(kb: KbAdapter) -> None:
+    kb.rules_dir.mkdir(parents=True, exist_ok=True)
+    (kb.rules_dir / "_global.md").write_text(
+        "- Default notation: Fun(-,-) means enriched.\n"
+    )
+    out = kb.read_project_rules_global()
+    assert "Fun(-,-)" in out
+    assert "enriched" in out
+
+
+def test_read_project_rules_role_only_loads_matching_file(kb: KbAdapter) -> None:
+    kb.rules_dir.mkdir(parents=True, exist_ok=True)
+    (kb.rules_dir / "statement-verifier.md").write_text(
+        "- Reject any statement that uses \\hat{} without prior definition.\n"
+    )
+    (kb.rules_dir / "proof-verifier.md").write_text("- proof-specific rule\n")
+    sv = kb.read_project_rules("statement-verifier")
+    assert "hat" in sv
+    assert "proof-specific rule" not in sv
+
+
+def test_read_project_rules_strips_yaml_frontmatter(kb: KbAdapter) -> None:
+    kb.rules_dir.mkdir(parents=True, exist_ok=True)
+    (kb.rules_dir / "_global.md").write_text(
+        "---\n"
+        "description: project rules for sheavesonbuilding\n"
+        "owner: ma-jia-jun\n"
+        "---\n\n"
+        "- Rule one\n"
+        "- Rule two\n"
+    )
+    out = kb.read_project_rules_global()
+    assert "description:" not in out
+    assert "Rule one" in out
+    assert "Rule two" in out
+
+
+def test_read_project_rules_combined_joins_global_and_role(kb: KbAdapter) -> None:
+    kb.rules_dir.mkdir(parents=True, exist_ok=True)
+    (kb.rules_dir / "_global.md").write_text("- Global rule\n")
+    (kb.rules_dir / "statement-verifier.md").write_text("- Role-specific rule\n")
+    out = kb.read_project_rules_combined("statement-verifier")
+    assert "Global rule" in out
+    assert "Role-specific rule" in out
+    # Global appears first
+    assert out.index("Global") < out.index("Role-specific")
+
+
+def test_read_project_rules_role_rejects_path_traversal(kb: KbAdapter) -> None:
+    """Defence: a malicious role name shouldn't escape the rules dir."""
+    assert kb.read_project_rules("../../etc/passwd") == ""
+    assert kb.read_project_rules(".hidden") == ""
+    assert kb.read_project_rules("") == ""
+
+
+def test_read_project_rules_global_empty_file_returns_empty(kb: KbAdapter) -> None:
+    kb.rules_dir.mkdir(parents=True, exist_ok=True)
+    (kb.rules_dir / "_global.md").write_text("")
+    assert kb.read_project_rules_global() == ""
+
+
+def test_rules_dir_resolves_under_knowledge_dir(tmp_path: Path) -> None:
+    a = KbAdapter(tmp_path)
+    assert a.rules_dir == a.knowledge_dir / "rules"

@@ -193,3 +193,36 @@ def test_compose_returns_str_and_ends_with_newline() -> None:
     out = compose(_node(), _bundle())
     assert isinstance(out, str)
     assert out.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# Project-rules sidecar (issue #22)
+# ---------------------------------------------------------------------------
+def test_compose_omits_project_rules_section_when_empty() -> None:
+    out = compose(_node(), _bundle(), project_rules="")
+    assert "Additional project rules" not in out
+
+
+def test_compose_omits_project_rules_section_when_whitespace_only() -> None:
+    out = compose(_node(), _bundle(), project_rules="   \n   ")
+    assert "Additional project rules" not in out
+
+
+def test_compose_appends_project_rules_section_when_supplied() -> None:
+    rules = (
+        "- Fun(-,-) defaults to enriched functors in this paper.\n"
+        "- Reject any use of `\\hat{}` without prior definition.\n"
+    )
+    out = compose(_node(), _bundle(), project_rules=rules)
+    assert "Additional project rules" in out
+    assert "hard requirements" in out
+    assert "Fun(-,-)" in out
+    assert "\\hat{}" in out
+
+
+def test_compose_project_rules_section_appears_last() -> None:
+    out = compose(_node(), _bundle(), project_rules="- A rule.")
+    # The rules section should follow the output contract, not precede it
+    rules_idx = out.index("Additional project rules")
+    contract_idx = out.index("Output contract")
+    assert rules_idx > contract_idx
