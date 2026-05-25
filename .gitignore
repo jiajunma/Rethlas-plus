@@ -1,16 +1,19 @@
-# Rethlas repo .gitignore (M0)
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
 build/
 dist/
+
+# uv
 .venv/
-myenv/
+.uv-cache/
+
+# Editor
 .DS_Store
+.idea/
+.vscode/
 
-/events/
-/knowledge_base/
-/runtime/
-/rethlas.toml
-
+# Project local
+/.rethlas-kb/cache/

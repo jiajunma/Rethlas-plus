@@ -1,183 +1,96 @@
-# Rethlas
+# Rethlas-KB
 
-Rethlas is a natural-language reasoning system for mathematics built around two Codex agents:
+**Rethlas-KB** is the agent layer that operates on top of an
+[mdblueprint](https://github.com/jiajunma/mdblueprint) knowledge base
+to do **new research mathematics** — propose lemmas, verify proofs,
+hunt counterexamples, audit cited papers.
 
-- The generation agent reads a math problem from a markdown file and writes an informal proof blueprint.
-- The verification agent checks that proof blueprint, produces a structured verdict, and serves as the generation agent's verifier.
+It is a redesign of Rethlas-plus. The previous Kuzu-backed daemon
+architecture is replaced by **batch CLI commands** that invoke
+**multi-backend LLM agents** (codex / claude / opencode) on a
+markdown-first knowledge base.
 
-The intended deployment order is:
+> **Status**: v1 design frozen 2026-05-25; implementation in progress.
+> See [ROADMAP.md](ROADMAP.md) for the full plan and
+> [GitHub issues](https://github.com/jiajunma/Rethlas-plus/issues?q=label%3Arethlas-kb)
+> for current work.
 
-1. Start the verification agent as a local HTTP service.
-2. Run the generation agent through Codex.
-3. Let the generation agent call the verification service during its proof-and-repair loop.
+---
 
-## Repository Layout
-
-- `agents/generation`: the proof-generation agent
-- `agents/verification`: the proof-verification agent
-
-
-
-## 1. Install Codex CLI
-
-Install the Codex CLI:
+## What you can do (v1)
 
 ```bash
-npm install -g @openai/codex
+rethlas-kb verify-stmt  <node-id>              # statement well-formed?
+rethlas-kb verify-proof <node-id>              # QED-style 3-stage (judge → structural → detailed)
+rethlas-kb verify-proof <node-id> --depth structural   # shallow only (creative phase)
+rethlas-kb verify-proof <node-id> --depth detailed     # deep verification (convergence phase)
+rethlas-kb fill-gap     <node-id>              # complete a partial proof
+rethlas-kb hunt-counterexample <node-id>       # actively try to refute the statement
+rethlas-kb audit-source <node-id>              # verify a cited external paper (alignment + math)
 ```
 
+Every command writes its output as a `reviews/*.md` file into the
+mdblueprint KB. Admission to `nodes/` follows mdblueprint's standard
+flow.
 
-## 2. Clone the Repository
+---
+
+## Architecture in one paragraph
+
+mdblueprint owns the **knowledge layer** — markdown nodes under
+`docs/knowledge/{nodes,staged,reviews,requests,sources}/`. Rethlas-KB
+owns the **agent layer** — Python orchestrators that compose prompts,
+invoke an LLM backend via subprocess (codex / claude / opencode CLI),
+parse the result, and write a review file. There is **no DB**, **no
+daemon**, **no event bus** — every command is a one-shot CLI
+invocation that reads + writes markdown.
+
+Verification uses the **QED-style difficulty-adaptive pipeline**:
+a cheap *judge* classifies the proof as Easy or Hard; Easy gets a
+one-call verification, Hard goes through a *structural* check (high-
+level architecture) that gates a *detailed* step-by-step check (deep
+math). Cheap-first, gate-after. See [QED](https://arxiv.org/abs/2604.24021)
+for the original pattern.
+
+The differentiator for **research mathematics** (vs formalizing
+known textbook results): a first-class `counterexample-hunter` agent
+because in research, statements really might be wrong, and finding a
+concrete witness is a primary deliverable, not a secondary signal.
+
+---
+
+## Use case
+
+Designed against `~/mydoc/sheavesonbuilding` ("Sheaves on Buildings
+and Representations of p-adic Reductive Groups", Ma-Wang-Yu, in
+progress) and similar **work-in-progress research papers** with
+partial proofs, uncertain statements, citations into recent arXiv
+preprints. NOT designed for formalizing already-proven textbook
+results (use mdblueprint's other agent contracts for that).
+
+---
+
+## Documents
+
+- [`ROADMAP.md`](ROADMAP.md) — 18-issue v1 / v1.3 / v1.5 plan
+- [`AGENTS.md`](AGENTS.md) — agent contracts (mdblueprint-style)
+- [`CLAUDE.md`](CLAUDE.md) — Claude Code shim → AGENTS.md
+- [`docs/`](docs/) — design notes (forthcoming)
+
+---
+
+## Install (forthcoming)
 
 ```bash
-git clone https://github.com/frenzymath/Rethlas.git
-cd Rethlas
+git clone git@github.com:jiajunma/Rethlas-plus.git -b rethlas-kb rethlas-kb
+cd rethlas-kb
+uv sync
 ```
 
-## 3. Start the Verification Service
+mdblueprint must be available at `~/mycodes/mdblueprint` (editable
+local dep). See [`pyproject.toml`](pyproject.toml) `tool.uv.sources`
+section.
 
-
-```bash
-cd agents/verification
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn api.server:app --host 0.0.0.0 --port 8091
-```
-
-Using uv
-```bash
-cd agents/verification
-uv venv 
-uv pip install -r requirements.txt
-uv run uvicorn api.server:app --host 0.0.0.0 --port 8091
-```
-
-The verification API now supports both:
-
-- synchronous verification: `POST /verify`
-- asynchronous single-flight verification:
-  - `POST /verify_async`
-  - `GET /verify_status/{run_id}`
-  - `GET /verify_result/{run_id}`
-
-Each verification run writes persistent state under:
-
-- `agents/verification/results/{run_id}/state.json`
-- `agents/verification/results/{run_id}/verification.json`
-- `agents/verification/results/{run_id}/summary.md`
-- `agents/verification/results/{run_id}/summary.pdf` when PDF generation succeeds
-
-## 4. Run the Generation Agent on the Included Example
-
-
-```bash
-cd agents/generation
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r mcp/requirements.txt
-./tests/run_example.sh
-```
-
-This script:
-
-- reads `agents/generation/data/example.md`
-- runs `codex exec` inside `agents/generation`
-- writes the run log to `agents/generation/logs/example/example.md`
-- writes memory artifacts to `agents/generation/memory/example/`
-- writes the draft proof to `agents/generation/results/example/blueprint.md`
-- runs section-level verification and writes `agents/generation/results/example/section_verification.json`
-- writes the verified proof to `agents/generation/results/example/blueprint_verified.md` if verification succeeds
-
-Section-level verification and full verification now use the asynchronous verifier interface under the hood, so long verification jobs are polled by run id instead of blocking on one large synchronous HTTP request.
-
-## 4b. Run With Recovery
-
-For long-running problems, use the resumable runner:
-
-```bash
-cd agents/generation
-source .venv/bin/activate
-PROBLEM_FILE=data/my_problem.md ./tests/run_resumable.sh
-```
-
-This runner:
-
-- keeps the same `problem_id`;
-- reuses `memory/{problem_id}/` and `results/{problem_id}/`;
-- retries automatically after rate limits, timeouts, or verifier outages;
-- writes `results/{problem_id}/run_state.json`;
-- updates `results/{problem_id}/heartbeat.txt`.
-
-To inspect the current persisted state:
-
-```bash
-cd agents/generation
-python3 scripts/show_run_status.py my_problem
-```
-
-## 5. Run Your Own Problem
-
-Put your problem in a markdown file under `agents/generation/data/`. Save that as:
-
-```text
-agents/generation/data/my_problem.md
-```
-
-Then run:
-
-```bash
-cd agents/generation
-source .venv/bin/activate
-PROBLEM_FILE=data/my_problem.md ./tests/run_example.sh
-```
-
-The filename stem becomes the generation problem id. In this example:
-
-- problem id: `my_problem`
-- memory directory: `agents/generation/memory/my_problem/`
-- draft proof: `agents/generation/results/my_problem/blueprint.md`
-- section verification report: `agents/generation/results/my_problem/section_verification.json`
-- verified proof: `agents/generation/results/my_problem/blueprint_verified.md`
-
-## 6. View Results in the Browser
-
-- `agents/generation/site`: Zola site for browsing results in the browser
-
-Results are markdown files with LaTeX math. To render them properly, a local [Zola](https://www.getzola.org/) site using the [MATbook](https://www.getzola.org/themes/matbook/) theme is included.
-
-### Prerequisites
-
-Install Zola.
-
-Zola can be easily installed using your package manager in terminal. For example, on Mac, you simply run
-
-```bash
-brew install zola
-```
-
-and on ArchLinux, run
-
-```bash
-sudo pacman -S zola
-```
-
-For other operating systems, please see [Zola installation](https://www.getzola.org/documentation/getting-started/installation/).
-
-### Serve
-
-From `agents/generation/`:
-
-```bash
-./site/serve.sh
-```
-
-On first run this automatically clones the [MATbook](https://www.getzola.org/themes/matbook/) theme. Then it syncs all results from `results/` into the site and starts a local server. Open http://localhost:3264 in your browser.
-
-### Update the MATbook Theme
-
-```bash
-./site/setup_theme.sh
-```
-
-This pulls the latest version from the [MATbook repository](https://github.com/srliu3264/MATbook).
+At least one of `codex` / `claude` / `opencode` CLIs must be
+installed and authenticated. See backend wrappers in
+`rethlas_kb/backends/` for per-backend setup.
