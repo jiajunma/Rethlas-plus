@@ -26,6 +26,10 @@ from rethlas_kb_agents.proof_verifier import (
     ProofReviewParseError,
     ProofVerifier,
 )
+from rethlas_kb_agents.source_claim_verifier import (
+    SourceClaimReviewParseError,
+    SourceClaimVerifier,
+)
 from rethlas_kb_agents.statement_verifier import (
     StatementReviewParseError,
     StatementVerifier,
@@ -47,6 +51,7 @@ def add_subparsers(sub) -> None:
     _add_verify_proof(sub)
     _add_fill_gap(sub)
     _add_hunt_counterexample(sub)
+    _add_audit_source(sub)
 
 
 # ---------------------------------------------------------------------------
@@ -664,5 +669,185 @@ def _hunter_review_for_disk(review) -> dict:
         "confidence": review.confidence,
         "has_witness": review.witness is not None,
         "n_attempted_cases": len(review.attempted_cases),
+        "body": "\n".join(body_parts),
+    }
+
+
+# ---------------------------------------------------------------------------
+# audit-source (Mode B, source-claim-verifier)
+# ---------------------------------------------------------------------------
+def _add_audit_source(sub) -> None:
+    asp = sub.add_parser(
+        "audit-source",
+        help=(
+            "(Mode B) Source-claim-verifier: audit an external-theorem "
+            "node against the cited paper."
+        ),
+        description=(
+            "Verifies alignment between an external-theorem node and a "
+            "pre-extracted source passage from the cited paper. v1 takes "
+            "the passage as input; PDF extraction is deferred to v1.5+."
+        ),
+    )
+    asp.add_argument(
+        "node_id",
+        help="Node id (typically kind=external-theorem).",
+    )
+    asp.add_argument(
+        "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
+        help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
+    )
+    asp.add_argument(
+        "--project", default=".",
+        help="Blueprint project root (must contain docs/knowledge/).",
+    )
+    asp.add_argument(
+        "--source-passage", default=None, metavar="PATH",
+        help=(
+            "Path to pre-extracted source-paper statement (or '-' for stdin). "
+            "Without this, the agent will return cannot_verify."
+        ),
+    )
+    asp.add_argument(
+        "--source-proof", default=None, metavar="PATH",
+        help=(
+            "Optional path to pre-extracted source-paper proof "
+            "(or '-' for stdin). When omitted, only alignment is checked."
+        ),
+    )
+    asp.add_argument("--timeout", type=int, default=600)
+    asp.add_argument(
+        "--no-include-staged", dest="include_staged_context",
+        action="store_false",
+        help="Limit context to admitted nodes only.",
+    )
+    asp.add_argument(
+        "--no-write", action="store_true",
+        help="Print the verdict but don't persist a review file.",
+    )
+    asp.set_defaults(include_staged_context=True, handler=_cmd_audit_source)
+
+
+def _cmd_audit_source(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.project)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    from .main import _register_backends
+    _register_backends()
+
+    try:
+        backend = get_backend(ns.backend)
+    except BackendError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    source_passage = ""
+    if ns.source_passage:
+        try:
+            source_passage = read_file_or_stdin(ns.source_passage)
+        except OSError as exc:
+            print(f"rethlas-kb: --source-passage unreadable: {exc}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+
+    source_proof = ""
+    if ns.source_proof:
+        try:
+            source_proof = read_file_or_stdin(ns.source_proof)
+        except OSError as exc:
+            print(f"rethlas-kb: --source-proof unreadable: {exc}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+    if ns.source_passage and ns.source_proof and ns.source_passage == "-" and ns.source_proof == "-":
+        print(
+            "rethlas-kb: only one of --source-passage / --source-proof "
+            "can read from stdin in the same invocation",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    auditor = SourceClaimVerifier(
+        backend=backend,
+        timeout_seconds=ns.timeout,
+        include_staged_context=ns.include_staged_context,
+    )
+
+    try:
+        review = auditor.run(
+            ns.node_id, adapter,
+            source_passage=source_passage,
+            source_proof=source_proof,
+        )
+    except KeyError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except SourceClaimReviewParseError as exc:
+        print(
+            f"rethlas-kb: backend output could not be parsed: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    except BackendError as exc:
+        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    if not ns.no_write:
+        review_path = adapter.write_review(
+            node_id=ns.node_id,
+            agent_name="source-claim-verifier",
+            review=_source_claim_review_for_disk(review),
+        )
+        print(f"review written: {review_path}", file=sys.stderr)
+
+    print(json.dumps(_source_claim_review_for_stdout(review),
+                     indent=2, ensure_ascii=False))
+    return EXIT_OK if review.is_accepted else EXIT_REVIEW_FAIL
+
+
+def _source_claim_review_for_stdout(review) -> dict:
+    return {
+        "decision": review.decision,
+        "rationale": review.rationale,
+        "confidence": review.confidence,
+        "quoted_node_statement": review.quoted_node_statement,
+        "quoted_source_statement": review.quoted_source_statement,
+        "differences": list(review.differences),
+        "proof_issues": list(review.proof_issues),
+        "missing_evidence": review.missing_evidence,
+    }
+
+
+def _source_claim_review_for_disk(review) -> dict:
+    body_parts = [f"## Rationale\n\n{review.rationale}\n"]
+    if review.quoted_node_statement:
+        body_parts.append(
+            f"## Node statement (verbatim)\n\n{review.quoted_node_statement}\n"
+        )
+    if review.quoted_source_statement:
+        body_parts.append(
+            f"## Source statement (verbatim)\n\n{review.quoted_source_statement}\n"
+        )
+    if review.differences:
+        body_parts.append(
+            "## Differences\n\n"
+            + "\n".join(f"- {d}" for d in review.differences) + "\n"
+        )
+    if review.proof_issues:
+        body_parts.append(
+            "## Proof issues\n\n"
+            + "\n".join(f"- {i}" for i in review.proof_issues) + "\n"
+        )
+    if review.missing_evidence:
+        body_parts.append(
+            f"## Missing evidence\n\n{review.missing_evidence}\n"
+        )
+    body_parts.append(f"## Raw LLM output\n\n```\n{review.raw}\n```\n")
+    return {
+        "decision": review.decision,
+        "confidence": review.confidence,
+        "n_differences": len(review.differences),
+        "n_proof_issues": len(review.proof_issues),
         "body": "\n".join(body_parts),
     }
