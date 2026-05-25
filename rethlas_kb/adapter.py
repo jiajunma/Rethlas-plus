@@ -163,10 +163,22 @@ class KbAdapter:
 
         Returns ``""`` if neither file exists. Empty fragments are dropped.
         """
-        parts = [
-            self.read_project_rules_global().strip(),
-            self.read_project_rules(role).strip(),
-        ]
+        return self.read_project_rules_chain(role)
+
+    def read_project_rules_chain(self, *roles: str) -> str:
+        """Global + every named role's rules, concatenated.
+
+        Used by multi-stage agents (e.g. ``proof-verifier-judge``) that
+        want rules from BOTH the base role (``proof-verifier``) AND the
+        stage variant (``proof-verifier-judge``) when present.
+
+        Order: ``_global.md`` first, then each ``roles[i].md`` in the
+        order passed. Empties are dropped. Returns ``""`` if nothing
+        exists.
+        """
+        parts = [self.read_project_rules_global().strip()]
+        for role in roles:
+            parts.append(self.read_project_rules(role).strip())
         return "\n\n".join(p for p in parts if p)
 
     def _read_rules_file(self, path: Path) -> str:

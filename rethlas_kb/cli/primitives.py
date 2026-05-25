@@ -32,6 +32,11 @@ from pathlib import Path
 
 import yaml
 
+from rethlas_kb_agents.proof_verifier.prompts import (
+    compose_detailed as _compose_proof_verifier_detailed_prompt,
+    compose_judge as _compose_proof_verifier_judge_prompt,
+    compose_structural as _compose_proof_verifier_structural_prompt,
+)
 from rethlas_kb_agents.statement_verifier.prompt import (
     compose as _compose_statement_verifier_prompt,
 )
@@ -40,9 +45,13 @@ from ._constants import EXIT_OK, EXIT_RUNTIME, EXIT_USAGE
 from ._io import adapter_for, read_file_or_stdin, read_stdin_text, split_csv
 
 
-# Agent role → prompt composer. Filled in as agents land.
+# Agent role → prompt composer. Stage-aware roles (proof-verifier-*) are
+# registered as separate keys so the slash commands stay simple.
 _PROMPT_COMPOSERS = {
     "statement-verifier": _compose_statement_verifier_prompt,
+    "proof-verifier-judge": _compose_proof_verifier_judge_prompt,
+    "proof-verifier-structural": _compose_proof_verifier_structural_prompt,
+    "proof-verifier-detailed": _compose_proof_verifier_detailed_prompt,
 }
 
 
@@ -235,9 +244,28 @@ def _cmd_compose_prompt(ns: argparse.Namespace) -> int:
 
     # Project-rules sidecar (issue #22) — appended automatically; the
     # agentic CLI doesn't need to know it exists.
-    project_rules = adapter.read_project_rules_combined(ns.role)
+    # Multi-stage roles also inherit rules from their base role
+    # (e.g. proof-verifier-judge picks up proof-verifier.md too).
+    project_rules = adapter.read_project_rules_chain(*_role_chain(ns.role))
     sys.stdout.write(composer(node, bundle, project_rules=project_rules))
     return EXIT_OK
+
+
+# Multi-stage roles inherit rules from their base role. Update this map
+# whenever a new multi-stage agent lands.
+_STAGE_BASE_ROLES: dict[str, str] = {
+    "proof-verifier-judge": "proof-verifier",
+    "proof-verifier-structural": "proof-verifier",
+    "proof-verifier-detailed": "proof-verifier",
+}
+
+
+def _role_chain(role: str) -> tuple[str, ...]:
+    """Order: base role first (broad), then specific stage role (narrow)."""
+    base = _STAGE_BASE_ROLES.get(role)
+    if base is not None and base != role:
+        return (base, role)
+    return (role,)
 
 
 # ---------------------------------------------------------------------------

@@ -113,10 +113,16 @@ def test_install_repeated_target_flag_dedupes(tmp_path: Path) -> None:
         "--scope", "project", "--project", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
-    # Despite passing claude twice, only one "would-write" line emitted
-    assert err.count("would-write") == 1
-    assert err.count("verify-stmt.md") == 1
-    assert "1 installed, 0 skipped" in err
+    # Despite passing claude twice, we only see one [claude   ] line per
+    # command file (no duplicate installs).
+    claude_lines = [line for line in err.split("\n") if "[claude  ]" in line]
+    # Each unique command file shows up exactly once
+    paths = {line.rsplit(" ", 1)[-1] for line in claude_lines}
+    assert len(paths) == len(claude_lines), (
+        f"duplicate install lines: {claude_lines}"
+    )
+    # And summary reports zero skips
+    assert "0 skipped" in err
 
 
 def test_install_multiple_targets_in_one_flag(tmp_path: Path) -> None:
