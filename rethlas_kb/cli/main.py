@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import primitives, workflows
+from . import install, primitives, workflows
 from ._constants import EXIT_OK, EXIT_USAGE, __version__
 
 
@@ -58,6 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # lists them in registration order in the help text.
     workflows.add_subparsers(sub)
     primitives.add_subparsers(sub)
+    install.add_subparser(sub)
 
     return p
 

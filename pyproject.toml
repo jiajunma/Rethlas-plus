@@ -36,6 +36,11 @@ where = ["."]
 include = ["rethlas_kb*", "rethlas_kb_agents*"]
 exclude = ["tests*"]
 
+# Ship the slash-command markdown templates with the wheel. install-commands
+# reads them via importlib.resources at runtime.
+[tool.setuptools.package-data]
+"rethlas_kb._commands" = ["**/*.md"]
+
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
