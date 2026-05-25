@@ -1,4 +1,4 @@
-"""Decoder for statement-verifier LLM output (issue #7).
+"""Decoder for statement-verifier LLM output (issue #7, hardened with QED lessons).
 
 Both Codex and Claude have a habit of wrapping their JSON answer in
 reasoning prose — sometimes multiple JSON-looking objects appear in
@@ -13,8 +13,13 @@ the same response. The proven-robust strategy from the legacy
 4. Keep only blobs that parse as JSON and contain BOTH ``decision``
    and ``rationale`` keys.
 5. Return the **last** such blob — that's the agent's final answer.
-6. Validate the decision token against the allowed set and clamp the
-   confidence to [0, 1].
+6. Validate the decision token against the allowed set, clamp the
+   confidence to [0, 1], and enforce **per-decision required-field
+   rules** (e.g. ``decision=needs_definition`` requires a non-empty
+   ``missing_definitions`` list).
+
+The per-decision rules turn the JSON into a discriminated union: the
+LLM can't say "context_insufficient" without explaining what's missing.
 
 If no candidate blob is found, raise :class:`StatementReviewParseError`
 so the role layer can decide whether to retry, fall back, or surface
@@ -36,6 +41,7 @@ VALID_DECISIONS = frozenset({
     "needs_definition",
     "generality_concern",
     "formulation_issue",
+    "context_insufficient",
 })
 
 
@@ -45,20 +51,29 @@ class StatementReview:
 
     ``raw`` carries the original LLM stdout so callers writing a
     review file to disk can preserve the full reasoning trace
-    alongside the parsed verdict.
+    alongside the parsed verdict. ``quoted_statement`` is the
+    verbatim text the agent claims it judged — comparing it against
+    the actual node body lets us detect paraphrase drift.
     """
 
     decision: str
     rationale: str
     confidence: float = 0.0
+    quoted_statement: str = ""
     missing_definitions: list[str] = field(default_factory=list)
     formulation_issues: list[str] = field(default_factory=list)
     generality_notes: str = ""
+    context_gap_notes: str = ""
     raw: str = ""
 
     @property
     def is_accepted(self) -> bool:
         return self.decision == "accepted"
+
+    @property
+    def flagged(self) -> bool:
+        """True when the decision indicates a problem (anything but accepted)."""
+        return self.decision != "accepted"
 
 
 class StatementReviewParseError(Exception):
@@ -188,28 +203,55 @@ def _validate(data: dict[str, Any], *, raw: str) -> StatementReview:
 
     confidence = _coerce_confidence(data.get("confidence", 0.0))
 
+    quoted_statement = _coerce_optional_string(
+        data.get("quoted_statement", ""), "quoted_statement"
+    )
     missing = _coerce_str_list(
         data.get("missing_definitions", []), "missing_definitions"
     )
     issues = _coerce_str_list(
         data.get("formulation_issues", []), "formulation_issues"
     )
-    notes_raw = data.get("generality_notes", "")
-    if notes_raw is None:
-        notes_raw = ""
-    if not isinstance(notes_raw, str):
+    generality_notes = _coerce_optional_string(
+        data.get("generality_notes", ""), "generality_notes"
+    )
+    context_gap_notes = _coerce_optional_string(
+        data.get("context_gap_notes", ""), "context_gap_notes"
+    )
+
+    # ----- Discriminated-union constraints --------------------------------
+    # The prompt promises each non-accepted decision comes with the field
+    # that justifies it. Enforce here so callers can trust the shape.
+    if decision == "needs_definition" and not missing:
         raise StatementReviewParseError(
-            "generality_notes_not_string",
-            f"got {type(notes_raw).__name__}",
+            "needs_definition_requires_missing_definitions",
+            "decision=needs_definition but missing_definitions is empty",
+        )
+    if decision == "formulation_issue" and not issues:
+        raise StatementReviewParseError(
+            "formulation_issue_requires_formulation_issues",
+            "decision=formulation_issue but formulation_issues is empty",
+        )
+    if decision == "generality_concern" and not generality_notes.strip():
+        raise StatementReviewParseError(
+            "generality_concern_requires_generality_notes",
+            "decision=generality_concern but generality_notes is empty",
+        )
+    if decision == "context_insufficient" and not context_gap_notes.strip():
+        raise StatementReviewParseError(
+            "context_insufficient_requires_context_gap_notes",
+            "decision=context_insufficient but context_gap_notes is empty",
         )
 
     return StatementReview(
         decision=decision,
         rationale=rationale,
         confidence=confidence,
+        quoted_statement=quoted_statement,
         missing_definitions=missing,
         formulation_issues=issues,
-        generality_notes=notes_raw,
+        generality_notes=generality_notes,
+        context_gap_notes=context_gap_notes,
         raw=raw,
     )
 
@@ -228,6 +270,17 @@ def _coerce_confidence(value: object) -> float:
     if v > 1.0:
         return 1.0
     return v
+
+
+def _coerce_optional_string(value: object, field_name: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise StatementReviewParseError(
+            f"{field_name}_not_string",
+            f"got {type(value).__name__}",
+        )
+    return value
 
 
 def _coerce_str_list(value: object, field_name: str) -> list[str]:

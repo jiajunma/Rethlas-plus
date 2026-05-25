@@ -1,12 +1,25 @@
-"""Prompt composition for statement-verifier (issue #7).
+"""Prompt composition for statement-verifier (issue #7, hardened from QED).
 
 Pure function — no I/O, no LLM calls. Takes a target Node + the
 :class:`ContextBundle` returned by ``KbAdapter.context_pack`` and
 returns a single self-contained string the backend can hand to a
 CLI.
 
-The prompt is intentionally explicit about the output contract so
-the decoder's "last balanced JSON blob" sweep has something to find.
+The prompt embodies discipline borrowed from
+``~/mycodes/QED/verify/prompt_verify_*.md`` (see docstrings on the
+relevant sections):
+
+- Conservative-by-default stance: under uncertainty, the agent must
+  pick the decision that flags a problem rather than ``accepted``.
+- Verbatim-quote discipline: the output requires a literal copy of
+  the statement being judged, so the agent cannot paraphrase itself
+  into a false agreement.
+- Anti-pattern catalog: explicit enumeration of common formulation
+  defects (changed quantifiers, restricted domain, missing
+  hypotheses, etc.) so the agent has a concrete checklist.
+- ``context_insufficient`` escape hatch: a fifth decision that
+  signals the context pack is too narrow for a confident verdict,
+  so the caller can re-run with a wider context.
 """
 
 from __future__ import annotations
@@ -29,25 +42,91 @@ Your job is to judge whether the *statement* of one mathematical node
 correctly formulated. You are NOT asked to verify the proof. The
 ``proof-verifier`` agent owns proof correctness.
 
-Choose exactly one decision:
+## Conservative stance (read this carefully)
 
-- ``accepted``            — the statement reads correctly and is ready
-                             to be relied on by downstream nodes.
-- ``needs_definition``    — the statement uses a term that has no
-                             admitted definition in the KB. Populate
-                             ``missing_definitions`` with the missing
-                             concept name(s).
-- ``generality_concern``  — the statement is true as written but is
-                             stated less generally than its hypotheses
-                             warrant, or generality is unclear.
-                             Explain in ``generality_notes``.
-- ``formulation_issue``   — the statement has a typo, dangling
-                             quantifier, ambiguity, or other surface
-                             error. List specifics in
-                             ``formulation_issues``.
+You are reviewing **new research mathematics**, not formalized
+textbook content. The ground truth is unknown. **Under uncertainty,
+prefer the decision that flags a problem.** Specifically:
 
-Cite node IDs from the context pack when justifying your decision.
-Do not invent claims that are not supported by the context.
+- If you are unsure whether a term used in the statement is defined
+  by an admitted predecessor in the context pack, choose
+  ``needs_definition``.
+- If the statement looks correct but you cannot fully verify the
+  generality claim (e.g. you can't confirm a hypothesis is actually
+  used), choose ``generality_concern``.
+- If you suspect but cannot pin down a formulation issue, still
+  choose ``formulation_issue`` and describe what feels wrong.
+- If the context pack appears to be missing predecessor nodes that
+  you would need to make a confident judgement, choose
+  ``context_insufficient`` rather than guessing.
+- Only choose ``accepted`` when you can articulate a positive reason
+  the statement is well-formed (not merely the absence of obvious
+  errors).
+
+It is much better to over-flag and require a human review than to
+silently admit a malformed statement that downstream proofs rely on.
+
+## Decisions
+
+- ``accepted``             — the statement reads correctly AND every
+                              technical term it uses has either a
+                              standard mathematical meaning or an
+                              admitted definition in the context.
+- ``needs_definition``     — the statement uses a non-standard term
+                              with no admitted definition in the KB.
+                              Populate ``missing_definitions`` with
+                              the missing concept name(s).
+- ``generality_concern``   — the statement is true as written but
+                              less general than its hypotheses warrant
+                              (a hypothesis appears unused or
+                              redundant), OR more general than the
+                              hypotheses can support. Explain in
+                              ``generality_notes`` which hypothesis
+                              and why.
+- ``formulation_issue``    — the statement has a concrete defect.
+                              See the anti-pattern catalog below.
+                              List specifics in
+                              ``formulation_issues``.
+- ``context_insufficient`` — you would need more predecessor nodes
+                              (or the source paper, or notation
+                              conventions from a sibling topic) to
+                              judge confidently. Explain in
+                              ``context_gap_notes`` what is missing.
+                              The caller will re-run with a wider
+                              context.
+
+## Anti-pattern catalog for formulation_issue
+
+When the statement has one of these defects, flag it as
+``formulation_issue`` and quote the offending phrase:
+
+1. **Quantifier drift** — "for all" silently swapped with "there
+   exists", or a free variable that should be bound.
+2. **Domain restriction** — the statement reads "for integers" but
+   the natural domain (and the use sites) need reals; or vice versa.
+3. **Strengthened or weakened hypotheses** — adds an unnecessary
+   condition (e.g. "compact Hausdorff" where only "compact" is used),
+   or drops a condition the conclusion depends on (e.g. "Noetherian"
+   when finite generation is actually required).
+4. **Missing uniqueness / existence** — claims "the X" when "an X"
+   is what's defined; or claims existence without a uniqueness
+   counterpart when one is implied.
+5. **Implicit regularity hypotheses** — silently assumes
+   continuity, measurability, integrability, smoothness, or
+   compactness without stating it.
+6. **Swapped conclusion and hypothesis** — proving the converse of
+   what was stated.
+7. **Dangling notation** — symbols or operators introduced without
+   definition (or whose definition is in a sibling node that isn't
+   in scope — in that case prefer ``context_insufficient``).
+8. **Modified constants or bounds** — inequality direction flipped,
+   strict vs non-strict swapped, or constant changed.
+
+Citation discipline: every claim in your rationale must either
+quote the target statement verbatim or cite a node id from the
+context pack (e.g. "per ``algebra.group``, the operation is
+associative"). Do not invent claims that are not supported by the
+context.
 """
 
 _OUTPUT_CONTRACT = """\
@@ -58,14 +137,28 @@ LAST thing in your response. The JSON object must have these keys:
 
 ```json
 {
-  "decision": "accepted | needs_definition | generality_concern | formulation_issue",
-  "rationale": "one or two sentences explaining the decision",
-  "confidence": 0.0,                // float in [0, 1]
-  "missing_definitions": [],        // required when decision = needs_definition
-  "formulation_issues": [],         // required when decision = formulation_issue
-  "generality_notes": ""            // required when decision = generality_concern
+  "decision": "accepted | needs_definition | generality_concern | formulation_issue | context_insufficient",
+  "quoted_statement": "the verbatim text of the statement you judged (copy from the Target node body, preserving notation)",
+  "rationale": "one or two sentences referencing the quoted statement and/or cited node ids",
+  "confidence": 0.0,
+  "missing_definitions": [],
+  "formulation_issues": [],
+  "generality_notes": "",
+  "context_gap_notes": ""
 }
 ```
+
+Confidence guidance:
+- 0.9–1.0 — the decision is obvious and you'd defend it under cross-examination
+- 0.7–0.9 — the decision is right but a careful reviewer might quibble
+- 0.5–0.7 — you had to make a judgement call; reviewer might reasonably disagree
+- below 0.5 — you're guessing; reconsider whether ``context_insufficient`` fits better
+
+Required-field rules (the decoder enforces these):
+- ``decision = needs_definition``        → ``missing_definitions`` must be non-empty
+- ``decision = formulation_issue``       → ``formulation_issues`` must be non-empty
+- ``decision = generality_concern``      → ``generality_notes`` must be non-empty
+- ``decision = context_insufficient``    → ``context_gap_notes`` must be non-empty
 
 Do not wrap the JSON in markdown fences. Do not add prose after it.
 """
@@ -75,11 +168,13 @@ def compose(node: "Node", context: ContextBundle) -> str:
     """Build the full prompt string for one node.
 
     Layout:
-      1. System block (role + decisions).
+      1. System block (role + conservative stance + decisions +
+         anti-pattern catalog).
       2. The target node (frontmatter highlights + body).
       3. Context pack — admitted predecessors (and staged evidence
          flagged when present).
-      4. Output contract.
+      4. Output contract (with verbatim-quote requirement +
+         confidence guidance + per-decision required fields).
     """
     sections = [
         _SYSTEM_BLOCK,
@@ -109,13 +204,20 @@ def _render_target(node: "Node") -> str:
 
 def _render_context(context: ContextBundle) -> str:
     if not context.nodes:
-        return "## Context\n\n(no admitted predecessors in scope)"
+        return (
+            "## Context\n\n"
+            "(no admitted predecessors in scope — if the target statement "
+            "uses notation or terms you cannot resolve, prefer "
+            "``context_insufficient``)"
+        )
 
     lines = [
         "## Context",
         "",
         f"Mode: **{context.mode}**. Treat any node marked "
-        "*non-admitted evidence* as provisional — not as a proven fact.",
+        "*non-admitted evidence* as provisional — not as a proven fact. "
+        "If you need a predecessor that's not listed here, choose "
+        "``context_insufficient`` rather than guessing.",
         "",
     ]
     for entry in context.nodes:

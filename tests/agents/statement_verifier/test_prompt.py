@@ -54,7 +54,8 @@ def test_compose_includes_role_block_and_decisions() -> None:
     out = compose(_node(), _bundle())
     assert "statement-verifier" in out
     for decision in ("accepted", "needs_definition",
-                     "generality_concern", "formulation_issue"):
+                     "generality_concern", "formulation_issue",
+                     "context_insufficient"):
         assert decision in out
 
 
@@ -62,9 +63,59 @@ def test_compose_includes_output_contract_with_required_keys() -> None:
     out = compose(_node(), _bundle())
     assert "Output contract" in out
     for key in ("decision", "rationale", "confidence",
+                "quoted_statement",
                 "missing_definitions", "formulation_issues",
-                "generality_notes"):
+                "generality_notes", "context_gap_notes"):
         assert key in out
+
+
+def test_compose_includes_conservative_stance_block() -> None:
+    """QED-style 'when in doubt, flag' instruction must reach the LLM."""
+    out = compose(_node(), _bundle())
+    assert "Conservative stance" in out
+    # Spell out the bias-toward-flagging guidance, in the agent's own
+    # words — these substrings are how we keep the model from quietly
+    # picking 'accepted' under uncertainty.
+    assert "Under uncertainty" in out
+    assert "context_insufficient" in out
+
+
+def test_compose_includes_anti_pattern_catalog() -> None:
+    """Explicit checklist of formulation defects (QED structural Check 2)."""
+    out = compose(_node(), _bundle())
+    # The numbered catalog header
+    assert "Anti-pattern catalog" in out
+    # Each individual anti-pattern category should be named so the
+    # model has something concrete to scan for.
+    for pattern in (
+        "Quantifier drift",
+        "Domain restriction",
+        "Strengthened or weakened hypotheses",
+        "Missing uniqueness",
+        "Implicit regularity",
+        "Swapped conclusion",
+        "Dangling notation",
+        "Modified constants",
+    ):
+        assert pattern in out
+
+
+def test_compose_includes_verbatim_quote_instruction() -> None:
+    """Output schema demands a verbatim quote so the LLM can't paraphrase-and-agree."""
+    out = compose(_node(), _bundle())
+    # The output_contract block names the quoted_statement field and
+    # says the rationale must reference it.
+    assert "verbatim" in out
+    assert "quoted_statement" in out
+
+
+def test_compose_includes_confidence_guidance() -> None:
+    """Numeric confidence is meaningless without calibration anchors."""
+    out = compose(_node(), _bundle())
+    assert "Confidence guidance" in out
+    # The four band thresholds spell out what each range means
+    assert "0.9" in out
+    assert "0.5" in out
 
 
 def test_compose_includes_node_id_title_kind_and_body() -> None:
