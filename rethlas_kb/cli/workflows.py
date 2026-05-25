@@ -14,6 +14,10 @@ import sys
 from dataclasses import asdict
 
 from rethlas_kb.backends import BackendError, get_backend
+from rethlas_kb_agents.counterexample_hunter import (
+    CounterexampleHunter,
+    CounterexampleHuntReviewParseError,
+)
 from rethlas_kb_agents.proof_gap_filler import (
     GapFiller,
     GapFillReviewParseError,
@@ -42,6 +46,7 @@ def add_subparsers(sub) -> None:
     _add_verify_stmt(sub)
     _add_verify_proof(sub)
     _add_fill_gap(sub)
+    _add_hunt_counterexample(sub)
 
 
 # ---------------------------------------------------------------------------
@@ -515,5 +520,149 @@ def _gap_fill_review_for_disk(review, *, applied: dict) -> dict:
         "confidence": review.confidence,
         "applied_updated_node": applied.get("updated_node", []),
         "applied_requests": applied.get("requests", []),
+        "body": "\n".join(body_parts),
+    }
+
+
+# ---------------------------------------------------------------------------
+# hunt-counterexample (Mode B, second generator)
+# ---------------------------------------------------------------------------
+def _add_hunt_counterexample(sub) -> None:
+    hc = sub.add_parser(
+        "hunt-counterexample",
+        help=(
+            "(Mode B) Counterexample-hunter: actively try to refute a "
+            "stated claim by finding a concrete witness."
+        ),
+        description=(
+            "Runs the counterexample-hunter agent on one node. This is "
+            "INVERSE search — the agent reports whether a witness was "
+            "found, never concludes 'the claim is therefore true' (that "
+            "is proof-verifier's job)."
+        ),
+    )
+    hc.add_argument("node_id", help="Node id to attempt to refute.")
+    hc.add_argument(
+        "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
+        help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
+    )
+    hc.add_argument(
+        "--project", default=".",
+        help="Blueprint project root (must contain docs/knowledge/).",
+    )
+    hc.add_argument("--timeout", type=int, default=900)
+    hc.add_argument(
+        "--no-include-staged", dest="include_staged_context",
+        action="store_false",
+        help="Limit context to admitted nodes only.",
+    )
+    hc.add_argument(
+        "--no-write", action="store_true",
+        help="Print the verdict but don't persist a review file.",
+    )
+    hc.set_defaults(include_staged_context=True,
+                    handler=_cmd_hunt_counterexample)
+
+
+def _cmd_hunt_counterexample(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.project)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    from .main import _register_backends
+    _register_backends()
+
+    try:
+        backend = get_backend(ns.backend)
+    except BackendError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    hunter = CounterexampleHunter(
+        backend=backend,
+        timeout_seconds=ns.timeout,
+        include_staged_context=ns.include_staged_context,
+    )
+
+    try:
+        review = hunter.run(ns.node_id, adapter)
+    except KeyError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except CounterexampleHuntReviewParseError as exc:
+        print(
+            f"rethlas-kb: backend output could not be parsed: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    except BackendError as exc:
+        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    if not ns.no_write:
+        review_path = adapter.write_review(
+            node_id=ns.node_id,
+            agent_name="counterexample-hunter",
+            review=_hunter_review_for_disk(review),
+        )
+        print(f"review written: {review_path}", file=sys.stderr)
+
+    print(json.dumps(_hunter_review_for_stdout(review), indent=2, ensure_ascii=False))
+    # Exit codes:
+    #   0 = no_counterexample_found (hunter searched and didn't find one)
+    #   1 = counterexample_found OR inconclusive (the user must look)
+    return EXIT_OK if review.decision == "no_counterexample_found" else EXIT_REVIEW_FAIL
+
+
+def _hunter_review_for_stdout(review) -> dict:
+    return {
+        "decision": review.decision,
+        "rationale": review.rationale,
+        "confidence": review.confidence,
+        "witness": (
+            {"description": review.witness.description,
+             "instantiation": review.witness.instantiation,
+             "verification": review.witness.verification}
+            if review.witness else None
+        ),
+        "suggested_fixes": list(review.suggested_fixes),
+        "attempted_cases": [
+            {"description": c.description, "outcome": c.outcome}
+            for c in review.attempted_cases
+        ],
+        "why_inconclusive": review.why_inconclusive,
+    }
+
+
+def _hunter_review_for_disk(review) -> dict:
+    body_parts = [f"## Rationale\n\n{review.rationale}\n"]
+    if review.witness:
+        body_parts.append(
+            "## Witness (counterexample)\n\n"
+            f"**Description:** {review.witness.description}\n\n"
+            f"**Instantiation:** {review.witness.instantiation}\n\n"
+            f"**Verification:** {review.witness.verification}\n"
+        )
+    if review.suggested_fixes:
+        body_parts.append(
+            "## Suggested fixes\n\n"
+            + "\n".join(f"- {f}" for f in review.suggested_fixes) + "\n"
+        )
+    if review.attempted_cases:
+        body_parts.append("## Attempted cases (search transparency)\n")
+        for c in review.attempted_cases:
+            body_parts.append(f"- **{c.description}** — {c.outcome}")
+        body_parts.append("")
+    if review.why_inconclusive:
+        body_parts.append(
+            f"## Why inconclusive\n\n{review.why_inconclusive}\n"
+        )
+    body_parts.append(f"## Raw LLM output\n\n```\n{review.raw}\n```\n")
+    return {
+        "decision": review.decision,
+        "confidence": review.confidence,
+        "has_witness": review.witness is not None,
+        "n_attempted_cases": len(review.attempted_cases),
         "body": "\n".join(body_parts),
     }

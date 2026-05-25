@@ -32,6 +32,9 @@ from pathlib import Path
 
 import yaml
 
+from rethlas_kb_agents.counterexample_hunter.prompt import (
+    compose as _compose_counterexample_hunter_prompt,
+)
 from rethlas_kb_agents.proof_gap_filler.prompt import (
     compose as _compose_proof_gap_filler_prompt,
 )
@@ -56,6 +59,7 @@ _PROMPT_COMPOSERS = {
     "proof-verifier-structural": _compose_proof_verifier_structural_prompt,
     "proof-verifier-detailed": _compose_proof_verifier_detailed_prompt,
     "proof-gap-filler": _compose_proof_gap_filler_prompt,
+    "counterexample-hunter": _compose_counterexample_hunter_prompt,
 }
 
 
