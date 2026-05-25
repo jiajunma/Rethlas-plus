@@ -62,13 +62,20 @@ class StatementReview:
 
 
 class StatementReviewParseError(Exception):
-    """Raised when the LLM output cannot be parsed into a review."""
+    """Raised when the LLM output cannot be parsed into a review.
 
-    def __init__(self, reason: str, detail: str = "") -> None:
+    ``raw`` carries the original backend stdout so callers (smoke tests,
+    debug loggers) can distinguish a malformed-but-real verdict from
+    upstream errors (rate limits, transient 5xx) where the LLM never
+    actually responded.
+    """
+
+    def __init__(self, reason: str, detail: str = "", *, raw: str = "") -> None:
         msg = f"{reason}" + (f": {detail}" if detail else "")
         super().__init__(msg)
         self.reason = reason
         self.detail = detail
+        self.raw = raw
 
 
 # ---------------------------------------------------------------------------
@@ -84,14 +91,23 @@ def parse(raw: str) -> StatementReview:
         raise StatementReviewParseError(
             "no_review_json",
             "could not locate a JSON object with decision + rationale keys",
+            raw=raw or "",
         )
     try:
         data = json.loads(blob)
     except json.JSONDecodeError as exc:
         # Should be unreachable — _find_last_review_blob filters on parse —
         # but defensive in case the algorithm changes.
-        raise StatementReviewParseError("json_decode_error", str(exc)) from exc
-    return _validate(data, raw=raw)
+        raise StatementReviewParseError(
+            "json_decode_error", str(exc), raw=raw or "",
+        ) from exc
+    try:
+        return _validate(data, raw=raw)
+    except StatementReviewParseError as exc:
+        # Re-raise with raw attached so downstream skip / debug logic can
+        # see the original LLM output.
+        exc.raw = raw or ""
+        raise
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,13 @@ build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+# `slow` marks tests that shell out to real codex/claude CLIs against the
+# user's actual blueprint repo (~/mydoc/sheavesonbuilding). They're
+# skipped by default — run with `pytest -m slow` to opt in.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: real-LLM smoke tests against external KB (opt in via -m slow)",
+]
 
 # ---------------------------------------------------------------------------
 # Lint / format
