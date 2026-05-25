@@ -14,6 +14,10 @@ import sys
 from dataclasses import asdict
 
 from rethlas_kb.backends import BackendError, get_backend
+from rethlas_kb_agents.proof_gap_filler import (
+    GapFiller,
+    GapFillReviewParseError,
+)
 from rethlas_kb_agents.proof_verifier import (
     ProofReviewParseError,
     ProofVerifier,
@@ -30,13 +34,14 @@ from ._constants import (
     EXIT_RUNTIME,
     EXIT_USAGE,
 )
-from ._io import adapter_for
+from ._io import adapter_for, read_file_or_stdin
 
 
 def add_subparsers(sub) -> None:
     """Register every Mode B subcommand on a parent ``subparsers`` object."""
     _add_verify_stmt(sub)
     _add_verify_proof(sub)
+    _add_fill_gap(sub)
 
 
 # ---------------------------------------------------------------------------
@@ -293,5 +298,222 @@ def _proof_review_for_disk(review) -> dict:
         "judge_difficulty": (review.judge.difficulty if review.judge else None),
         "structural_verdict": (review.structural.verdict if review.structural else None),
         "detailed_verdict": (review.detailed.verdict if review.detailed else None),
+        "body": "\n".join(body_parts),
+    }
+
+
+# ---------------------------------------------------------------------------
+# fill-gap (Mode B, generator)
+# ---------------------------------------------------------------------------
+def _add_fill_gap(sub) -> None:
+    fg = sub.add_parser(
+        "fill-gap",
+        help=(
+            "(Mode B) Proof-gap-filler: produce a completed proof for a "
+            "node with partial / missing proof."
+        ),
+        description=(
+            "Runs the proof-gap-filler agent on one staged node. When the "
+            "decision is filled or partial, the staged node's body is "
+            "rewritten (unless --no-apply). New sub-lemmas are persisted "
+            "under docs/knowledge/requests/."
+        ),
+    )
+    fg.add_argument(
+        "node_id",
+        help="Staged node id (e.g. algebra.lagrange).",
+    )
+    fg.add_argument(
+        "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
+        help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
+    )
+    fg.add_argument(
+        "--project", default=".",
+        help="Blueprint project root (must contain docs/knowledge/).",
+    )
+    fg.add_argument(
+        "--prior-review", default=None, metavar="PATH",
+        help=(
+            "Path to a prior proof-verifier review markdown (or '-' for "
+            "stdin). Body becomes the verification feedback for repair mode."
+        ),
+    )
+    fg.add_argument(
+        "--repair-count", type=int, default=0,
+        help=(
+            "How many repair iterations have already occurred. "
+            ">=2 triggers Phase II reroute (previous proof omitted)."
+        ),
+    )
+    fg.add_argument("--timeout", type=int, default=900)
+    fg.add_argument(
+        "--no-include-staged", dest="include_staged_context",
+        action="store_false",
+        help="Limit context to admitted nodes only.",
+    )
+    fg.add_argument(
+        "--no-apply", action="store_true",
+        help=(
+            "Skip applying the filled proof to the staged node. Just "
+            "emit the review verdict on stdout. Useful for dry-run / "
+            "review-before-apply workflows."
+        ),
+    )
+    fg.add_argument(
+        "--no-write-review", action="store_true",
+        help="Don't persist a review file under docs/knowledge/reviews/.",
+    )
+    fg.set_defaults(include_staged_context=True, handler=_cmd_fill_gap)
+
+
+def _cmd_fill_gap(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.project)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    from .main import _register_backends
+    _register_backends()
+
+    try:
+        backend = get_backend(ns.backend)
+    except BackendError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    prior_review = ""
+    if ns.prior_review:
+        try:
+            prior_review = read_file_or_stdin(ns.prior_review)
+        except OSError as exc:
+            print(f"rethlas-kb: --prior-review unreadable: {exc}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+
+    filler = GapFiller(
+        backend=backend,
+        timeout_seconds=ns.timeout,
+        include_staged_context=ns.include_staged_context,
+    )
+
+    try:
+        review = filler.run(
+            ns.node_id, adapter,
+            prior_verification_report=prior_review,
+            repair_count=ns.repair_count,
+        )
+    except KeyError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except GapFillReviewParseError as exc:
+        print(
+            f"rethlas-kb: backend output could not be parsed: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    except BackendError as exc:
+        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    # Apply side-effects
+    applied: dict[str, list[str]] = {"updated_node": [], "requests": []}
+    if not ns.no_apply and review.writes_proof:
+        try:
+            updated_path = adapter.update_staged_node_body(
+                ns.node_id, review.filled_proof,
+            )
+            applied["updated_node"].append(str(updated_path))
+        except (KeyError, ValueError) as exc:
+            print(
+                f"rethlas-kb: gap-filler returned a proof but "
+                f"update_staged_node_body failed: {exc}",
+                file=sys.stderr,
+            )
+            # Keep going — we still want to record the review
+    if not ns.no_apply and review.new_sublemmas:
+        for sublemma in review.new_sublemmas:
+            try:
+                req_path = adapter.write_request(
+                    node_id=ns.node_id,
+                    request_kind="new-lemma",
+                    payload={
+                        "proposed_id": sublemma.id,
+                        "statement": sublemma.statement,
+                        "rationale": sublemma.rationale,
+                        "body": (
+                            f"## Proposed lemma\n\n**id**: `{sublemma.id}`\n\n"
+                            f"**statement**: {sublemma.statement}\n\n"
+                            f"**rationale**: {sublemma.rationale}\n"
+                        ),
+                    },
+                )
+                applied["requests"].append(str(req_path))
+            except Exception as exc:
+                print(
+                    f"rethlas-kb: failed to persist new-lemma request "
+                    f"for {sublemma.id!r}: {exc}",
+                    file=sys.stderr,
+                )
+
+    if not ns.no_write_review:
+        try:
+            review_path = adapter.write_review(
+                node_id=ns.node_id,
+                agent_name="proof-gap-filler",
+                review=_gap_fill_review_for_disk(review, applied=applied),
+            )
+            print(f"review written: {review_path}", file=sys.stderr)
+        except Exception as exc:
+            print(f"rethlas-kb: failed to write review: {exc}", file=sys.stderr)
+
+    print(json.dumps(_gap_fill_review_for_stdout(review, applied=applied),
+                     indent=2, ensure_ascii=False))
+    return EXIT_OK if review.is_filled else EXIT_REVIEW_FAIL
+
+
+def _gap_fill_review_for_stdout(review, *, applied: dict) -> dict:
+    return {
+        "decision": review.decision,
+        "rationale": review.rationale,
+        "confidence": review.confidence,
+        "gap_remaining": review.gap_remaining,
+        "suggested_approaches": list(review.suggested_approaches),
+        "new_sublemmas": [
+            {"id": s.id, "statement": s.statement, "rationale": s.rationale}
+            for s in review.new_sublemmas
+        ],
+        "applied": applied,
+    }
+
+
+def _gap_fill_review_for_disk(review, *, applied: dict) -> dict:
+    body_parts = [f"## Rationale\n\n{review.rationale}\n"]
+    if review.gap_remaining:
+        body_parts.append(f"## Gap remaining\n\n{review.gap_remaining}\n")
+    if review.suggested_approaches:
+        body_parts.append(
+            "## Suggested approaches\n\n"
+            + "\n".join(f"- {a}" for a in review.suggested_approaches)
+            + "\n"
+        )
+    if review.new_sublemmas:
+        body_parts.append("## New sub-lemmas requested\n")
+        for s in review.new_sublemmas:
+            body_parts.append(
+                f"- **{s.id}**: {s.statement}"
+                + (f" — {s.rationale}" if s.rationale else "")
+            )
+        body_parts.append("")
+    if review.filled_proof:
+        body_parts.append(
+            "## Filled proof (also applied to staged node)\n\n"
+            + review.filled_proof + "\n"
+        )
+    body_parts.append(f"## Raw LLM output\n\n```\n{review.raw}\n```\n")
+    return {
+        "decision": review.decision,
+        "confidence": review.confidence,
+        "applied_updated_node": applied.get("updated_node", []),
+        "applied_requests": applied.get("requests", []),
         "body": "\n".join(body_parts),
     }

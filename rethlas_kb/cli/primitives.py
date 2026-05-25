@@ -32,6 +32,9 @@ from pathlib import Path
 
 import yaml
 
+from rethlas_kb_agents.proof_gap_filler.prompt import (
+    compose as _compose_proof_gap_filler_prompt,
+)
 from rethlas_kb_agents.proof_verifier.prompts import (
     compose_detailed as _compose_proof_verifier_detailed_prompt,
     compose_judge as _compose_proof_verifier_judge_prompt,
@@ -52,6 +55,7 @@ _PROMPT_COMPOSERS = {
     "proof-verifier-judge": _compose_proof_verifier_judge_prompt,
     "proof-verifier-structural": _compose_proof_verifier_structural_prompt,
     "proof-verifier-detailed": _compose_proof_verifier_detailed_prompt,
+    "proof-gap-filler": _compose_proof_gap_filler_prompt,
 }
 
 
@@ -67,6 +71,7 @@ def add_subparsers(sub) -> None:
     _add_write_review(sub)
     _add_write_request(sub)
     _add_write_staged_node(sub)
+    _add_update_staged_node_body(sub)
     # Validate
     _add_validate_frontmatter(sub)
 
@@ -514,6 +519,47 @@ def _cmd_write_staged_node(ns: argparse.Namespace) -> int:
         )
     except ValueError as exc:
         print(f"rethlas-kb: validation failed: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    print(path)
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# update-staged-node-body
+# ---------------------------------------------------------------------------
+def _add_update_staged_node_body(sub) -> None:
+    p = sub.add_parser(
+        "update-staged-node-body",
+        help="Replace an existing staged node's body, keep frontmatter intact.",
+        description=(
+            "Used by gap-filler workflows to swap in a completed proof "
+            "without disturbing the node's id / kind / status / tags. "
+            "Body is read from --from-file (file path or '-' for stdin). "
+            "The new body must re-pass mdblueprint validation."
+        ),
+    )
+    p.add_argument("node_id")
+    p.add_argument("--project", default=".")
+    p.add_argument(
+        "--from-file", required=True, metavar="PATH",
+        help="New body markdown file (or '-' for stdin).",
+    )
+    p.set_defaults(handler=_cmd_update_staged_node_body)
+
+
+def _cmd_update_staged_node_body(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.project)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+    new_body = read_file_or_stdin(getattr(ns, "from_file"))
+    try:
+        path = adapter.update_staged_node_body(ns.node_id, new_body)
+    except KeyError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except ValueError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
     print(path)
     return EXIT_OK

@@ -231,6 +231,52 @@ class KbAdapter:
             kind=request_kind,
         )
 
+    def update_staged_node_body(self, node_id: str, new_body: str) -> Path:
+        """Replace an existing staged node's body, keep frontmatter intact.
+
+        Used by proof-gap-filler (issue #10) to swap in a completed proof
+        without disturbing the node's id / kind / status / tags.
+
+        Raises :class:`KeyError` if the node isn't found or not staged.
+        Re-runs frontmatter validation after the swap.
+        """
+        node = self.read_node(node_id)
+        if node.status not in STAGED_STATUSES:
+            raise KeyError(
+                f"node {node_id!r} is not in a staged status "
+                f"({node.status!r}); refusing to mutate"
+            )
+        if node.file_path is None:
+            raise KeyError(
+                f"node {node_id!r} has no file_path; cannot update"
+            )
+        original_text = node.file_path.read_text(encoding="utf-8")
+        # The parser regex requires "---\n...\n---\n" at the start.
+        import re
+        match = re.match(r"\A(---\n.*?\n---\n)(.*)", original_text, re.DOTALL)
+        if match is None:
+            raise KeyError(
+                f"node {node_id!r} at {node.file_path} lacks YAML frontmatter"
+            )
+        new_text = match.group(1) + "\n" + new_body.strip() + "\n"
+
+        # Validate the new shape via mdblueprint before writing.
+        from tools.knowledge.parser import parse_node
+        try:
+            reparsed = parse_node(new_text, file_path=node.file_path)
+        except Exception as exc:
+            raise ValueError(f"updated body failed to re-parse: {exc}") from exc
+        from tools.knowledge.validator import validate_node
+        diags = validate_node(reparsed, is_staged_dir=True)
+        errors = [d for d in diags if d.level == "error"]
+        if errors:
+            raise ValueError(
+                "updated staged node failed validation:\n  "
+                + "\n  ".join(str(d) for d in errors)
+            )
+        node.file_path.write_text(new_text, encoding="utf-8")
+        return node.file_path
+
     def write_staged_node(
         self,
         *,
