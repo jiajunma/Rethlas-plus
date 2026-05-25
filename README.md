@@ -9,9 +9,14 @@ It's a toolkit that agentic CLIs (codex / claude / opencode) call as
 **tools** while *they* do the orchestration. A Python end-to-end
 orchestration path is also available for batch / CI use.
 
-> **Status**: v1 shipped 2026-05-25. 5 agents, 2 backends (codex + claude),
-> 352 passing tests. See [ROADMAP.md](ROADMAP.md) and the
+> **Status**: v1.3 shipped 2026-05-25. 5 agents, 2 backends (codex + claude),
+> project-manifest batch mode, 398 passing tests.
+> See [ROADMAP.md](ROADMAP.md) and the
 > [closed issues](https://github.com/jiajunma/Rethlas-plus/issues?q=label%3Arethlas-kb+is%3Aclosed).
+>
+> Note: the blueprint-root flag was renamed `--project` → `--blueprint`
+> in v1.3 (`--project` now means a project-manifest id). Primitives
+> still accept `--project` as a legacy alias; workflow commands do not.
 
 ---
 
@@ -27,8 +32,21 @@ uv sync --extra dev
 cd ~/mydoc/sheavesonbuilding
 rethlas-kb install-commands --scope project
 
+# Optional: declare a "research project" to track progress against
+mkdir -p .rethlas-kb/projects
+cat > .rethlas-kb/projects/main.yml <<'EOF'
+id: main
+title: Sheaves on Buildings — main theorem
+goal_nodes:
+  - applications.classical_main_theorem
+  - applications.tame_main_theorem
+status: active
+EOF
+
 # Mode A: invoke an agent from inside claude / codex / opencode
 claude
+> /status main                                    # dashboard
+> /open-questions main                            # prioritised work list
 > /verify-stmt cellular_categories.sheaves_cosheaves
 > /verify-proof-judge equivariant_sheaves.qfd_orbit_lemma
 > /verify-proof-structural equivariant_sheaves.qfd_orbit_lemma   # if hard
@@ -79,6 +97,30 @@ rethlas-kb audit-source <node-id> --source-passage extract.md
 ```bash
 rethlas-kb fill-gap     <node-id> --prior-review <verifier-output.md>
 rethlas-kb hunt-counterexample <node-id>        # actively try to refute
+```
+
+### Project-batch mode (v1.3)
+
+Every workflow above also takes `--project <id>` to run over an
+entire project's closure (transitive `uses:` from the project's
+goal nodes). The agent applies only to nodes in its applicability
+filter (verify-stmt → all staged; audit-source → external-theorem
+only; etc.) and the summary on stdout reports per-node outcomes.
+
+```bash
+rethlas-kb verify-stmt          --project main   # sweep all staged nodes
+rethlas-kb verify-proof         --project main --depth structural
+rethlas-kb hunt-counterexample  --project main
+rethlas-kb audit-source         --project main   # external-theorems only
+rethlas-kb fill-gap             --project main   # auto-loads prior proof-verifier reviews
+```
+
+Plus two read-only project commands:
+
+```bash
+rethlas-kb status         --project main         # counts dashboard
+rethlas-kb open-questions --project main         # prioritised work list
+rethlas-kb list-projects                          # see all declared projects
 ```
 
 ### Primitives (Mode A toolkit — agentic CLIs call these)
@@ -236,12 +278,7 @@ uv run pytest -q
 
 ---
 
-## What's NOT in v1
-
-Deferred to **v1.3** (project manifest concept):
-- Project closure computation across the dependency graph
-- Per-project agent ↔ backend pinning config file (will hook
-  `rethlas_kb/config.py::validate_backend_isolation` at startup)
+## What's NOT in v1.3
 
 Deferred to **v1.5** (literature scout):
 - arXiv MCP integration
@@ -254,6 +291,9 @@ Deferred to **future** (within source-claim-verifier scope):
 - ProofVerifier chaining inside source-claim-verifier (currently
   v1 emits one combined verdict; for deeper source-proof checking,
   run `verify-proof` separately on a staged copy)
+- Per-project agent ↔ backend pinning config file (v1.3's
+  `rethlas_kb/config.py::validate_backend_isolation` library hook
+  is ready; the config-file format needs design)
 
 See [ROADMAP.md](ROADMAP.md) for the issue tracker mapping.
 

@@ -98,7 +98,7 @@ def _add_get_node(sub) -> None:
         ),
     )
     p.add_argument("node_id")
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument(
         "--format", choices=("text", "json", "frontmatter"), default="text",
     )
@@ -106,7 +106,7 @@ def _add_get_node(sub) -> None:
 
 
 def _cmd_get_node(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -178,7 +178,7 @@ def _add_get_context(sub) -> None:
         ),
     )
     p.add_argument("node_id")
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument(
         "--no-staged", dest="include_staged", action="store_false",
         help="Admitted-only context (default: include staged as non-admitted evidence).",
@@ -189,7 +189,7 @@ def _add_get_context(sub) -> None:
 
 
 def _cmd_get_context(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -232,13 +232,13 @@ def _add_compose_prompt(sub) -> None:
         choices=sorted(_PROMPT_COMPOSERS.keys()),
     )
     p.add_argument("node_id")
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument("--no-staged", dest="include_staged", action="store_false")
     p.set_defaults(include_staged=True, handler=_cmd_compose_prompt)
 
 
 def _cmd_compose_prompt(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -289,7 +289,7 @@ def _add_list_staged(sub) -> None:
         "list-staged",
         help="List staged nodes (Mode A primitive).",
     )
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument("--topic", default=None,
                    help="Filter to one topic id (e.g. cellular_categories).")
     p.add_argument("--json", action="store_true")
@@ -297,7 +297,7 @@ def _add_list_staged(sub) -> None:
 
 
 def _cmd_list_staged(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -314,14 +314,14 @@ def _add_list_admitted(sub) -> None:
         "list-admitted",
         help="List admitted nodes (Mode A primitive).",
     )
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument("--topic", default=None)
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=_cmd_list_admitted)
 
 
 def _cmd_list_admitted(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -363,7 +363,7 @@ def _add_write_review(sub) -> None:
         ),
     )
     p.add_argument("node_id")
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument("--agent", required=True,
                    help="Agent role that produced the verdict.")
     p.add_argument("--decision", required=True,
@@ -389,7 +389,7 @@ def _add_write_review(sub) -> None:
 
 
 def _cmd_write_review(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -436,7 +436,7 @@ def _add_write_request(sub) -> None:
         help="Persist a request (e.g. missing-dependency) for a node.",
     )
     p.add_argument("node_id")
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument("--kind", required=True,
                    help="Request kind (missing-dependency / gap-fill / ...).")
     p.add_argument(
@@ -449,7 +449,7 @@ def _add_write_request(sub) -> None:
 
 
 def _cmd_write_request(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -493,7 +493,7 @@ def _add_write_staged_node(sub) -> None:
             "directory under the topic implied by primary_topic."
         ),
     )
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument(
         "--from-file", required=True, metavar="PATH",
         help="Markdown file (or '-' for stdin).",
@@ -506,7 +506,7 @@ def _add_write_staged_node(sub) -> None:
 
 
 def _cmd_write_staged_node(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
@@ -547,7 +547,7 @@ def _add_update_staged_node_body(sub) -> None:
         ),
     )
     p.add_argument("node_id")
-    p.add_argument("--project", default=".")
+    p.add_argument("--blueprint", "--project", dest="blueprint", default=".", help="Blueprint root (must contain docs/knowledge/); --project accepted as legacy alias.")
     p.add_argument(
         "--from-file", required=True, metavar="PATH",
         help="New body markdown file (or '-' for stdin).",
@@ -556,7 +556,7 @@ def _add_update_staged_node_body(sub) -> None:
 
 
 def _cmd_update_staged_node_body(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE

@@ -66,12 +66,36 @@ verify-stmt / verify-proof / fill-gap / hunt-counterexample / audit-source
   config file (issues #14/#15) since today there's no single CLI
   invocation that activates both roles in a constrained pair
 
-## v1.3 — Project 概念
+## ✅ v1.3 — Project 概念 — **SHIPPED 2026-05-25**
 
-| # | Title | Track |
+Project manifest abstraction. `.rethlas-kb/projects/<id>.yml` declares
+goal nodes; closure (BFS over `uses:`) + open_questions (closure minus
+admitted, distance-ordered) + status dashboard are core helpers.
+
+Every workflow command now accepts `--project <id>` for batch mode,
+auto-filtered by per-agent applicability. New read-only subcommands:
+`status`, `open-questions`, `list-projects`.
+
+| # | Title | Status |
 |---|---|---|
-| 14 | project: manifest schema + closure computation | v1.3 |
-| 15 | project: --project flag on all CLI commands | v1.3 |
+| 14 | project: manifest schema + closure computation | ✅ closed |
+| 15 | project: --project flag on all CLI commands + status / open-questions | ✅ closed |
+
+### v1.3 architectural decision
+
+- **`--project` was renamed `--blueprint`** for the blueprint-root path
+  on every workflow command. The freed `--project` flag now means a
+  project-manifest id. Primitives keep `--project` as a legacy alias
+  for `--blueprint` (since they don't take project ids). v1.3 only had
+  one user (the solo author) so the rename was painless.
+- **Per-agent applicability matrix** in `_project_runner.py`:
+  - verify-stmt → all staged (except task / proof-plan)
+  - verify-proof / counterexample-hunter / proof-gap-filler → staged statement-kinds
+  - source-claim-verifier → external-theorem only
+  - proof-gap-filler additionally skips nodes whose proof is already accepted
+- **fill-gap in batch mode** auto-discovers the most recent
+  `proof-verifier*.md` review per node (so the `--prior-review` flag's
+  per-node semantics are preserved).
 
 ## v1.5 — Literature scout + 维护
 

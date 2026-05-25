@@ -7,7 +7,7 @@ the other or ``main.py``.
 
 from __future__ import annotations
 
-__version__ = "0.0.3"  # bumped — adds Mode A primitives (issue #19)
+__version__ = "0.1.0"  # v1.3 — project manifest + batch mode (issues #14, #15)
 
 DEFAULT_BACKEND = "codex"
 

@@ -123,14 +123,14 @@ def _run(argv: list[str], *, stdin: str = "") -> tuple[int, str, str]:
 # get-node
 # ---------------------------------------------------------------------------
 def test_get_node_text_format_prints_raw_markdown(kb: Path) -> None:
-    rc, out, _ = _run(["get-node", "algebra.group", "--project", str(kb)])
+    rc, out, _ = _run(["get-node", "algebra.group", "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     assert out.startswith("---\nid: algebra.group")
     assert "associative multiplication" in out
 
 
 def test_get_node_json_format_returns_parseable_dict(kb: Path) -> None:
-    rc, out, _ = _run(["get-node", "algebra.group", "--project", str(kb),
+    rc, out, _ = _run(["get-node", "algebra.group", "--blueprint", str(kb),
                        "--format", "json"])
     assert rc == cli.EXIT_OK
     payload = json.loads(out)
@@ -141,7 +141,7 @@ def test_get_node_json_format_returns_parseable_dict(kb: Path) -> None:
 
 
 def test_get_node_frontmatter_format_returns_yaml(kb: Path) -> None:
-    rc, out, _ = _run(["get-node", "algebra.group", "--project", str(kb),
+    rc, out, _ = _run(["get-node", "algebra.group", "--blueprint", str(kb),
                        "--format", "frontmatter"])
     assert rc == cli.EXIT_OK
     fm = yaml.safe_load(out)
@@ -150,14 +150,14 @@ def test_get_node_frontmatter_format_returns_yaml(kb: Path) -> None:
 
 
 def test_get_node_finds_staged_too(kb: Path) -> None:
-    rc, out, _ = _run(["get-node", "algebra.quotient_group", "--project", str(kb)])
+    rc, out, _ = _run(["get-node", "algebra.quotient_group", "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     assert "Cosets of a normal subgroup" in out
 
 
 def test_get_node_missing_returns_runtime(kb: Path) -> None:
     rc, _, err = _run(["get-node", "algebra.does_not_exist",
-                       "--project", str(kb)])
+                       "--blueprint", str(kb)])
     assert rc == cli.EXIT_RUNTIME
     assert "not found" in err
 
@@ -165,7 +165,7 @@ def test_get_node_missing_returns_runtime(kb: Path) -> None:
 def test_get_node_bad_project_returns_usage(tmp_path: Path) -> None:
     bare = tmp_path / "not-a-blueprint"
     bare.mkdir()
-    rc, _, err = _run(["get-node", "x.y", "--project", str(bare)])
+    rc, _, err = _run(["get-node", "x.y", "--blueprint", str(bare)])
     assert rc == cli.EXIT_USAGE
     assert "docs/knowledge" in err
 
@@ -175,7 +175,7 @@ def test_get_node_bad_project_returns_usage(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 def test_get_context_default_renders_markdown(kb: Path) -> None:
     rc, out, _ = _run(["get-context", "algebra.group_homomorphism",
-                       "--project", str(kb)])
+                       "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     assert "## Context" in out
     # Closure includes algebra.group (a predecessor of homomorphism)
@@ -184,7 +184,7 @@ def test_get_context_default_renders_markdown(kb: Path) -> None:
 
 def test_get_context_json_returns_raw_dict(kb: Path) -> None:
     rc, out, _ = _run(["get-context", "algebra.group_homomorphism",
-                       "--project", str(kb), "--json"])
+                       "--blueprint", str(kb), "--json"])
     assert rc == cli.EXIT_OK
     payload = json.loads(out)
     assert payload["target_id"] == "algebra.group_homomorphism"
@@ -195,7 +195,7 @@ def test_get_context_json_returns_raw_dict(kb: Path) -> None:
 
 def test_get_context_no_staged_flips_mode(kb: Path) -> None:
     rc, out, _ = _run(["get-context", "algebra.group_homomorphism",
-                       "--project", str(kb), "--no-staged", "--json"])
+                       "--blueprint", str(kb), "--no-staged", "--json"])
     assert rc == cli.EXIT_OK
     payload = json.loads(out)
     assert payload["mode"] == "admitted"
@@ -206,7 +206,7 @@ def test_get_context_no_staged_flips_mode(kb: Path) -> None:
 # ---------------------------------------------------------------------------
 def test_compose_prompt_statement_verifier_full_prompt(kb: Path) -> None:
     rc, out, _ = _run(["compose-prompt", "statement-verifier",
-                       "algebra.quotient_group", "--project", str(kb)])
+                       "algebra.quotient_group", "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     assert "statement-verifier" in out
     assert "## Target node" in out
@@ -223,7 +223,7 @@ def test_compose_prompt_unknown_role_rejected_by_argparse(kb: Path) -> None:
     # argparse choices=... causes a SystemExit(2) on unknown role
     with pytest.raises(SystemExit) as exc_info:
         _run(["compose-prompt", "bogus-role", "algebra.group",
-              "--project", str(kb)])
+              "--blueprint", str(kb)])
     assert exc_info.value.code == cli.EXIT_USAGE
 
 
@@ -238,7 +238,7 @@ def test_compose_prompt_includes_project_rules_when_sidecar_present(
         "- Role-specific rule for statement-verifier.\n"
     )
     rc, out, _ = _run(["compose-prompt", "statement-verifier",
-                       "algebra.quotient_group", "--project", str(kb)])
+                       "algebra.quotient_group", "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     assert "Additional project rules" in out
     assert "Global rule" in out
@@ -249,7 +249,7 @@ def test_compose_prompt_includes_project_rules_when_sidecar_present(
 # list-staged / list-admitted
 # ---------------------------------------------------------------------------
 def test_list_staged_text_format(kb: Path) -> None:
-    rc, out, _ = _run(["list-staged", "--project", str(kb)])
+    rc, out, _ = _run(["list-staged", "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     assert "algebra.quotient_group" in out
     assert "analysis.continuous" in out
@@ -259,7 +259,7 @@ def test_list_staged_text_format(kb: Path) -> None:
 
 
 def test_list_staged_json_format(kb: Path) -> None:
-    rc, out, _ = _run(["list-staged", "--project", str(kb), "--json"])
+    rc, out, _ = _run(["list-staged", "--blueprint", str(kb), "--json"])
     assert rc == cli.EXIT_OK
     payload = json.loads(out)
     ids = {n["id"] for n in payload}
@@ -267,7 +267,7 @@ def test_list_staged_json_format(kb: Path) -> None:
 
 
 def test_list_staged_topic_filter(kb: Path) -> None:
-    rc, out, _ = _run(["list-staged", "--project", str(kb),
+    rc, out, _ = _run(["list-staged", "--blueprint", str(kb),
                        "--topic", "algebra", "--json"])
     payload = json.loads(out)
     ids = {n["id"] for n in payload}
@@ -275,14 +275,14 @@ def test_list_staged_topic_filter(kb: Path) -> None:
 
 
 def test_list_admitted_basic(kb: Path) -> None:
-    rc, out, _ = _run(["list-admitted", "--project", str(kb), "--json"])
+    rc, out, _ = _run(["list-admitted", "--blueprint", str(kb), "--json"])
     assert rc == cli.EXIT_OK
     ids = {n["id"] for n in json.loads(out)}
     assert ids == {"algebra.group", "algebra.group_homomorphism"}
 
 
 def test_list_admitted_topic_filter(kb: Path) -> None:
-    rc, out, _ = _run(["list-admitted", "--project", str(kb),
+    rc, out, _ = _run(["list-admitted", "--blueprint", str(kb),
                        "--topic", "algebra", "--json"])
     payload = json.loads(out)
     assert {n["id"] for n in payload} == {
@@ -296,7 +296,7 @@ def test_list_admitted_topic_filter(kb: Path) -> None:
 def test_write_review_minimal(kb: Path) -> None:
     rc, out, _ = _run([
         "write-review", "algebra.quotient_group",
-        "--project", str(kb),
+        "--blueprint", str(kb),
         "--agent", "statement-verifier",
         "--decision", "accepted",
         "--rationale", "Looks fine.",
@@ -313,7 +313,7 @@ def test_write_review_minimal(kb: Path) -> None:
 def test_write_review_with_confidence_and_csv_fields(kb: Path) -> None:
     rc, out, _ = _run([
         "write-review", "algebra.quotient_group",
-        "--project", str(kb),
+        "--blueprint", str(kb),
         "--agent", "statement-verifier",
         "--decision", "needs_definition",
         "--rationale", "Uses normal subgroup without admitted definition.",
@@ -331,7 +331,7 @@ def test_write_review_raw_from_stdin_goes_into_body(kb: Path) -> None:
     rc, out, _ = _run(
         [
             "write-review", "algebra.quotient_group",
-            "--project", str(kb),
+            "--blueprint", str(kb),
             "--agent", "statement-verifier",
             "--decision", "accepted",
             "--rationale", "ok",
@@ -351,7 +351,7 @@ def test_write_review_raw_from_file_path(kb: Path, tmp_path: Path) -> None:
     raw_path.write_text("full reasoning here")
     rc, out, _ = _run([
         "write-review", "algebra.quotient_group",
-        "--project", str(kb),
+        "--blueprint", str(kb),
         "--agent", "statement-verifier",
         "--decision", "accepted",
         "--rationale", "ok",
@@ -366,7 +366,7 @@ def test_write_review_missing_required_flag(kb: Path) -> None:
     with pytest.raises(SystemExit):
         _run([
             "write-review", "algebra.quotient_group",
-            "--project", str(kb),
+            "--blueprint", str(kb),
             "--agent", "statement-verifier",
             "--decision", "accepted",
             # missing --rationale
@@ -381,7 +381,7 @@ def test_write_request_with_payload_and_body(kb: Path) -> None:
     rc, out, _ = _run(
         [
             "write-request", "algebra.quotient_group",
-            "--project", str(kb),
+            "--blueprint", str(kb),
             "--kind", "missing-dependency",
             "--payload", "-",
         ],
@@ -399,7 +399,7 @@ def test_write_request_payload_not_object_rejected(kb: Path) -> None:
     rc, _, err = _run(
         [
             "write-request", "algebra.quotient_group",
-            "--project", str(kb),
+            "--blueprint", str(kb),
             "--kind", "x",
             "--payload", "-",
         ],
@@ -413,7 +413,7 @@ def test_write_request_invalid_json_payload(kb: Path) -> None:
     rc, _, err = _run(
         [
             "write-request", "algebra.quotient_group",
-            "--project", str(kb),
+            "--blueprint", str(kb),
             "--kind", "x",
             "--payload", "-",
         ],
@@ -446,7 +446,7 @@ NEW_STAGED_MD = textwrap.dedent("""\
 
 def test_write_staged_node_happy_path(kb: Path) -> None:
     rc, out, _ = _run(
-        ["write-staged-node", "--project", str(kb), "--from-file", "-"],
+        ["write-staged-node", "--blueprint", str(kb), "--from-file", "-"],
         stdin=NEW_STAGED_MD,
     )
     assert rc == cli.EXIT_OK
@@ -467,7 +467,7 @@ def test_write_staged_node_rejects_invalid_frontmatter(kb: Path) -> None:
         body
         """)
     rc, _, err = _run(
-        ["write-staged-node", "--project", str(kb), "--from-file", "-"],
+        ["write-staged-node", "--blueprint", str(kb), "--from-file", "-"],
         stdin=bad,
     )
     assert rc == cli.EXIT_RUNTIME
@@ -476,7 +476,7 @@ def test_write_staged_node_rejects_invalid_frontmatter(kb: Path) -> None:
 
 def test_write_staged_node_no_frontmatter_returns_usage(kb: Path) -> None:
     rc, _, err = _run(
-        ["write-staged-node", "--project", str(kb), "--from-file", "-"],
+        ["write-staged-node", "--blueprint", str(kb), "--from-file", "-"],
         stdin="just a body, no frontmatter\n",
     )
     assert rc == cli.EXIT_USAGE
@@ -487,7 +487,7 @@ def test_write_staged_node_from_file_path(kb: Path, tmp_path: Path) -> None:
     src = tmp_path / "new.md"
     src.write_text(NEW_STAGED_MD)
     rc, out, _ = _run([
-        "write-staged-node", "--project", str(kb),
+        "write-staged-node", "--blueprint", str(kb),
         "--from-file", str(src),
     ])
     assert rc == cli.EXIT_OK

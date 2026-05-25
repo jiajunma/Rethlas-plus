@@ -44,7 +44,7 @@ def test_install_commands_help_works() -> None:
 def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     rc, out, err = _run([
         "install-commands", "--target", "claude",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
         "--dry-run",
     ])
     assert rc == cli.EXIT_OK
@@ -60,7 +60,7 @@ def test_dry_run_does_not_print_paths_on_stdout(tmp_path: Path) -> None:
     """stdout is for *actually-written* paths — dry-run writes nothing."""
     rc, out, _ = _run([
         "install-commands", "--target", "claude",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
         "--dry-run",
     ])
     assert rc == cli.EXIT_OK
@@ -73,7 +73,7 @@ def test_dry_run_does_not_print_paths_on_stdout(tmp_path: Path) -> None:
 def test_install_project_scope_creates_command_file(tmp_path: Path) -> None:
     rc, out, _ = _run([
         "install-commands", "--target", "claude",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     installed = tmp_path / ".claude" / "commands" / "verify-stmt.md"
@@ -88,7 +88,7 @@ def test_install_project_scope_creates_command_file(tmp_path: Path) -> None:
 def test_install_all_targets_creates_three_files(tmp_path: Path) -> None:
     rc, _, _ = _run([
         "install-commands", "--target", "all",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     for cli_name in ("claude", "codex", "opencode"):
@@ -99,7 +99,7 @@ def test_install_default_target_is_all(tmp_path: Path) -> None:
     """Omitting --target installs everything."""
     rc, _, _ = _run([
         "install-commands",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     for cli_name in ("claude", "codex", "opencode"):
@@ -110,7 +110,7 @@ def test_install_repeated_target_flag_dedupes(tmp_path: Path) -> None:
     rc, _, err = _run([
         "install-commands",
         "--target", "claude", "--target", "claude",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     # Despite passing claude twice, we only see one [claude   ] line per
@@ -129,7 +129,7 @@ def test_install_multiple_targets_in_one_flag(tmp_path: Path) -> None:
     rc, _, _ = _run([
         "install-commands",
         "--target", "claude", "--target", "codex",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     assert (tmp_path / ".claude" / "commands" / "verify-stmt.md").exists()
@@ -148,7 +148,7 @@ def test_install_skips_existing_files_by_default(tmp_path: Path) -> None:
 
     rc, _, err = _run([
         "install-commands", "--target", "claude",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     assert "skip-exists" in err
@@ -163,7 +163,7 @@ def test_install_force_overwrites_existing_files(tmp_path: Path) -> None:
 
     rc, _, err = _run([
         "install-commands", "--target", "claude", "--force",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     assert "would-overwrite" in err
@@ -178,7 +178,7 @@ def test_install_force_overwrites_existing_files(tmp_path: Path) -> None:
 def test_install_summary_line_format(tmp_path: Path) -> None:
     rc, _, err = _run([
         "install-commands", "--target", "codex",
-        "--scope", "project", "--project", str(tmp_path),
+        "--scope", "project", "--blueprint", str(tmp_path),
     ])
     assert rc == cli.EXIT_OK
     # Summary line: "<N> installed, <M> skipped"

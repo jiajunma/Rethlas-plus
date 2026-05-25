@@ -43,6 +43,8 @@ from ._constants import (
     EXIT_USAGE,
 )
 from ._io import adapter_for, read_file_or_stdin
+from ._project_runner import BatchItem, BatchOutcome, run_batch
+from rethlas_kb.project import ProjectError, load_project
 
 
 def add_subparsers(sub) -> None:
@@ -71,16 +73,28 @@ def _add_verify_stmt(sub) -> None:
         ),
     )
     vs.add_argument(
-        "node_id",
-        help="Node id to verify (e.g. cellular_categories.sheaves_cosheaves)",
+        "node_id", nargs="?", default=None,
+        help=(
+            "Single-node mode: node id to verify "
+            "(e.g. cellular_categories.sheaves_cosheaves). "
+            "Omit when --project is given."
+        ),
+    )
+    vs.add_argument(
+        "--project", default=None,
+        help=(
+            "Batch mode: project id (loads "
+            ".rethlas-kb/projects/<id>.yml). Runs the agent on every "
+            "applicable closure member."
+        ),
     )
     vs.add_argument(
         "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
         help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
     )
     vs.add_argument(
-        "--project", default=".",
-        help="Blueprint project root (must contain docs/knowledge/).",
+        "--blueprint", default=".",
+        help="Blueprint root (must contain docs/knowledge/).",
     )
     vs.add_argument("--timeout", type=int, default=300)
     vs.add_argument(
@@ -96,20 +110,19 @@ def _add_verify_stmt(sub) -> None:
 
 
 def _cmd_verify_stmt(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
 
-    # Imported here to avoid a circular import at module load time.
-    from .main import _register_backends
-    _register_backends()
+    arg_err = _validate_node_or_project(ns)
+    if arg_err:
+        print(f"rethlas-kb: {arg_err}", file=sys.stderr)
+        return EXIT_USAGE
 
-    try:
-        backend = get_backend(ns.backend)
-    except BackendError as exc:
-        print(f"rethlas-kb: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
 
     verifier = StatementVerifier(
         backend=backend,
@@ -117,31 +130,93 @@ def _cmd_verify_stmt(ns: argparse.Namespace) -> int:
         include_staged_context=ns.include_staged_context,
     )
 
+    def _run_one(node) -> BatchItem:
+        return _run_one_statement_verifier(verifier, node, adapter, ns)
+
+    # ----- batch mode --------------------------------------------------
+    if ns.project:
+        project, exit_code = _load_project_or_exit(ns, adapter)
+        if project is None:
+            return exit_code  # type: ignore[return-value]
+        outcome = run_batch(
+            project, adapter, "statement-verifier", per_node=_run_one,
+        )
+        return _emit_batch_summary(outcome)
+
+    # ----- single-node mode --------------------------------------------
     try:
-        review = verifier.run(ns.node_id, adapter)
+        node = adapter.read_node(ns.node_id)
     except KeyError as exc:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
+
+    item = _run_one(node)
+    if item.outcome == "crashed":
+        # Keep the historical wording so external scripts grep on it.
+        if "parse error" in (item.summary or ""):
+            print(
+                f"rethlas-kb: backend output could not be parsed: {item.error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"rethlas-kb: {item.error}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    # Single-node retains the rich verdict-on-stdout shape from v1
+    # (the review object itself, not just the BatchItem summary).
+    return _emit_single_review_outcome(item)
+
+
+def _run_one_statement_verifier(verifier, node, adapter, ns) -> BatchItem:
+    try:
+        review = verifier.run(node.id, adapter)
     except StatementReviewParseError as exc:
-        print(
-            f"rethlas-kb: backend output could not be parsed: {exc}",
-            file=sys.stderr,
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"parse error: {exc.reason}",
+            error=str(exc),
         )
-        return EXIT_RUNTIME
     except BackendError as exc:
-        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
-
-    if not ns.no_write:
-        review_path = adapter.write_review(
-            node_id=ns.node_id,
-            agent_name="statement-verifier",
-            review=_review_for_disk(review),
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"backend error: {exc}",
+            error=str(exc),
         )
-        print(f"review written: {review_path}", file=sys.stderr)
 
-    print(json.dumps(_review_for_stdout(review), indent=2, ensure_ascii=False))
-    return EXIT_OK if review.is_accepted else EXIT_REVIEW_FAIL
+    review_path = None
+    if not ns.no_write:
+        review_path = str(adapter.write_review(
+            node_id=node.id, agent_name="statement-verifier",
+            review=_review_for_disk(review),
+        ))
+
+    item = BatchItem(
+        node_id=node.id,
+        outcome="accepted" if review.is_accepted else "flagged",
+        summary=f"{review.decision}: {review.rationale[:80]}",
+        review_path=review_path,
+    )
+    # Cache the review for single-node rich-output mode
+    item.__dict__["_review"] = review
+    item.__dict__["_stdout_dict"] = _review_for_stdout(review)
+    return item
+
+
+def _emit_single_review_outcome(item: BatchItem) -> int:
+    """For single-node mode: print the cached rich review JSON to stdout."""
+    review = item.__dict__.get("_review")
+    stdout_dict = item.__dict__.get("_stdout_dict")
+    if item.review_path:
+        print(f"review written: {item.review_path}", file=sys.stderr)
+    if stdout_dict is not None:
+        print(json.dumps(stdout_dict, indent=2, ensure_ascii=False))
+    else:
+        # Fallback for items that don't carry a cached review
+        print(json.dumps({"outcome": item.outcome, "summary": item.summary},
+                         indent=2, ensure_ascii=False))
+    if item.outcome == "accepted":
+        return EXIT_OK
+    return EXIT_REVIEW_FAIL
 
 
 # ---------------------------------------------------------------------------
@@ -183,16 +258,24 @@ def _add_verify_proof(sub) -> None:
         ),
     )
     vp.add_argument(
-        "node_id",
-        help="Node id to verify (e.g. equivariant_sheaves.qfd_orbit_lemma)",
+        "node_id", nargs="?", default=None,
+        help=(
+            "Single-node mode: node id to verify "
+            "(e.g. equivariant_sheaves.qfd_orbit_lemma). "
+            "Omit when --project is given."
+        ),
+    )
+    vp.add_argument(
+        "--project", default=None,
+        help="Batch mode: project id (runs on every applicable closure member).",
     )
     vp.add_argument(
         "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
         help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
     )
     vp.add_argument(
-        "--project", default=".",
-        help="Blueprint project root (must contain docs/knowledge/).",
+        "--blueprint", default=".",
+        help="Blueprint root (must contain docs/knowledge/).",
     )
     vp.add_argument(
         "--depth", choices=("auto", "easy", "structural", "detailed"),
@@ -218,19 +301,19 @@ def _add_verify_proof(sub) -> None:
 
 
 def _cmd_verify_proof(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
 
-    from .main import _register_backends
-    _register_backends()
+    arg_err = _validate_node_or_project(ns)
+    if arg_err:
+        print(f"rethlas-kb: {arg_err}", file=sys.stderr)
+        return EXIT_USAGE
 
-    try:
-        backend = get_backend(ns.backend)
-    except BackendError as exc:
-        print(f"rethlas-kb: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
 
     verifier = ProofVerifier(
         backend=backend,
@@ -238,31 +321,69 @@ def _cmd_verify_proof(ns: argparse.Namespace) -> int:
         include_staged_context=ns.include_staged_context,
     )
 
+    def _run_one(node) -> BatchItem:
+        return _run_one_proof_verifier(verifier, node, adapter, ns)
+
+    if ns.project:
+        project, exit_code = _load_project_or_exit(ns, adapter)
+        if project is None:
+            return exit_code  # type: ignore[return-value]
+        outcome = run_batch(
+            project, adapter, "proof-verifier", per_node=_run_one,
+        )
+        return _emit_batch_summary(outcome)
+
     try:
-        review = verifier.run(ns.node_id, adapter, depth=ns.depth)
+        node = adapter.read_node(ns.node_id)
     except KeyError as exc:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
+
+    item = _run_one(node)
+    if item.outcome == "crashed":
+        if "parse error" in (item.summary or ""):
+            print(
+                f"rethlas-kb: backend output could not be parsed: {item.error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"rethlas-kb: {item.error}", file=sys.stderr)
+        return EXIT_RUNTIME
+    return _emit_single_review_outcome(item)
+
+
+def _run_one_proof_verifier(verifier, node, adapter, ns) -> BatchItem:
+    try:
+        review = verifier.run(node.id, adapter, depth=ns.depth)
     except ProofReviewParseError as exc:
-        print(
-            f"rethlas-kb: backend output could not be parsed: {exc}",
-            file=sys.stderr,
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"parse error: {exc.reason}", error=str(exc),
         )
-        return EXIT_RUNTIME
     except BackendError as exc:
-        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
-
-    if not ns.no_write:
-        review_path = adapter.write_review(
-            node_id=ns.node_id,
-            agent_name="proof-verifier",
-            review=_proof_review_for_disk(review),
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"backend error: {exc}", error=str(exc),
         )
-        print(f"review written: {review_path}", file=sys.stderr)
 
-    print(json.dumps(_proof_review_for_stdout(review), indent=2, ensure_ascii=False))
-    return EXIT_OK if review.is_accepted else EXIT_REVIEW_FAIL
+    review_path = None
+    if not ns.no_write:
+        review_path = str(adapter.write_review(
+            node_id=node.id, agent_name="proof-verifier",
+            review=_proof_review_for_disk(review),
+        ))
+
+    item = BatchItem(
+        node_id=node.id,
+        outcome="accepted" if review.is_accepted else "flagged",
+        summary=(
+            f"{review.final_verdict} (decisive: {review.decisive_stage}): "
+            f"{review.rationale[:80]}"
+        ),
+        review_path=review_path,
+    )
+    item.__dict__["_stdout_dict"] = _proof_review_for_stdout(review)
+    return item
 
 
 def _proof_review_for_stdout(review) -> dict:
@@ -330,16 +451,27 @@ def _add_fill_gap(sub) -> None:
         ),
     )
     fg.add_argument(
-        "node_id",
-        help="Staged node id (e.g. algebra.lagrange).",
+        "node_id", nargs="?", default=None,
+        help=(
+            "Single-node mode: staged node id (e.g. algebra.lagrange). "
+            "Omit when --project is given."
+        ),
+    )
+    fg.add_argument(
+        "--project", default=None,
+        help=(
+            "Batch mode: project id (runs on every applicable closure member; "
+            "auto-discovers the most recent proof-verifier review per node "
+            "via reviews/<slug>__proof-verifier*.md)."
+        ),
     )
     fg.add_argument(
         "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
         help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
     )
     fg.add_argument(
-        "--project", default=".",
-        help="Blueprint project root (must contain docs/knowledge/).",
+        "--blueprint", default=".",
+        help="Blueprint root (must contain docs/knowledge/).",
     )
     fg.add_argument(
         "--prior-review", default=None, metavar="PATH",
@@ -386,19 +518,19 @@ def _add_fill_gap(sub) -> None:
 
 
 def _cmd_fill_gap(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
 
-    from .main import _register_backends
-    _register_backends()
+    arg_err = _validate_node_or_project(ns)
+    if arg_err:
+        print(f"rethlas-kb: {arg_err}", file=sys.stderr)
+        return EXIT_USAGE
 
-    try:
-        backend = get_backend(ns.backend)
-    except BackendError as exc:
-        print(f"rethlas-kb: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
 
     prior_review = ""
     if ns.prior_review:
@@ -415,45 +547,96 @@ def _cmd_fill_gap(ns: argparse.Namespace) -> int:
         include_staged_context=ns.include_staged_context,
     )
 
-    try:
-        review = filler.run(
-            ns.node_id, adapter,
-            prior_verification_report=prior_review,
-            repair_count=ns.repair_count,
+    def _run_one(node) -> BatchItem:
+        # In batch mode, auto-discover the latest proof-verifier review
+        # for this node (override --prior-review since it can't apply
+        # across many nodes).
+        if ns.project:
+            per_node_prior = _autoload_prior_review(adapter, node.id)
+        else:
+            per_node_prior = prior_review
+        return _run_one_gap_filler(
+            filler, node, adapter, ns,
+            prior_review_text=per_node_prior,
         )
+
+    if ns.project:
+        project, exit_code = _load_project_or_exit(ns, adapter)
+        if project is None:
+            return exit_code  # type: ignore[return-value]
+        outcome = run_batch(
+            project, adapter, "proof-gap-filler", per_node=_run_one,
+        )
+        return _emit_batch_summary(outcome)
+
+    try:
+        node = adapter.read_node(ns.node_id)
     except KeyError as exc:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
-    except GapFillReviewParseError as exc:
-        print(
-            f"rethlas-kb: backend output could not be parsed: {exc}",
-            file=sys.stderr,
-        )
-        return EXIT_RUNTIME
-    except BackendError as exc:
-        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
 
-    # Apply side-effects
+    item = _run_one(node)
+    if item.outcome == "crashed":
+        if "parse error" in (item.summary or ""):
+            print(
+                f"rethlas-kb: backend output could not be parsed: {item.error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"rethlas-kb: {item.error}", file=sys.stderr)
+        return EXIT_RUNTIME
+    return _emit_single_review_outcome(item)
+
+
+def _autoload_prior_review(adapter, node_id: str) -> str:
+    """Find the most recent proof-verifier review for a node; return its body or ''."""
+    slug = node_id.replace(".", "_")
+    candidates = sorted(
+        adapter.reviews_dir.glob(f"{slug}__proof-verifier*.md"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ) if adapter.reviews_dir.exists() else []
+    if not candidates:
+        return ""
+    return candidates[0].read_text(encoding="utf-8")
+
+
+def _run_one_gap_filler(filler, node, adapter, ns, *, prior_review_text: str) -> BatchItem:
+    try:
+        review = filler.run(
+            node.id, adapter,
+            prior_verification_report=prior_review_text,
+            repair_count=ns.repair_count,
+        )
+    except GapFillReviewParseError as exc:
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"parse error: {exc.reason}", error=str(exc),
+        )
+    except BackendError as exc:
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"backend error: {exc}", error=str(exc),
+        )
+
     applied: dict[str, list[str]] = {"updated_node": [], "requests": []}
     if not ns.no_apply and review.writes_proof:
         try:
             updated_path = adapter.update_staged_node_body(
-                ns.node_id, review.filled_proof,
+                node.id, review.filled_proof,
             )
             applied["updated_node"].append(str(updated_path))
         except (KeyError, ValueError) as exc:
             print(
-                f"rethlas-kb: gap-filler returned a proof but "
+                f"rethlas-kb: gap-filler returned a proof for {node.id} but "
                 f"update_staged_node_body failed: {exc}",
                 file=sys.stderr,
             )
-            # Keep going — we still want to record the review
     if not ns.no_apply and review.new_sublemmas:
         for sublemma in review.new_sublemmas:
             try:
                 req_path = adapter.write_request(
-                    node_id=ns.node_id,
+                    node_id=node.id,
                     request_kind="new-lemma",
                     payload={
                         "proposed_id": sublemma.id,
@@ -469,25 +652,32 @@ def _cmd_fill_gap(ns: argparse.Namespace) -> int:
                 applied["requests"].append(str(req_path))
             except Exception as exc:
                 print(
-                    f"rethlas-kb: failed to persist new-lemma request "
-                    f"for {sublemma.id!r}: {exc}",
+                    f"rethlas-kb: failed to persist new-lemma request for "
+                    f"{node.id} → {sublemma.id!r}: {exc}",
                     file=sys.stderr,
                 )
 
+    review_path = None
     if not ns.no_write_review:
         try:
-            review_path = adapter.write_review(
-                node_id=ns.node_id,
-                agent_name="proof-gap-filler",
+            review_path = str(adapter.write_review(
+                node_id=node.id, agent_name="proof-gap-filler",
                 review=_gap_fill_review_for_disk(review, applied=applied),
-            )
-            print(f"review written: {review_path}", file=sys.stderr)
+            ))
         except Exception as exc:
-            print(f"rethlas-kb: failed to write review: {exc}", file=sys.stderr)
+            print(f"rethlas-kb: failed to write review for {node.id}: {exc}",
+                  file=sys.stderr)
 
-    print(json.dumps(_gap_fill_review_for_stdout(review, applied=applied),
-                     indent=2, ensure_ascii=False))
-    return EXIT_OK if review.is_filled else EXIT_REVIEW_FAIL
+    item = BatchItem(
+        node_id=node.id,
+        outcome="accepted" if review.is_filled else "flagged",
+        summary=f"{review.decision}: {review.rationale[:80]}",
+        review_path=review_path,
+    )
+    item.__dict__["_stdout_dict"] = _gap_fill_review_for_stdout(
+        review, applied=applied,
+    )
+    return item
 
 
 def _gap_fill_review_for_stdout(review, *, applied: dict) -> dict:
@@ -555,14 +745,21 @@ def _add_hunt_counterexample(sub) -> None:
             "is proof-verifier's job)."
         ),
     )
-    hc.add_argument("node_id", help="Node id to attempt to refute.")
+    hc.add_argument(
+        "node_id", nargs="?", default=None,
+        help="Single-node mode. Omit when --project is given.",
+    )
+    hc.add_argument(
+        "--project", default=None,
+        help="Batch mode: project id (runs on every applicable closure member).",
+    )
     hc.add_argument(
         "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
         help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
     )
     hc.add_argument(
-        "--project", default=".",
-        help="Blueprint project root (must contain docs/knowledge/).",
+        "--blueprint", default=".",
+        help="Blueprint root (must contain docs/knowledge/).",
     )
     hc.add_argument("--timeout", type=int, default=900)
     hc.add_argument(
@@ -579,19 +776,19 @@ def _add_hunt_counterexample(sub) -> None:
 
 
 def _cmd_hunt_counterexample(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
 
-    from .main import _register_backends
-    _register_backends()
+    arg_err = _validate_node_or_project(ns)
+    if arg_err:
+        print(f"rethlas-kb: {arg_err}", file=sys.stderr)
+        return EXIT_USAGE
 
-    try:
-        backend = get_backend(ns.backend)
-    except BackendError as exc:
-        print(f"rethlas-kb: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
 
     hunter = CounterexampleHunter(
         backend=backend,
@@ -599,34 +796,69 @@ def _cmd_hunt_counterexample(ns: argparse.Namespace) -> int:
         include_staged_context=ns.include_staged_context,
     )
 
+    def _run_one(node) -> BatchItem:
+        return _run_one_counterexample_hunter(hunter, node, adapter, ns)
+
+    if ns.project:
+        project, exit_code = _load_project_or_exit(ns, adapter)
+        if project is None:
+            return exit_code  # type: ignore[return-value]
+        outcome = run_batch(
+            project, adapter, "counterexample-hunter", per_node=_run_one,
+        )
+        return _emit_batch_summary(outcome)
+
     try:
-        review = hunter.run(ns.node_id, adapter)
+        node = adapter.read_node(ns.node_id)
     except KeyError as exc:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
+
+    item = _run_one(node)
+    if item.outcome == "crashed":
+        if "parse error" in (item.summary or ""):
+            print(
+                f"rethlas-kb: backend output could not be parsed: {item.error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"rethlas-kb: {item.error}", file=sys.stderr)
+        return EXIT_RUNTIME
+    return _emit_single_review_outcome(item)
+
+
+def _run_one_counterexample_hunter(hunter, node, adapter, ns) -> BatchItem:
+    try:
+        review = hunter.run(node.id, adapter)
     except CounterexampleHuntReviewParseError as exc:
-        print(
-            f"rethlas-kb: backend output could not be parsed: {exc}",
-            file=sys.stderr,
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"parse error: {exc.reason}", error=str(exc),
         )
-        return EXIT_RUNTIME
     except BackendError as exc:
-        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
-
-    if not ns.no_write:
-        review_path = adapter.write_review(
-            node_id=ns.node_id,
-            agent_name="counterexample-hunter",
-            review=_hunter_review_for_disk(review),
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"backend error: {exc}", error=str(exc),
         )
-        print(f"review written: {review_path}", file=sys.stderr)
 
-    print(json.dumps(_hunter_review_for_stdout(review), indent=2, ensure_ascii=False))
-    # Exit codes:
-    #   0 = no_counterexample_found (hunter searched and didn't find one)
-    #   1 = counterexample_found OR inconclusive (the user must look)
-    return EXIT_OK if review.decision == "no_counterexample_found" else EXIT_REVIEW_FAIL
+    review_path = None
+    if not ns.no_write:
+        review_path = str(adapter.write_review(
+            node_id=node.id, agent_name="counterexample-hunter",
+            review=_hunter_review_for_disk(review),
+        ))
+
+    # For the hunter: no_counterexample_found = "clean" = accepted-equivalent.
+    # counterexample_found OR inconclusive = "flagged" (user must look).
+    is_clean = review.decision == "no_counterexample_found"
+    item = BatchItem(
+        node_id=node.id,
+        outcome="accepted" if is_clean else "flagged",
+        summary=f"{review.decision}: {review.rationale[:80]}",
+        review_path=review_path,
+    )
+    item.__dict__["_stdout_dict"] = _hunter_review_for_stdout(review)
+    return item
 
 
 def _hunter_review_for_stdout(review) -> dict:
@@ -699,16 +931,24 @@ def _add_audit_source(sub) -> None:
         ),
     )
     asp.add_argument(
-        "node_id",
-        help="Node id (typically kind=external-theorem).",
+        "node_id", nargs="?", default=None,
+        help="Single-node mode. Omit when --project is given.",
+    )
+    asp.add_argument(
+        "--project", default=None,
+        help=(
+            "Batch mode: project id (runs on every external-theorem in the "
+            "closure; --source-passage / --source-proof are ignored — agent "
+            "returns cannot_verify for nodes lacking pre-staged source text)."
+        ),
     )
     asp.add_argument(
         "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
         help=f"Which LLM backend to use (default: {DEFAULT_BACKEND}).",
     )
     asp.add_argument(
-        "--project", default=".",
-        help="Blueprint project root (must contain docs/knowledge/).",
+        "--blueprint", default=".",
+        help="Blueprint root (must contain docs/knowledge/).",
     )
     asp.add_argument(
         "--source-passage", default=None, metavar="PATH",
@@ -738,19 +978,19 @@ def _add_audit_source(sub) -> None:
 
 
 def _cmd_audit_source(ns: argparse.Namespace) -> int:
-    adapter, err = adapter_for(ns.project)
+    adapter, err = adapter_for(ns.blueprint)
     if err:
         print(f"rethlas-kb: {err}", file=sys.stderr)
         return EXIT_USAGE
 
-    from .main import _register_backends
-    _register_backends()
+    arg_err = _validate_node_or_project(ns)
+    if arg_err:
+        print(f"rethlas-kb: {arg_err}", file=sys.stderr)
+        return EXIT_USAGE
 
-    try:
-        backend = get_backend(ns.backend)
-    except BackendError as exc:
-        print(f"rethlas-kb: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
 
     source_passage = ""
     if ns.source_passage:
@@ -783,36 +1023,82 @@ def _cmd_audit_source(ns: argparse.Namespace) -> int:
         include_staged_context=ns.include_staged_context,
     )
 
-    try:
-        review = auditor.run(
-            ns.node_id, adapter,
-            source_passage=source_passage,
-            source_proof=source_proof,
+    def _run_one(node) -> BatchItem:
+        # In batch mode, source-passage flags don't translate; pass ""
+        # so the agent emits cannot_verify for nodes without
+        # pre-staged source text. Single-node uses the flag values.
+        if ns.project:
+            return _run_one_source_claim_verifier(
+                auditor, node, adapter, ns,
+                source_passage="", source_proof="",
+            )
+        return _run_one_source_claim_verifier(
+            auditor, node, adapter, ns,
+            source_passage=source_passage, source_proof=source_proof,
         )
+
+    if ns.project:
+        project, exit_code = _load_project_or_exit(ns, adapter)
+        if project is None:
+            return exit_code  # type: ignore[return-value]
+        outcome = run_batch(
+            project, adapter, "source-claim-verifier", per_node=_run_one,
+        )
+        return _emit_batch_summary(outcome)
+
+    try:
+        node = adapter.read_node(ns.node_id)
     except KeyError as exc:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
+
+    item = _run_one(node)
+    if item.outcome == "crashed":
+        if "parse error" in (item.summary or ""):
+            print(
+                f"rethlas-kb: backend output could not be parsed: {item.error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"rethlas-kb: {item.error}", file=sys.stderr)
+        return EXIT_RUNTIME
+    return _emit_single_review_outcome(item)
+
+
+def _run_one_source_claim_verifier(
+    auditor, node, adapter, ns, *, source_passage: str, source_proof: str,
+) -> BatchItem:
+    try:
+        review = auditor.run(
+            node.id, adapter,
+            source_passage=source_passage, source_proof=source_proof,
+        )
     except SourceClaimReviewParseError as exc:
-        print(
-            f"rethlas-kb: backend output could not be parsed: {exc}",
-            file=sys.stderr,
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"parse error: {exc.reason}", error=str(exc),
         )
-        return EXIT_RUNTIME
     except BackendError as exc:
-        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
-        return EXIT_RUNTIME
-
-    if not ns.no_write:
-        review_path = adapter.write_review(
-            node_id=ns.node_id,
-            agent_name="source-claim-verifier",
-            review=_source_claim_review_for_disk(review),
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"backend error: {exc}", error=str(exc),
         )
-        print(f"review written: {review_path}", file=sys.stderr)
 
-    print(json.dumps(_source_claim_review_for_stdout(review),
-                     indent=2, ensure_ascii=False))
-    return EXIT_OK if review.is_accepted else EXIT_REVIEW_FAIL
+    review_path = None
+    if not ns.no_write:
+        review_path = str(adapter.write_review(
+            node_id=node.id, agent_name="source-claim-verifier",
+            review=_source_claim_review_for_disk(review),
+        ))
+
+    item = BatchItem(
+        node_id=node.id,
+        outcome="accepted" if review.is_accepted else "flagged",
+        summary=f"{review.decision}: {review.rationale[:80]}",
+        review_path=review_path,
+    )
+    item.__dict__["_stdout_dict"] = _source_claim_review_for_stdout(review)
+    return item
 
 
 def _source_claim_review_for_stdout(review) -> dict:
@@ -860,3 +1146,98 @@ def _source_claim_review_for_disk(review) -> dict:
         "n_proof_issues": len(review.proof_issues),
         "body": "\n".join(body_parts),
     }
+
+
+# ===========================================================================
+# Shared batch-dispatch helpers (issue #15)
+# ===========================================================================
+def _validate_node_or_project(ns: argparse.Namespace) -> str | None:
+    """Return None when args are OK; otherwise an error message."""
+    has_node = bool(getattr(ns, "node_id", None))
+    has_project = bool(getattr(ns, "project", None))
+    if has_node and has_project:
+        return (
+            "pass either a positional node_id OR --project <id>, not both"
+        )
+    if not has_node and not has_project:
+        return (
+            "must pass either a positional node_id OR --project <id>"
+        )
+    return None
+
+
+def _load_project_or_exit(
+    ns: argparse.Namespace, adapter,
+) -> tuple[object | None, int | None]:
+    """Load the project manifest; return (project, None) or (None, exit_code)."""
+    try:
+        project = load_project(ns.project, adapter.kb_root)
+    except ProjectError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return None, EXIT_USAGE
+    return project, None
+
+
+def _emit_batch_summary(outcome: BatchOutcome) -> int:
+    """Emit a per-project summary and return the aggregate exit code.
+
+    Exit codes:
+      0 = every applicable node accepted
+      1 = at least one node flagged (no crashes)
+      3 = at least one node crashed during the agent invocation
+    """
+    print(
+        f"\nbatch: project={outcome.project_id} agent={outcome.agent_role} "
+        f"closure={outcome.closure_count} applicable={outcome.applicable_count} "
+        f"accepted={outcome.accepted_count} flagged={outcome.flagged_count} "
+        f"crashed={outcome.crashed_count}",
+        file=sys.stderr,
+    )
+    for item in outcome.items:
+        symbol = {"accepted": "✓", "flagged": "⚠", "crashed": "✗",
+                  "skipped": "·"}.get(item.outcome, "?")
+        print(
+            f"  {symbol} [{item.outcome:8}] {item.node_id}  {item.summary}",
+            file=sys.stderr,
+        )
+    print(
+        json.dumps(_batch_outcome_to_dict(outcome), indent=2, ensure_ascii=False)
+    )
+    if outcome.crashed_count > 0:
+        return EXIT_RUNTIME
+    if outcome.flagged_count > 0:
+        return EXIT_REVIEW_FAIL
+    return EXIT_OK
+
+
+def _batch_outcome_to_dict(outcome: BatchOutcome) -> dict:
+    return {
+        "project_id": outcome.project_id,
+        "agent_role": outcome.agent_role,
+        "closure_count": outcome.closure_count,
+        "applicable_count": outcome.applicable_count,
+        "accepted_count": outcome.accepted_count,
+        "flagged_count": outcome.flagged_count,
+        "crashed_count": outcome.crashed_count,
+        "items": [
+            {
+                "node_id": i.node_id,
+                "outcome": i.outcome,
+                "summary": i.summary,
+                "review_path": i.review_path,
+                "error": i.error,
+            }
+            for i in outcome.items
+        ],
+    }
+
+
+def _resolve_backend_or_exit(ns: argparse.Namespace) -> tuple[object | None, int | None]:
+    """Boilerplate: register defaults, look up the backend, surface errors."""
+    from .main import _register_backends
+    _register_backends()
+    try:
+        return get_backend(ns.backend), None
+    except BackendError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return None, EXIT_RUNTIME

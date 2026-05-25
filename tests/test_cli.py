@@ -118,7 +118,7 @@ def test_no_args_prints_usage_and_returns_zero(capsys) -> None:
 def test_verify_stmt_accepted_returns_exit_ok(kb: Path, capsys) -> None:
     register_backend(MockBackend(name="codex", canned_response=_accepted_response()))
     rc = cli.main(["verify-stmt", "algebra.quotient_group",
-                   "--project", str(kb)])
+                   "--blueprint", str(kb)])
     assert rc == cli.EXIT_OK
     payload = json.loads(capsys.readouterr().out)
     assert payload["decision"] == "accepted"
@@ -129,7 +129,7 @@ def test_verify_stmt_accepted_returns_exit_ok(kb: Path, capsys) -> None:
 
 def test_verify_stmt_writes_review_file_by_default(kb: Path, capsys) -> None:
     register_backend(MockBackend(name="codex", canned_response=_accepted_response()))
-    cli.main(["verify-stmt", "algebra.quotient_group", "--project", str(kb)])
+    cli.main(["verify-stmt", "algebra.quotient_group", "--blueprint", str(kb)])
     err = capsys.readouterr().err
     assert "review written:" in err
 
@@ -145,7 +145,7 @@ def test_verify_stmt_writes_review_file_by_default(kb: Path, capsys) -> None:
 def test_verify_stmt_no_write_skips_persistence(kb: Path) -> None:
     register_backend(MockBackend(name="codex", canned_response=_accepted_response()))
     rc = cli.main(["verify-stmt", "algebra.quotient_group",
-                   "--project", str(kb), "--no-write"])
+                   "--blueprint", str(kb), "--no-write"])
     assert rc == cli.EXIT_OK
     reviews_dir = kb / "docs" / "knowledge" / "reviews"
     assert not reviews_dir.exists() or not list(reviews_dir.glob("*.md"))
@@ -160,7 +160,7 @@ def test_verify_stmt_defaults_to_codex_backend(kb: Path) -> None:
     register_backend(codex_mock)
     register_backend(claude_mock)
 
-    cli.main(["verify-stmt", "algebra.quotient_group", "--project", str(kb)])
+    cli.main(["verify-stmt", "algebra.quotient_group", "--blueprint", str(kb)])
     assert codex_mock.call_count == 1
     assert claude_mock.call_count == 0
 
@@ -172,7 +172,7 @@ def test_verify_stmt_backend_flag_routes_to_claude(kb: Path) -> None:
     register_backend(claude_mock)
 
     cli.main(["verify-stmt", "algebra.quotient_group",
-              "--project", str(kb), "--backend", "claude"])
+              "--blueprint", str(kb), "--backend", "claude"])
     assert codex_mock.call_count == 0
     assert claude_mock.call_count == 1
 
@@ -180,7 +180,7 @@ def test_verify_stmt_backend_flag_routes_to_claude(kb: Path) -> None:
 def test_verify_stmt_rejects_unknown_backend(kb: Path) -> None:
     with pytest.raises(SystemExit) as exc_info:
         cli.main(["verify-stmt", "algebra.quotient_group",
-                  "--project", str(kb), "--backend", "gemini"])
+                  "--blueprint", str(kb), "--backend", "gemini"])
     assert exc_info.value.code == cli.EXIT_USAGE
 
 
@@ -197,7 +197,7 @@ def test_verify_stmt_returns_review_fail_for_non_accepted(kb: Path) -> None:
         }),
     ))
     rc = cli.main(["verify-stmt", "algebra.quotient_group",
-                   "--project", str(kb)])
+                   "--blueprint", str(kb)])
     assert rc == cli.EXIT_REVIEW_FAIL
 
 
@@ -207,7 +207,7 @@ def test_verify_stmt_returns_review_fail_for_non_accepted(kb: Path) -> None:
 def test_verify_stmt_missing_project_returns_usage(tmp_path: Path, capsys) -> None:
     bare = tmp_path / "not-a-blueprint"
     bare.mkdir()
-    rc = cli.main(["verify-stmt", "algebra.x", "--project", str(bare)])
+    rc = cli.main(["verify-stmt", "algebra.x", "--blueprint", str(bare)])
     assert rc == cli.EXIT_USAGE
     err = capsys.readouterr().err
     assert "docs/knowledge" in err
@@ -216,7 +216,7 @@ def test_verify_stmt_missing_project_returns_usage(tmp_path: Path, capsys) -> No
 def test_verify_stmt_missing_node_returns_runtime(kb: Path, capsys) -> None:
     register_backend(MockBackend(name="codex", canned_response=_accepted_response()))
     rc = cli.main(["verify-stmt", "algebra.does_not_exist",
-                   "--project", str(kb)])
+                   "--blueprint", str(kb)])
     assert rc == cli.EXIT_RUNTIME
     assert "not found" in capsys.readouterr().err
 
@@ -224,7 +224,7 @@ def test_verify_stmt_missing_node_returns_runtime(kb: Path, capsys) -> None:
 def test_verify_stmt_unparseable_backend_returns_runtime(kb: Path, capsys) -> None:
     register_backend(MockBackend(name="codex", canned_response="not json"))
     rc = cli.main(["verify-stmt", "algebra.quotient_group",
-                   "--project", str(kb)])
+                   "--blueprint", str(kb)])
     assert rc == cli.EXIT_RUNTIME
     err = capsys.readouterr().err
     assert "could not be parsed" in err
@@ -237,7 +237,7 @@ def test_verify_stmt_timeout_flag_propagates(kb: Path) -> None:
     mock = MockBackend(name="codex", canned_response=_accepted_response())
     register_backend(mock)
     cli.main(["verify-stmt", "algebra.quotient_group",
-              "--project", str(kb), "--timeout", "42"])
+              "--blueprint", str(kb), "--timeout", "42"])
     assert mock.last_call["timeout_seconds"] == 42
 
 
@@ -246,7 +246,7 @@ def test_verify_stmt_no_include_staged_flag(kb: Path) -> None:
     mock = MockBackend(name="codex", canned_response=_accepted_response())
     register_backend(mock)
     cli.main(["verify-stmt", "algebra.group",
-              "--project", str(kb), "--no-include-staged"])
+              "--blueprint", str(kb), "--no-include-staged"])
     # Admitted-only context for an admitted node
     assert "Mode: **admitted**" in mock.last_call["prompt"]
 

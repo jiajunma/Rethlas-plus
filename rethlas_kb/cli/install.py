@@ -62,8 +62,11 @@ def add_subparser(sub) -> None:
         ),
     )
     p.add_argument(
-        "--project", default=".",
-        help="Project root for --scope project (default: cwd).",
+        "--blueprint", "--project", dest="blueprint", default=".",
+        help=(
+            "Blueprint root for --scope project (default: cwd). "
+            "``--project`` is accepted as a legacy alias."
+        ),
     )
     p.add_argument(
         "--dry-run", action="store_true",
@@ -83,7 +86,7 @@ def _cmd_install_commands(ns: argparse.Namespace) -> int:
         return EXIT_USAGE
 
     plan = _plan_install(
-        targets=targets, scope=ns.scope, project_root=ns.project,
+        targets=targets, scope=ns.scope, blueprint_root=ns.blueprint,
     )
     if not plan:
         print("rethlas-kb: no command files to install", file=sys.stderr)
@@ -108,13 +111,15 @@ def _resolve_targets(target_arg: list[str] | None) -> list[str]:
 
 
 def _plan_install(
-    *, targets: list[str], scope: str, project_root: str,
+    *, targets: list[str], scope: str, blueprint_root: str,
 ) -> list[tuple[str, Path, Path]]:
     """Build a list of ``(target, source_path, dest_path)`` triples."""
     plan: list[tuple[str, Path, Path]] = []
     for target in targets:
         source_files = _source_files_for(target)
-        dest_dir = _dest_dir_for(target, scope=scope, project_root=project_root)
+        dest_dir = _dest_dir_for(
+            target, scope=scope, blueprint_root=blueprint_root,
+        )
         for source in source_files:
             plan.append((target, source, dest_dir / source.name))
     return plan
@@ -138,10 +143,10 @@ def _source_files_for(target: str) -> list[Path]:
     return out
 
 
-def _dest_dir_for(target: str, *, scope: str, project_root: str) -> Path:
+def _dest_dir_for(target: str, *, scope: str, blueprint_root: str) -> Path:
     if scope == "user":
         return _USER_DIRS[target]
-    root = Path(project_root).expanduser().resolve()
+    root = Path(blueprint_root).expanduser().resolve()
     return root / f".{target}" / "commands"
 
 

@@ -1,4 +1,4 @@
-"""Shared CLI helpers — project resolution, stdin handling, CSV parsing.
+"""Shared CLI helpers — blueprint resolution, stdin handling, CSV parsing.
 
 Kept independent of every subcommand module so any of them can import
 from here without forming a cycle.
@@ -12,25 +12,25 @@ from pathlib import Path
 from rethlas_kb.adapter import KbAdapter
 
 
-def resolve_project(project_arg: str) -> Path:
+def resolve_blueprint(blueprint_arg: str) -> Path:
     """Expand ``~`` and resolve to absolute; don't check existence."""
-    return Path(project_arg).expanduser().resolve()
+    return Path(blueprint_arg).expanduser().resolve()
 
 
-def adapter_for(project_arg: str) -> tuple[KbAdapter | None, str | None]:
-    """Build a ``KbAdapter`` from a ``--project`` argument.
+def adapter_for(blueprint_arg: str) -> tuple[KbAdapter | None, str | None]:
+    """Build a ``KbAdapter`` from a ``--blueprint`` argument.
 
     Returns ``(adapter, None)`` on success or ``(None, error_message)``
-    if the path doesn't look like a mdblueprint project (no
+    if the path doesn't look like a mdblueprint repo (no
     ``docs/knowledge/`` subdirectory).
     """
-    project = resolve_project(project_arg)
-    if not (project / "docs" / "knowledge").exists():
+    blueprint = resolve_blueprint(blueprint_arg)
+    if not (blueprint / "docs" / "knowledge").exists():
         return None, (
-            f"--project {project} has no docs/knowledge/ directory "
+            f"--blueprint {blueprint} has no docs/knowledge/ directory "
             f"— is this a mdblueprint repo?"
         )
-    return KbAdapter(project), None
+    return KbAdapter(blueprint), None
 
 
 def read_stdin_text() -> str:
@@ -50,3 +50,11 @@ def split_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [s.strip() for s in value.split(",") if s.strip()]
+
+
+# ---------------------------------------------------------------------------
+# Legacy alias — kept for one release so external callers (if any) don't break.
+# ---------------------------------------------------------------------------
+def resolve_project(project_arg: str) -> Path:
+    """Deprecated: use :func:`resolve_blueprint`."""
+    return resolve_blueprint(project_arg)
