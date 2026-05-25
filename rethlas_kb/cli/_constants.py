@@ -7,7 +7,7 @@ the other or ``main.py``.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"  # v1.3 — project manifest + batch mode (issues #14, #15)
+__version__ = "0.1.1"  # v1.4 — autofix agents + /fix-loop (issue #23)
 
 DEFAULT_BACKEND = "codex"
 

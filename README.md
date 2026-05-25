@@ -9,8 +9,9 @@ It's a toolkit that agentic CLIs (codex / claude / opencode) call as
 **tools** while *they* do the orchestration. A Python end-to-end
 orchestration path is also available for batch / CI use.
 
-> **Status**: v1.3 shipped 2026-05-25. 5 agents, 2 backends (codex + claude),
-> project-manifest batch mode, 398 passing tests.
+> **Status**: v1.4 shipped 2026-05-25. **7 agents** (5 verifiers + 2 generators
+> in v1 + statement-fixer + def-stub-generator in v1.4), project-manifest
+> batch mode, **/fix-loop** close-the-loop autofix, 420 passing tests.
 > See [ROADMAP.md](ROADMAP.md) and the
 > [closed issues](https://github.com/jiajunma/Rethlas-plus/issues?q=label%3Arethlas-kb+is%3Aclosed).
 >
@@ -47,6 +48,7 @@ EOF
 claude
 > /status main                                    # dashboard
 > /open-questions main                            # prioritised work list
+> /fix-loop main                                  # AUTOFIX: iterate everything until convergence (v1.4)
 > /verify-stmt cellular_categories.sheaves_cosheaves
 > /verify-proof-judge equivariant_sheaves.qfd_orbit_lemma
 > /verify-proof-structural equivariant_sheaves.qfd_orbit_lemma   # if hard
@@ -97,6 +99,19 @@ rethlas-kb audit-source <node-id> --source-passage extract.md
 ```bash
 rethlas-kb fill-gap     <node-id> --prior-review <verifier-output.md>
 rethlas-kb hunt-counterexample <node-id>        # actively try to refute
+rethlas-kb fix-stmt     <node-id> --prior-review <verifier-output.md>   # v1.4
+rethlas-kb stub-def     <missing-id> --referring-node <id>              # v1.4
+```
+
+### Autofix (v1.4)
+
+```bash
+# v1.4 close-the-loop primitive (no LLM — promote new-lemma requests to staged)
+rethlas-kb promote-request --all-pending --blueprint .
+
+# Mode A: agentic CLI drives the whole loop (status → dispatch → re-verify → ...)
+claude
+> /fix-loop main
 ```
 
 ### Project-batch mode (v1.3)

@@ -18,6 +18,10 @@ from rethlas_kb_agents.counterexample_hunter import (
     CounterexampleHunter,
     CounterexampleHuntReviewParseError,
 )
+from rethlas_kb_agents.def_stub_generator import (
+    DefStubGenerator,
+    DefStubReviewParseError,
+)
 from rethlas_kb_agents.proof_gap_filler import (
     GapFiller,
     GapFillReviewParseError,
@@ -29,6 +33,10 @@ from rethlas_kb_agents.proof_verifier import (
 from rethlas_kb_agents.source_claim_verifier import (
     SourceClaimReviewParseError,
     SourceClaimVerifier,
+)
+from rethlas_kb_agents.statement_fixer import (
+    StatementFixer,
+    StatementFixReviewParseError,
 )
 from rethlas_kb_agents.statement_verifier import (
     StatementReviewParseError,
@@ -54,6 +62,8 @@ def add_subparsers(sub) -> None:
     _add_fill_gap(sub)
     _add_hunt_counterexample(sub)
     _add_audit_source(sub)
+    _add_fix_stmt(sub)
+    _add_stub_def(sub)
 
 
 # ---------------------------------------------------------------------------
@@ -1241,3 +1251,325 @@ def _resolve_backend_or_exit(ns: argparse.Namespace) -> tuple[object | None, int
     except BackendError as exc:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return None, EXIT_RUNTIME
+
+
+# ===========================================================================
+# fix-stmt (v1.4 — statement-fixer)
+# ===========================================================================
+def _add_fix_stmt(sub) -> None:
+    fs = sub.add_parser(
+        "fix-stmt",
+        help=(
+            "(Mode B) Statement-fixer: take a node + prior statement-verifier "
+            "review, produce a corrected statement body."
+        ),
+        description=(
+            "Generator that addresses formulation_issue / generality_concern / "
+            "context_insufficient issues from a prior statement-verifier "
+            "review. When decision=fixed, the staged node's body is "
+            "rewritten in place (unless --no-apply)."
+        ),
+    )
+    fs.add_argument(
+        "node_id", nargs="?", default=None,
+        help="Single-node mode: target node id. Omit when --project is given.",
+    )
+    fs.add_argument(
+        "--project", default=None,
+        help="Batch mode: project id (auto-discovers prior statement-verifier review per node).",
+    )
+    fs.add_argument(
+        "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
+        help=f"LLM backend (default: {DEFAULT_BACKEND}).",
+    )
+    fs.add_argument("--blueprint", default=".")
+    fs.add_argument(
+        "--prior-review", default=None, metavar="PATH",
+        help="Path to prior statement-verifier review (or '-' for stdin).",
+    )
+    fs.add_argument("--timeout", type=int, default=600)
+    fs.add_argument("--no-include-staged", dest="include_staged_context",
+                    action="store_false")
+    fs.add_argument("--no-apply", action="store_true",
+                    help="Don't apply fixed_body to the staged node.")
+    fs.add_argument("--no-write-review", action="store_true")
+    fs.set_defaults(include_staged_context=True, handler=_cmd_fix_stmt)
+
+
+def _autoload_prior_statement_review(adapter, node_id: str) -> str:
+    """Find the most recent statement-verifier review body, or ''."""
+    slug = node_id.replace(".", "_")
+    if not adapter.reviews_dir.exists():
+        return ""
+    candidates = sorted(
+        adapter.reviews_dir.glob(f"{slug}__statement-verifier*.md"),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )
+    return candidates[0].read_text(encoding="utf-8") if candidates else ""
+
+
+def _cmd_fix_stmt(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.blueprint)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    arg_err = _validate_node_or_project(ns)
+    if arg_err:
+        print(f"rethlas-kb: {arg_err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
+
+    explicit_prior = ""
+    if ns.prior_review:
+        try:
+            explicit_prior = read_file_or_stdin(ns.prior_review)
+        except OSError as exc:
+            print(f"rethlas-kb: --prior-review unreadable: {exc}",
+                  file=sys.stderr)
+            return EXIT_USAGE
+
+    fixer = StatementFixer(
+        backend=backend,
+        timeout_seconds=ns.timeout,
+        include_staged_context=ns.include_staged_context,
+    )
+
+    def _run_one(node) -> BatchItem:
+        per_node_prior = (
+            _autoload_prior_statement_review(adapter, node.id)
+            if ns.project else explicit_prior
+        )
+        return _run_one_statement_fixer(
+            fixer, node, adapter, ns, prior_review_text=per_node_prior,
+        )
+
+    if ns.project:
+        project, exit_code = _load_project_or_exit(ns, adapter)
+        if project is None:
+            return exit_code  # type: ignore[return-value]
+        outcome = run_batch(
+            project, adapter, "statement-fixer", per_node=_run_one,
+        )
+        return _emit_batch_summary(outcome)
+
+    try:
+        node = adapter.read_node(ns.node_id)
+    except KeyError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    item = _run_one(node)
+    if item.outcome == "crashed":
+        if "parse error" in (item.summary or ""):
+            print(
+                f"rethlas-kb: backend output could not be parsed: {item.error}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"rethlas-kb: {item.error}", file=sys.stderr)
+        return EXIT_RUNTIME
+    return _emit_single_review_outcome(item)
+
+
+def _run_one_statement_fixer(
+    fixer, node, adapter, ns, *, prior_review_text: str,
+) -> BatchItem:
+    try:
+        review = fixer.run(
+            node.id, adapter, prior_review=prior_review_text,
+        )
+    except StatementFixReviewParseError as exc:
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"parse error: {exc.reason}", error=str(exc),
+        )
+    except BackendError as exc:
+        return BatchItem(
+            node_id=node.id, outcome="crashed",
+            summary=f"backend error: {exc}", error=str(exc),
+        )
+
+    applied: list[str] = []
+    if not ns.no_apply and review.writes_body:
+        try:
+            updated = adapter.update_staged_node_body(node.id, review.fixed_body)
+            applied.append(str(updated))
+        except (KeyError, ValueError) as exc:
+            print(
+                f"rethlas-kb: fixer returned a body for {node.id} but "
+                f"update_staged_node_body failed: {exc}",
+                file=sys.stderr,
+            )
+
+    review_path = None
+    if not ns.no_write_review:
+        try:
+            review_path = str(adapter.write_review(
+                node_id=node.id, agent_name="statement-fixer",
+                review={
+                    "decision": review.decision,
+                    "rationale": review.rationale,
+                    "confidence": review.confidence,
+                    "addressed_issues": list(review.addressed_issues),
+                    "blocker": review.blocker,
+                    "applied_updated_node": applied,
+                    "body": (
+                        f"## Rationale\n\n{review.rationale}\n\n"
+                        + (f"## Addressed issues\n\n"
+                           + "\n".join(f"- {i}" for i in review.addressed_issues)
+                           + "\n\n" if review.addressed_issues else "")
+                        + (f"## Blocker\n\n{review.blocker}\n\n"
+                           if review.blocker else "")
+                        + (f"## Fixed body (applied to staged node)\n\n"
+                           + review.fixed_body + "\n\n"
+                           if review.fixed_body else "")
+                        + f"## Raw LLM output\n\n```\n{review.raw}\n```\n"
+                    ),
+                },
+            ))
+        except Exception as exc:
+            print(f"rethlas-kb: failed to write review for {node.id}: {exc}",
+                  file=sys.stderr)
+
+    item = BatchItem(
+        node_id=node.id,
+        outcome="accepted" if review.decision == "fixed" else "flagged",
+        summary=f"{review.decision}: {review.rationale[:80]}",
+        review_path=review_path,
+    )
+    item.__dict__["_stdout_dict"] = {
+        "decision": review.decision,
+        "rationale": review.rationale,
+        "confidence": review.confidence,
+        "addressed_issues": list(review.addressed_issues),
+        "blocker": review.blocker,
+        "applied_updated_node": applied,
+    }
+    return item
+
+
+# ===========================================================================
+# stub-def (v1.4 — def-stub-generator)
+# ===========================================================================
+def _add_stub_def(sub) -> None:
+    sd = sub.add_parser(
+        "stub-def",
+        help=(
+            "(Mode B) Def-stub-generator: create a staged definition stub "
+            "for a missing-definition gap."
+        ),
+        description=(
+            "Generator that creates a staged stub for a missing-definition "
+            "name flagged by statement-verifier. Writes either a real "
+            "first-pass body (drafted) or a TODO placeholder "
+            "(placeholder_only) via KbAdapter.write_staged_node."
+        ),
+    )
+    sd.add_argument(
+        "missing_id",
+        help="Proposed id for the new definition (e.g. algebra.normal_subgroup).",
+    )
+    sd.add_argument(
+        "--referring-node", required=True,
+        help="Node id that flagged this term as needs_definition.",
+    )
+    sd.add_argument(
+        "--reason", default="",
+        help="Short note on what role the missing term plays in the referring node.",
+    )
+    sd.add_argument(
+        "--backend", choices=("codex", "claude"), default=DEFAULT_BACKEND,
+        help=f"LLM backend (default: {DEFAULT_BACKEND}).",
+    )
+    sd.add_argument("--blueprint", default=".")
+    sd.add_argument("--timeout", type=int, default=300)
+    sd.add_argument("--no-include-staged", dest="include_staged_context",
+                    action="store_false")
+    sd.add_argument("--no-apply", action="store_true",
+                    help="Don't write the stub; just emit the verdict.")
+    sd.set_defaults(include_staged_context=True, handler=_cmd_stub_def)
+
+
+def _cmd_stub_def(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.blueprint)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    backend, exit_code = _resolve_backend_or_exit(ns)
+    if backend is None:
+        return exit_code  # type: ignore[return-value]
+
+    stubber = DefStubGenerator(
+        backend=backend,
+        timeout_seconds=ns.timeout,
+        include_staged_context=ns.include_staged_context,
+    )
+
+    try:
+        review = stubber.run(
+            ns.missing_id, ns.referring_node, adapter, reason=ns.reason,
+        )
+    except KeyError as exc:
+        print(f"rethlas-kb: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+    except DefStubReviewParseError as exc:
+        print(
+            f"rethlas-kb: backend output could not be parsed: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME
+    except BackendError as exc:
+        print(f"rethlas-kb: backend error: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME
+
+    applied = None
+    if not ns.no_apply and review.writes_stub:
+        try:
+            staged_path = adapter.write_staged_node(
+                frontmatter={
+                    "id": review.proposed_id,
+                    "title": review.title,
+                    "kind": "definition",
+                    "status": "staged",
+                    "primary_topic": (
+                        review.primary_topic
+                        or review.proposed_id.split(".", 1)[0]
+                    ),
+                    "topics": (
+                        list(review.topics) if review.topics
+                        else [review.primary_topic
+                              or review.proposed_id.split(".", 1)[0]]
+                    ),
+                    "uses": list(review.uses),
+                },
+                body=review.body,
+            )
+            applied = str(staged_path)
+        except ValueError as exc:
+            print(
+                f"rethlas-kb: stubber returned a draft but "
+                f"write_staged_node rejected it: {exc}",
+                file=sys.stderr,
+            )
+
+    payload = {
+        "decision": review.decision,
+        "rationale": review.rationale,
+        "confidence": review.confidence,
+        "proposed_id": review.proposed_id,
+        "title": review.title,
+        "primary_topic": review.primary_topic,
+        "topics": list(review.topics),
+        "uses": list(review.uses),
+        "blocker": review.blocker,
+        "applied_staged_node": applied,
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    if review.decision == "cannot_stub":
+        return EXIT_REVIEW_FAIL
+    return EXIT_OK

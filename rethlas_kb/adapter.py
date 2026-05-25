@@ -231,6 +231,118 @@ class KbAdapter:
             kind=request_kind,
         )
 
+    def promote_request_to_staged(
+        self, request_path: Path | str, *,
+        mark_processed: bool = True,
+    ) -> Path:
+        """Materialise a ``new-lemma`` request as a staged definition / lemma stub.
+
+        Deterministic (no LLM). Reads the request file's YAML
+        frontmatter for ``proposed_id``, ``statement``, ``rationale``,
+        constructs a minimal staged node, and writes it via
+        :meth:`write_staged_node`.
+
+        When ``mark_processed`` is True (default), the request file is
+        renamed to ``requests/processed/<orig-name>`` so subsequent
+        sweeps don't re-promote it.
+
+        Raises ``ValueError`` if the request lacks ``proposed_id`` or
+        ``statement``.
+        """
+        import re
+        import yaml
+
+        path = Path(request_path)
+        if not path.exists():
+            raise ValueError(f"request file not found: {path}")
+        text = path.read_text(encoding="utf-8")
+        match = re.match(r"\A---\n(.*?)\n---\n(.*)", text, re.DOTALL)
+        if match is None:
+            raise ValueError(
+                f"request {path} has no YAML frontmatter"
+            )
+        try:
+            fm = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"request {path}: YAML parse error: {exc}") from exc
+        if not isinstance(fm, dict):
+            raise ValueError(f"request {path}: frontmatter must be a mapping")
+
+        proposed_id = fm.get("proposed_id")
+        statement = fm.get("statement")
+        if not proposed_id or not isinstance(proposed_id, str):
+            raise ValueError(
+                f"request {path}: missing or non-string proposed_id "
+                "(promote-request only handles new-lemma kind)"
+            )
+        if not statement or not isinstance(statement, str):
+            raise ValueError(
+                f"request {path}: missing or non-string statement"
+            )
+
+        rationale = fm.get("rationale") or ""
+        # Derive frontmatter for the new staged node.
+        # proposed_id is "topic.name" by convention.
+        topic = proposed_id.split(".", 1)[0] if "." in proposed_id else "uncategorized"
+        title = fm.get("title") or _humanise_id(proposed_id)
+        # Default kind: lemma (caller can edit to definition / proposition
+        # / theorem after the fact). Lemma is the most defensible default
+        # for "I need to prove this for the parent proof".
+        kind = fm.get("proposed_kind") or "lemma"
+
+        # Body: the statement, plus the rationale as a TODO note.
+        body_parts = [f"# {title}", "", statement.strip(), ""]
+        if rationale:
+            body_parts.append(f"_Origin: {rationale.strip()}_")
+        body_parts.append(
+            f"_Auto-promoted from request {path.name} by "
+            f"`rethlas-kb promote-request`._"
+        )
+
+        staged_path = self.write_staged_node(
+            frontmatter={
+                "id": proposed_id,
+                "title": title,
+                "kind": kind,
+                "status": "staged",
+                "primary_topic": topic,
+                "topics": [topic],
+            },
+            body="\n".join(body_parts),
+        )
+
+        if mark_processed:
+            processed_dir = self.requests_dir / "processed"
+            processed_dir.mkdir(parents=True, exist_ok=True)
+            target = processed_dir / path.name
+            path.rename(target)
+
+        return staged_path
+
+    def list_pending_requests(self, kind: str | None = None) -> list[Path]:
+        """List unprocessed request files (those NOT under requests/processed/)."""
+        if not self.requests_dir.exists():
+            return []
+        pending: list[Path] = []
+        for p in self.requests_dir.glob("*.md"):
+            # The `processed/` subdir lives under requests/, so glob with
+            # `*.md` already excludes it (glob doesn't recurse).
+            if kind is not None:
+                import yaml
+                try:
+                    fm_text = p.read_text(encoding="utf-8")
+                    import re
+                    m = re.match(r"\A---\n(.*?)\n---\n", fm_text, re.DOTALL)
+                    if not m:
+                        continue
+                    fm = yaml.safe_load(m.group(1)) or {}
+                    if fm.get("kind") != kind:
+                        continue
+                except Exception:
+                    continue
+            pending.append(p)
+        return sorted(pending)
+
     def update_staged_node_body(self, node_id: str, new_body: str) -> Path:
         """Replace an existing staged node's body, keep frontmatter intact.
 
@@ -397,6 +509,12 @@ def _compose_markdown(frontmatter: dict, body: str) -> str:
     if body:
         return f"---\n{fm}\n---\n\n{body}\n"
     return f"---\n{fm}\n---\n"
+
+
+def _humanise_id(node_id: str) -> str:
+    """Best-effort human title from a snake_case node id."""
+    leaf = node_id.rsplit(".", 1)[-1]
+    return " ".join(part.capitalize() for part in leaf.replace("_", " ").split())
 
 
 __all__ = [

@@ -46,6 +46,9 @@ from rethlas_kb_agents.proof_verifier.prompts import (
     compose_judge as _compose_proof_verifier_judge_prompt,
     compose_structural as _compose_proof_verifier_structural_prompt,
 )
+from rethlas_kb_agents.statement_fixer.prompt import (
+    compose as _compose_statement_fixer_prompt,
+)
 from rethlas_kb_agents.statement_verifier.prompt import (
     compose as _compose_statement_verifier_prompt,
 )
@@ -64,6 +67,10 @@ _PROMPT_COMPOSERS = {
     "proof-gap-filler": _compose_proof_gap_filler_prompt,
     "counterexample-hunter": _compose_counterexample_hunter_prompt,
     "source-claim-verifier": _compose_source_claim_verifier_prompt,
+    "statement-fixer": _compose_statement_fixer_prompt,
+    # def-stub-generator uses a different compose() signature (missing_id +
+    # referring_node + reason) — exposed via Mode B `stub-def` only, not
+    # the generic compose-prompt primitive.
 }
 
 
@@ -80,6 +87,7 @@ def add_subparsers(sub) -> None:
     _add_write_request(sub)
     _add_write_staged_node(sub)
     _add_update_staged_node_body(sub)
+    _add_promote_request(sub)
     # Validate
     _add_validate_frontmatter(sub)
 
@@ -570,6 +578,97 @@ def _cmd_update_staged_node_body(ns: argparse.Namespace) -> int:
         print(f"rethlas-kb: {exc}", file=sys.stderr)
         return EXIT_RUNTIME
     print(path)
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# promote-request (v1.4 — materialise new-lemma requests as staged nodes)
+# ---------------------------------------------------------------------------
+def _add_promote_request(sub) -> None:
+    p = sub.add_parser(
+        "promote-request",
+        help=(
+            "Materialise a new-lemma request as a staged node (no LLM)."
+        ),
+        description=(
+            "Reads a new-lemma request file's frontmatter "
+            "(proposed_id / statement / rationale) and creates the "
+            "corresponding staged node via KbAdapter.write_staged_node. "
+            "Moves the request to docs/knowledge/requests/processed/ "
+            "(unless --keep is passed) so subsequent sweeps don't "
+            "re-promote it. Use --all-pending to batch over every "
+            "new-lemma request in the requests/ dir."
+        ),
+    )
+    p.add_argument(
+        "request_path", nargs="?", default=None,
+        help="Path to a single request file (omit when using --all-pending).",
+    )
+    p.add_argument(
+        "--blueprint", "--project", dest="blueprint", default=".",
+        help="Blueprint root (--project accepted as legacy alias).",
+    )
+    p.add_argument(
+        "--all-pending", action="store_true",
+        help=(
+            "Promote every new-lemma request under requests/ (skip "
+            "processed/). Useful as the last step in /fix-loop."
+        ),
+    )
+    p.add_argument(
+        "--keep", action="store_true",
+        help="Don't move the request file to processed/ after promoting.",
+    )
+    p.set_defaults(handler=_cmd_promote_request)
+
+
+def _cmd_promote_request(ns: argparse.Namespace) -> int:
+    adapter, err = adapter_for(ns.blueprint)
+    if err:
+        print(f"rethlas-kb: {err}", file=sys.stderr)
+        return EXIT_USAGE
+
+    paths: list[Path] = []
+    if ns.all_pending:
+        if ns.request_path:
+            print(
+                "rethlas-kb: pass either request_path OR --all-pending, not both",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        paths = adapter.list_pending_requests(kind="new-lemma")
+        if not paths:
+            print("(no pending new-lemma requests)", file=sys.stderr)
+            return EXIT_OK
+    else:
+        if not ns.request_path:
+            print(
+                "rethlas-kb: pass either a request_path OR --all-pending",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        paths = [Path(ns.request_path).expanduser()]
+
+    promoted: list[str] = []
+    failures: list[str] = []
+    for src in paths:
+        try:
+            staged_path = adapter.promote_request_to_staged(
+                src, mark_processed=not ns.keep,
+            )
+            promoted.append(str(staged_path))
+            print(f"promoted: {src.name} → {staged_path}", file=sys.stderr)
+        except ValueError as exc:
+            failures.append(f"{src.name}: {exc}")
+            print(f"rethlas-kb: failed to promote {src}: {exc}",
+                  file=sys.stderr)
+
+    # stdout: machine-readable list of staged paths
+    for p in promoted:
+        print(p)
+
+    if failures and not promoted:
+        return EXIT_RUNTIME
     return EXIT_OK
 
 

@@ -97,6 +97,32 @@ auto-filtered by per-agent applicability. New read-only subcommands:
   `proof-verifier*.md` review per node (so the `--prior-review` flag's
   per-node semantics are preserved).
 
+## ✅ v1.4 — Close-the-loop autofix — **SHIPPED 2026-05-25**
+
+Question from the user: "if I have a KB with some nodes, some questions,
+possibly incomplete or wrong, can the current system complete the KB?"
+
+Answer pre-v1.4: tools yes, autonomous loop no.
+Answer post-v1.4: yes — `claude /fix-loop main` iterates to convergence.
+
+| # | Title | Status |
+|---|---|---|
+| 23 | autofix: statement-fixer + def-stub-generator + promote-request + /fix-loop | ✅ closed |
+
+What v1.4 added:
+
+- **statement-fixer** agent — repairs flagged statements
+  (formulation_issue / generality_concern), updates staged node body
+- **def-stub-generator** agent — creates staged definition stubs for
+  missing-definition gaps (drafted | placeholder_only | cannot_stub)
+- **promote-request** primitive (no LLM) — auto-materialises new-lemma
+  requests from proof-gap-filler as staged nodes
+- **/fix-loop slash command** — Mode A orchestration: agentic CLI drives
+  status → dispatch agents → re-verify → stop on convergence / max-iter /
+  no-progress cycle
+
+22 new tests. CLI bumped to v0.1.1.
+
 ## v1.5 — Literature scout + 维护
 
 | # | Title | Track |

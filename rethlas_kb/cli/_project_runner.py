@@ -83,6 +83,17 @@ def applies_to(agent_role: str, node: "Node") -> bool:
     if agent_role == "source-claim-verifier":
         return kind == "external-theorem"
 
+    if agent_role == "statement-fixer":
+        # Same shape as statement-verifier — apply to anything we might
+        # admit. The fixer naturally returns defers_to_human / cannot_fix
+        # when there's no prior review or no real issue to address.
+        if kind in ("task", "proof-plan"):
+            return False
+        return status in STAGED_STATUSES
+
+    # def-stub-generator is invoked imperatively (per missing id) and
+    # doesn't get a batch path — it's per missing-definition, not per node.
+
     # Unknown role — be permissive (the caller chose to invoke this
     # agent, so apply it everywhere). The error-mode is the agent
     # producing a "not applicable" review, not a silent skip.
