@@ -139,6 +139,52 @@ def test_two_replays_produce_identical_kb_state(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Scenario 12 — dashboard golden snapshots.
 # ---------------------------------------------------------------------------
+def _bump_pass_count(ws: Path, label: str, target: int) -> None:
+    """Reach ``pass_count == target`` by publishing ``target`` accepting
+    ``verifier.run_completed`` events (§13: event-driven, no store to poke).
+    The caller restarts the librarian so the replay applies them.
+    """
+    from common.events.filenames import format_filename
+    from common.events.ids import allocate_event_id
+    from common.events.io import atomic_write_event
+    from common.kb.markdown_reader import read_nodes_dir
+
+    vh = read_nodes_dir(ws / "knowledge_base" / "nodes")[label].verification_hash
+    report = {
+        "summary": "ok",
+        "checked_items": [],
+        "gaps": [],
+        "critical_errors": [],
+        "external_reference_checks": [],
+    }
+    for _ in range(target):
+        eid = allocate_event_id()
+        body = {
+            "event_id": eid.event_id,
+            "type": "verifier.run_completed",
+            "actor": "verifier:codex-test",
+            "ts": "2026-04-27T12:00:00.000+00:00",
+            "target": label,
+            "payload": {
+                "verdict": "accepted",
+                "verification_hash": vh,
+                "verification_report": report,
+                "repair_hint": "",
+            },
+        }
+        shard = ws / "events" / "2026-04-27"
+        shard.mkdir(parents=True, exist_ok=True)
+        fname = format_filename(
+            iso_ms=eid.iso_ms,
+            event_type="verifier.run_completed",
+            target=label,
+            actor="verifier:codex-test",
+            seq=eid.seq,
+            uid=eid.uid,
+        )
+        atomic_write_event(shard / fname, json.dumps(body).encode("utf-8"))
+
+
 @pytest.mark.golden
 def test_dashboard_golden_overview_and_theorems(tmp_path: Path) -> None:
     """``/api/overview`` and ``/api/theorems`` shape stable on a fixture."""
@@ -159,14 +205,10 @@ def test_dashboard_golden_overview_and_theorems(tmp_path: Path) -> None:
     )
     _drive_to_ready(tmp_path)
 
-    # Bump def:x and thm:proven into the upper status bands so the
-    # snapshot exercises status diversity.
-    backend = MarkdownBackend(str(tmp_path / "knowledge_base" / "nodes"))
-    try:
-        backend._conn.execute("MATCH (n:Node {label: 'def:x'}) SET n.pass_count = 1")
-        backend._conn.execute("MATCH (n:Node {label: 'thm:proven'}) SET n.pass_count = 3")
-    finally:
-        backend.close()
+    # §13 (no Kuzu): bump into the upper status bands via accepting verifier
+    # events (the projection is rebuilt from events/, not poked).
+    _bump_pass_count(tmp_path, "def:x", 1)
+    _bump_pass_count(tmp_path, "thm:proven", 3)
 
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=30.0)

@@ -11,8 +11,7 @@ requires-python = ">=3.11"
 authors = [{ name = "Rethlas" }]
 license = { text = "Proprietary" }
 dependencies = [
-  # tomli only needed on <3.11; stdlib `tomllib` is used on 3.11+.
-  "kuzu>=0.11,<0.12",
+  # §13: Kuzu removed — the KB is markdown on the filesystem (no graph DB).
   "PyYAML>=6.0",
   # H24: the generator-side MCP server (agents/generation/mcp/server.py)
   # is spawned by codex with the same Python the rethlas CLI was

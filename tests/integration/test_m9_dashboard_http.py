@@ -447,8 +447,7 @@ def test_attention_does_not_flag_dashboard_running_or_backoff(tmp_path: Path) ->
 
 def test_attention_endpoint_lists_user_blocked(tmp_path: Path) -> None:
     _init_ws(tmp_path)
-    # Seed a definition that will be at pass_count=0 (not -1) — so to make
-    # something user-blocked we tamper Kuzu directly after librarian writes.
+    # Seed a user-introduced definition.
     subprocess.run(
         [PYTHON, "-m", "cli.main", "--workspace", str(tmp_path), "add-node",
          "--label", "def:x", "--kind", "definition",
@@ -459,14 +458,47 @@ def test_attention_endpoint_lists_user_blocked(tmp_path: Path) -> None:
     from librarian.heartbeat import PHASE_READY
     with _librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
-    import kuzu
-    db = kuzu.Database(str(tmp_path / "knowledge_base" / "dag.kz"))
-    conn = kuzu.Connection(db)
-    try:
-        conn.execute("MATCH (n:Node {label: 'def:x'}) SET n.pass_count = -1")
-    finally:
-        del conn
-        del db
+
+    # §13 (no Kuzu): make def:x user_blocked by publishing a REJECTING verifier
+    # verdict. A user-introduced definition with repair_count>0 maps to status
+    # "user_blocked" (dashboard/state.py) — there is no store to poke.
+    from common.events.filenames import format_filename
+    from common.events.ids import allocate_event_id
+    from common.events.io import atomic_write_event
+    from common.kb.markdown_reader import read_nodes_dir
+
+    vh = read_nodes_dir(tmp_path / "knowledge_base" / "nodes")["def:x"].verification_hash
+    eid = allocate_event_id()
+    body = {
+        "event_id": eid.event_id,
+        "type": "verifier.run_completed",
+        "actor": "verifier:codex-test",
+        "ts": "2026-04-27T12:00:00.000+00:00",
+        "target": "def:x",
+        "payload": {
+            "verdict": "gap",
+            "verification_hash": vh,
+            "verification_report": {
+                "summary": "gap",
+                "checked_items": [],
+                "gaps": [{"location": "def", "issue": "needs work"}],
+                "critical_errors": [],
+                "external_reference_checks": [],
+            },
+            "repair_hint": "Tighten the definition.",
+        },
+    }
+    shard = tmp_path / "events" / "2026-04-27"
+    shard.mkdir(parents=True, exist_ok=True)
+    fname = format_filename(
+        iso_ms=eid.iso_ms,
+        event_type="verifier.run_completed",
+        target="def:x",
+        actor="verifier:codex-test",
+        seq=eid.seq,
+        uid=eid.uid,
+    )
+    atomic_write_event(shard / fname, json.dumps(body).encode("utf-8"))
 
     with _librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)

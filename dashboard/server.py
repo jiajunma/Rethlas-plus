@@ -1452,13 +1452,17 @@ class DashboardCore:
         except KBUnavailable:
             nodes = []
         for n in nodes:
-            # Only flag user-introduced axioms as user_blocked. Generator-
-            # introduced helper definitions sitting at -1 are awaiting a
-            # generator repair round and don't need user attention.
+            # Only flag user-introduced axioms as user_blocked. A user
+            # definition/external_theorem the verifier rejected (repair_count>0)
+            # can only be fixed by the user — generator-introduced helpers are
+            # routed to the generator pool instead. This mirrors the
+            # ``user_blocked`` rule in ``dashboard/state.py`` node_status.
+            # (§13: the event model keeps user axioms at pass_count 0 on reject
+            # and bumps repair_count — there is no reachable pass_count == -1.)
             if (
                 n.kind in {"definition", "external_theorem"}
                 and not n.introduced_by_actor.startswith("generator:")
-                and n.pass_count == -1
+                and n.repair_count > 0
             ):
                 items.append(
                     {

@@ -135,6 +135,56 @@ def test_overview_ignores_terminal_jobs_in_inflight_count(tmp_path: Path) -> Non
         assert overview["in_flight_target_count"] == 0
 
 
+def _bump_pass_count(ws: Path, label: str, target: int) -> None:
+    """Reach ``pass_count == target`` by publishing ``target`` accepting
+    ``verifier.run_completed`` events.
+
+    §13: the projection is rebuilt from ``events/`` (no Kuzu to poke). Each
+    accept increments pass_count by one; the node's ``verification_hash`` is
+    unchanged by an accept, so every event carries the same hash. The caller
+    must restart the librarian afterwards so the replay applies them.
+    """
+    from common.events.filenames import format_filename
+    from common.events.ids import allocate_event_id
+    from common.events.io import atomic_write_event
+    from common.kb.markdown_reader import read_nodes_dir
+
+    vh = read_nodes_dir(ws / "knowledge_base" / "nodes")[label].verification_hash
+    report = {
+        "summary": "ok",
+        "checked_items": [],
+        "gaps": [],
+        "critical_errors": [],
+        "external_reference_checks": [],
+    }
+    for _ in range(target):
+        eid = allocate_event_id()
+        body = {
+            "event_id": eid.event_id,
+            "type": "verifier.run_completed",
+            "actor": "verifier:codex-test",
+            "ts": "2026-04-27T12:00:00.000+00:00",
+            "target": label,
+            "payload": {
+                "verdict": "accepted",
+                "verification_hash": vh,
+                "verification_report": report,
+                "repair_hint": "",
+            },
+        }
+        shard = ws / "events" / "2026-04-27"
+        shard.mkdir(parents=True, exist_ok=True)
+        fname = format_filename(
+            iso_ms=eid.iso_ms,
+            event_type="verifier.run_completed",
+            target=label,
+            actor="verifier:codex-test",
+            seq=eid.seq,
+            uid=eid.uid,
+        )
+        atomic_write_event(shard / fname, json.dumps(body).encode("utf-8"))
+
+
 def test_theorems_status_vocabulary(tmp_path: Path) -> None:
     """Every node-status keyword in the §M9 vocabulary is reachable."""
     _init_ws(tmp_path)
@@ -159,17 +209,11 @@ def test_theorems_status_vocabulary(tmp_path: Path) -> None:
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)
 
-    # Bump def:x to pass_count=1 so theorems can be "needs_verification";
-    # bump thm:t2 to pass_count=3 so it's "done".
-    import kuzu
-    db = kuzu.Database(str(tmp_path / "knowledge_base" / "nodes"))
-    conn = kuzu.Connection(db)
-    try:
-        conn.execute("MATCH (n:Node {label: 'def:x'}) SET n.pass_count = 1")
-        conn.execute("MATCH (n:Node {label: 'thm:t2'}) SET n.pass_count = 3")
-    finally:
-        del conn
-        del db
+    # §13 (no Kuzu): bump pass_count by publishing accepting verifier events —
+    # the projection is rebuilt from events/, so there is no store to poke.
+    # def:x -> 1 (so its dependents can be "needs_verification"); thm:t2 -> 3 ("done").
+    _bump_pass_count(tmp_path, "def:x", 1)
+    _bump_pass_count(tmp_path, "thm:t2", 3)
 
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)

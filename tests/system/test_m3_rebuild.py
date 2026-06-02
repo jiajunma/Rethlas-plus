@@ -55,8 +55,11 @@ def test_rebuild_takes_lock_and_produces_projection(tmp_path: Path) -> None:
     r = _run("--workspace", str(tmp_path), "rebuild")
     assert r.returncode == 0, r.stderr
     assert "rebuild complete" in r.stdout
-    # dag.kz exists under knowledge_base/
-    assert (tmp_path / "knowledge_base" / "dag.kz").exists()
+    # §13: the projection is markdown node files under knowledge_base/nodes/
+    # (no Kuzu / dag.kz).
+    assert list((tmp_path / "knowledge_base" / "nodes").glob("*.md")), (
+        "rebuild should render markdown node files"
+    )
     # rebuild flag cleared on clean exit
     assert not (tmp_path / "runtime/state/rebuild_in_progress.flag").exists()
 
