@@ -404,7 +404,7 @@ because the *how* of continuing is now the generation agent's adaptive loop.)
 
 | skill | from Rethlas-original | KB-version change |
 |---|---|---|
-| `query-kb` | replaces `search-math-results` | **only basis source: returns verified nodes. No `sources` / literature.** |
+| `query-kb` | replaces `search-math-results` | **only basis source** (verified nodes, no literature). KB-search **skill**: composes lexical `kb_grep` (甲) + dependency-graph walk (丙) + knowledge-driven label-guessing (`kb_node`), LLM judges relevance. No embeddings, no ranking service (§13.4). |
 | `propose-subgoal-decomposition-plans` | kept | subgoals = candidate new staged nodes |
 | `direct-proving` | kept | premises restricted to verified nodes |
 | `recursive-proving` | kept | one sub-prover per plan; surviving subgoals land as staged nodes |
@@ -437,12 +437,29 @@ and emits its decision as an event; it never writes proof content.
 
 Two hard constraints:
 
-1. **No graph database. The durable KB is plain markdown files in the
-   filesystem** — one file per node, state and dependencies in YAML frontmatter,
-   statement and proof in the body (the mdblueprint model of §1: "mdblueprint is
-   the durable KB"; node state such as `pass_count` lives in frontmatter, per
-   ARCHITECTURE §5.4 `nodes/*.md`). **No Kuzu, no `dag.kz`, no database process**
-   is required by this design — everything lives on the filesystem as markdown.
+1. **Kuzu is removed entirely** — **no `dag.kz`, no graph database** anywhere.
+   This supersedes the §4.1/§5 Kuzu-backed projection.
+
+   **The knowledge base *is* exactly the markdown math nodes** — the durable body
+   of mathematics, one file per node: `label`, `kind`, `pass_count`,
+   `statement_hash`, `verification_hash`, `depends_on` (frontmatter) plus the
+   `statement` / `proof` / `remark` / `source_note` body (the mdblueprint model of
+   §1; `pass_count` per ARCHITECTURE §5.4 `nodes/*.md`). **Nothing else is the
+   KB.** Agents read these via the read MCP tools.
+
+   Two supporting stores live in the **workspace, not the KB** (§1 boundary):
+   - **`events/`** — the append-only truth journal + audit + rebuild source.
+   - **in-memory operational projection** — rebuilt by replaying `events/` at
+     startup (no DB, no persistence). Holds the runtime fields markdown does not
+     carry: `repair_count`, `verification_report`, `repair_hint`,
+     `introduced_by_actor`. Used by coordinator / regulator / §6 triggers; the
+     latest `verification_report` / `repair_hint` reach the prover via job
+     dispatch, not markdown.
+
+   Every former Kuzu read path (`common/kb/kuzu_backend.py`,
+   `common/kb/interface.py` `KBReader`, `librarian/query_server.py`, the
+   projector's Kuzu writes) is replaced by reading the markdown KB (math) or the
+   workspace operational projection (runtime fields).
 2. **Agents reach the KB only through MCP tools** — never by reading or writing
    those markdown files directly. MCP mediation is what guarantees the KB contract
    (frontmatter schema, label rules, dependency well-formedness,
@@ -455,23 +472,48 @@ surfaces, matching the §1 workspace ↔ KB boundary:
 
 - **Workspace memory MCP** (existing, transient): `memory_init`, `memory_append`,
   `memory_search`, `branch_update`. Channels `failed_paths`, `toy_examples`,
-  `branch_states`, … — never durable truth.
+  `branch_states`, … — never durable truth. **All run-related logs and runtime
+  artifacts live only in the workspace**, mirroring Rethlas-original's per-problem
+  `memory/{id}/` + `logs/`: the per-Goal reasoning trace, agent run logs, and
+  verifier reports-as-logs stay workspace-local and never enter the KB. (The
+  in-memory operational projection of §13.4 constraint 1 is rebuilt from the
+  workspace `events/`; it is not a separate persisted store.)
 - **Durable KB MCP** (new): reads/writes the markdown KB; agents see only
   contract-conformant projections.
 
-**Read tools** parse the markdown KB through a shared parser/projector (the same
-code that enforces the frontmatter contract), returning only contract-conformant
-views — so an agent *cannot* read an unverified node's proof and treat it as
-basis (`kb_query_verified` returns only `pass_count ≥ 1` nodes):
+**Read tools are dumb primitives** — there is **no ranking service**. They parse
+the markdown KB through a shared parser/projector (the same code that enforces
+the frontmatter contract) and return only contract-conformant views — so an agent
+*cannot* read an unverified node's proof and treat it as basis (`kb_grep` /
+`kb_list_verified` only ever surface `pass_count ≥ 1` nodes):
 
-- `kb_query_verified(goal, …)` — verified nodes relevant to the Goal (the basis)
+- `kb_grep(query)` — lexical (keyword/BM25) match over **verified** node
+  statements; returns matching labels + statements. *(甲)*
 - `kb_node(label)` — statement / kind / `pass_count` / deps for one node
-- `kb_dependencies(label)`, `kb_dependents(label)`
-- `kb_list_staged()` — staged nodes (Goal / subgoal candidates)
+- `kb_dependencies(label)`, `kb_dependents(label)` — walk the dependency
+  graph. *(丙)*
+- `kb_list_verified()` / `kb_list_staged()` — enumerate by state
 
 Markdown files are safe to read concurrently, so reads need no central process;
 they go through the shared read library so the contract/projection logic stays in
 one place.
+
+**KB search itself is a skill, not a service.** The `query-kb` skill (LLM,
+generation agent) *composes* these primitives — exactly the Rethlas-original
+style. Three retrieval modalities, all driven by the agent:
+
+- **(甲) lexical** — `kb_grep` for terms drawn from the Goal.
+- **(丙) graph** — follow `kb_dependencies` / `kb_dependents` from the hits and
+  from the Goal's own deps to pull neighbours.
+- **(knowledge + name-guessing)** — labels are semantic (`lem:best_response_continuous`,
+  `def:simplex`…), so the agent **guesses plausible labels from its own
+  mathematical knowledge** and probes them with `kb_node(guessed_label)`; a hit is
+  a direct find, a miss costs nothing.
+
+The agent's mathematical knowledge then judges which candidates from any modality
+are genuinely usable premises and folds them into the decomposition. **No
+embeddings, no learned ranker** — the relevance judgement (and the label guesses)
+are the LLM's; the primitives are mechanical.
 
 **Write tools** never edit markdown directly. They submit a proposed change as an
 append-only event; the **librarian remains the sole writer** of the markdown KB
@@ -501,18 +543,25 @@ workspace memory and never enters the KB.
 
 ### 13.6 Revised implementation order (supersedes §12 steps 4–7)
 
-1. A shared markdown parser/projector for the KB (frontmatter contract +
-   `pass_count` filter), then durable-KB MCP **read** tools over it (`kb_node`,
+1. **Markdown read library** (`common/kb/`, Kuzu-free): parse a node `.md` back
+   into a read projection (inverse of `librarian/renderer.render_node`);
+   `read_node`, `list_nodes`, `query_verified` (`pass_count ≥ 1`), `list_staged`
+   (`pass_count ≤ 0`), `dependencies_of`. Round-trip tested against the renderer.
+2. **Replace the Kuzu projection**: repoint `librarian/projector.py` from Kuzu
+   writes to (a) rendering markdown (math) and (b) an in-memory operational
+   projection rebuilt from `events/` (`repair_count`, verifier feedback,
+   `introduced_by_actor`). Retire `kuzu_backend.py` / `KBReader` /
+   `query_server.py`.
+3. Durable-KB MCP **read** tools over the markdown library (`kb_node`,
    `kb_query_verified`, `kb_list_staged`, deps) + the `query-kb` skill.
-2. Durable-KB MCP **write** tools that submit events to the librarian (sole writer
+4. Durable-KB MCP **write** tools that submit events to the librarian (sole writer
    of markdown), returning admission verdicts (`kb_propose_subgoal`,
    `kb_submit_proof`, `kb_propose_counterexample`).
-3. Generation agent skill set: port the Rethlas-original skills **minus**
+5. Generation agent skill set: port the Rethlas-original skills **minus**
    `search-math-results`, repointing all premise access to `query-kb`.
-4. Verification agent skill set: harden `check-referenced-statements` to the
+6. Verification agent skill set: harden `check-referenced-statements` to the
    verified-only rule.
-5. Coordinator goal-selection lane: pick a staged node, run the adaptive loop,
-   let the verdict drive the §6 triggers.
-6. Regulator agent: the continue-vs-stop gate (`assess-progress` /
-   `decide-continue-or-escalate`), wired into the §6 trigger layer and the
-   dashboard's Human Attention surface so a `stop` pauses the Goal for the user.
+7. Coordinator goal-selection lane + Regulator agent: pick a staged node, run the
+   adaptive loop, let the verdict drive the §6 triggers; the regulator
+   (`assess-progress` / `decide-continue-or-escalate`) gates continue-vs-stop and
+   wires into the dashboard's Human Attention surface.
