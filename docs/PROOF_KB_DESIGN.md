@@ -340,3 +340,179 @@ migration story in issue #159 §"Migration").
 Each numbered step is a separate PR. The pipeline degrades gracefully: even
 if only steps 1–4 ship, you get one-plan-per-theorem with explicit plans, and
 the rest of the existing Rethlas loop keeps working.
+
+## 13. Addendum (2026-06-02) — KB-grounded goal-directed proving via skill-toolbox agents
+
+This addendum revises §2 after studying two reference systems:
+`~/mycodes/QED` (a decomposer → single-prover → verifier → regulator pipeline)
+and `~/mycodes/Rethlas-original` (two Codex agents — *generation* and
+*verification* — each a **skill toolbox** driven by an adaptive control loop).
+
+We adopt the **Rethlas-original** structure, and we **drop the external-literature
+("sources") path entirely**: on the KB, the only admissible basis is the set of
+already-verified nodes. There is no arXiv / literature retrieval and no `sources`
+section in any plan.
+
+### 13.1 Control model — skill toolbox + adaptive loop (revises §2)
+
+§2 split planning, decomposition, and proving into separate agents. We instead
+follow Rethlas-original: **the unit of work is one staged Goal node**, handled by
+a single *generation (prover) agent* whose internal control loop chooses among
+skills adaptively (no fixed decompose → prove → verify order).
+
+This is **not** the cross-cutting "super agent" forbidden in §2 — its scope is
+exactly one Goal node. Decomposition, direct proving, recursive proving,
+counterexample construction, and failure analysis become **skills**, not separate
+durable-truth writers. (Durable truth is still librarian-only; see §13.4.)
+
+The "证不出来退回 decomposer" behaviour is **automated recovery inside one Goal**
+and is just an arc of the generation agent's adaptive loop — no extra agent for
+that part:
+
+```text
+direct-proving fails → recursive-proving fails → identify-key-failures
+  → propose-subgoal-decomposition-plans (new generation of plans)
+```
+
+What *does* need its own agent is the **continue-vs-stop decision**. A separate
+**regulator** agent owns it: given accumulated evidence (repeated failures,
+`repair_count`, per-Goal budget, whether recent rounds produced any *fresh*
+progress), it decides either to **continue** (let the adaptive loop run another
+generation) or to **stop and escalate to the user for help** (raise Human
+Attention and pause the Goal). The regulator does **no proving** and writes no
+proof content — its one job is the continue / stop-and-ask-human call. It is the
+soft-judgement complement to the deterministic §6 hard triggers (coordinator
+Python): hard triggers fire mechanically (`repair_count > cap`, budget exhausted,
+admitted CEX on a subgoal); the regulator judges whether more autonomous effort is
+worthwhile or the human should be pulled in. (This is QED's regulator narrowed:
+its REVISE_*/FINAL branches collapse to "continue" vs "stop-and-ask-human",
+because the *how* of continuing is now the generation agent's adaptive loop.)
+
+### 13.2 Node states — grounds "staged" / "verified" in §5.4 `pass_count`
+
+- **staged** — statement admitted, proof pending: `pass_count ≤ 0`
+  (`-1` = no proof drafted yet; `0` = proof drafted, unverified). A staged node is
+  either the Goal or an as-yet-unproven subgoal.
+- **verified** — `pass_count ≥ 1`; the only nodes written to
+  `knowledge_base/nodes/*.md`; the sole admissible basis.
+- A **Goal** is a staged node selected by the coordinator (a §6 hard/soft trigger,
+  or an operator pick from the dashboard).
+
+### 13.3 Two agents, each a skill toolbox
+
+**Generation (prover) agent** — dispatched with `Goal = one staged node`:
+
+| skill | from Rethlas-original | KB-version change |
+|---|---|---|
+| `query-kb` | replaces `search-math-results` | **only basis source: returns verified nodes. No `sources` / literature.** |
+| `propose-subgoal-decomposition-plans` | kept | subgoals = candidate new staged nodes |
+| `direct-proving` | kept | premises restricted to verified nodes |
+| `recursive-proving` | kept | one sub-prover per plan; surviving subgoals land as staged nodes |
+| `identify-key-failures` | kept | the "退回 decomposer" arc → regenerate plans |
+| `construct-counterexamples` | kept | feeds the §5 counterexample lifecycle |
+| `construct-toy-examples`, `obtain-immediate-conclusions` | kept | workspace-only scratch |
+| `verify-proof` | kept | calls the verification agent |
+| ~~`search-math-results`~~ | **dropped** | no external literature |
+
+**Verification agent:**
+
+| skill | KB-version meaning |
+|---|---|
+| `check-referenced-statements` | hardened: confirm every cited premise is a verified KB node → enforces "basis = verified" |
+| `verify-sequential-statements` | step-by-step logical check |
+| `synthesize-verification-report` | verdict ∈ {accepted, gap, critical} + `repair_hint` |
+
+**Regulator agent** — the continue-vs-stop gate (one decision, no proving):
+
+| skill | meaning |
+|---|---|
+| `assess-progress` | read the Goal's failure history, `repair_count`, per-Goal budget, and a fresh-progress signal (did the last rounds add anything new?) |
+| `decide-continue-or-escalate` | emit `continue` (run the adaptive loop another generation) **or** `stop` (raise Human Attention, pause the Goal, hand to the user) |
+
+This is the §2 `triage` role, narrowed to the continue / stop-and-ask-human
+judgement. It reads KB / workspace state through the same read MCP tools (§13.4)
+and emits its decision as an event; it never writes proof content.
+
+### 13.4 Storage is markdown in the filesystem; all KB I/O is MCP-mediated (hard constraints)
+
+Two hard constraints:
+
+1. **No graph database. The durable KB is plain markdown files in the
+   filesystem** — one file per node, state and dependencies in YAML frontmatter,
+   statement and proof in the body (the mdblueprint model of §1: "mdblueprint is
+   the durable KB"; node state such as `pass_count` lives in frontmatter, per
+   ARCHITECTURE §5.4 `nodes/*.md`). **No Kuzu, no `dag.kz`, no database process**
+   is required by this design — everything lives on the filesystem as markdown.
+2. **Agents reach the KB only through MCP tools** — never by reading or writing
+   those markdown files directly. MCP mediation is what guarantees the KB contract
+   (frontmatter schema, label rules, dependency well-formedness,
+   premise-is-verified, CEX-conflict) holds on **every** read and write.
+
+This extends the existing FastMCP `reasoning-agent` server
+(`agents/generation/mcp/server.py`, today exposing the transient `memory_*` /
+`branch_update` workspace tools) with a durable-KB surface. Two distinct MCP
+surfaces, matching the §1 workspace ↔ KB boundary:
+
+- **Workspace memory MCP** (existing, transient): `memory_init`, `memory_append`,
+  `memory_search`, `branch_update`. Channels `failed_paths`, `toy_examples`,
+  `branch_states`, … — never durable truth.
+- **Durable KB MCP** (new): reads/writes the markdown KB; agents see only
+  contract-conformant projections.
+
+**Read tools** parse the markdown KB through a shared parser/projector (the same
+code that enforces the frontmatter contract), returning only contract-conformant
+views — so an agent *cannot* read an unverified node's proof and treat it as
+basis (`kb_query_verified` returns only `pass_count ≥ 1` nodes):
+
+- `kb_query_verified(goal, …)` — verified nodes relevant to the Goal (the basis)
+- `kb_node(label)` — statement / kind / `pass_count` / deps for one node
+- `kb_dependencies(label)`, `kb_dependents(label)`
+- `kb_list_staged()` — staged nodes (Goal / subgoal candidates)
+
+Markdown files are safe to read concurrently, so reads need no central process;
+they go through the shared read library so the contract/projection logic stays in
+one place.
+
+**Write tools** never edit markdown directly. They submit a proposed change as an
+append-only event; the **librarian remains the sole writer** of the markdown KB
+and runs admission before creating or updating any file. Each tool returns the
+admission verdict so the agent learns whether its write met the contract:
+
+- `kb_propose_subgoal(…)` → `decomposition.proposed` → new staged node file
+- `kb_submit_proof(label, proof, premise_refs)` → `proof_attempt.drafted` → proof
+  body written onto the node file
+- `kb_propose_counterexample(…)` → `counterexample.proposed` → counterexample file
+
+On admission the librarian writes/updates the markdown node file (frontmatter +
+body) and flips `pass_count` as the verifier verdict dictates. The `query-kb` and
+`verify-proof` skills are thin wrappers over these MCP tools. **There is no file
+path from any agent to durable truth** — agents emit proposals; the librarian
+writes markdown.
+
+### 13.5 Subgoal → durable-node bridge
+
+Rethlas-original keeps subgoals in a transient per-problem `subgoals` memory
+channel and assembles a single blueprint. Here, a subgoal that survives screening
+is **admitted as a durable staged node** via `kb_propose_subgoal`; once its proof
+is accepted it flips to verified and joins the basis for *future* Goals.
+Plan-local helpers may later be promoted topic-wide by the §10 promoter.
+Transient reasoning (failed paths, toy examples, branch states) stays in
+workspace memory and never enters the KB.
+
+### 13.6 Revised implementation order (supersedes §12 steps 4–7)
+
+1. A shared markdown parser/projector for the KB (frontmatter contract +
+   `pass_count` filter), then durable-KB MCP **read** tools over it (`kb_node`,
+   `kb_query_verified`, `kb_list_staged`, deps) + the `query-kb` skill.
+2. Durable-KB MCP **write** tools that submit events to the librarian (sole writer
+   of markdown), returning admission verdicts (`kb_propose_subgoal`,
+   `kb_submit_proof`, `kb_propose_counterexample`).
+3. Generation agent skill set: port the Rethlas-original skills **minus**
+   `search-math-results`, repointing all premise access to `query-kb`.
+4. Verification agent skill set: harden `check-referenced-statements` to the
+   verified-only rule.
+5. Coordinator goal-selection lane: pick a staged node, run the adaptive loop,
+   let the verdict drive the §6 triggers.
+6. Regulator agent: the continue-vs-stop gate (`assess-progress` /
+   `decide-continue-or-escalate`), wired into the §6 trigger layer and the
+   dashboard's Human Attention surface so a `stop` pauses the Goal for the user.
