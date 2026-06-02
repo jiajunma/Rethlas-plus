@@ -87,6 +87,56 @@ def _record_rejection(
     )
 
 
+def _report_from_log(log_path: Path):
+    raw = log_path.read_text(encoding="utf-8", errors="replace")
+    return parse_referee_report(raw)
+
+
+def _publish_parsed_report(*, workspace: Path, actor: str, target: str, report) -> dict:
+    report_dict = report.to_dict()
+    payload = report.event_payload(report_hash=event_artifact_hash(report_dict))
+    return _publish_report(
+        workspace=workspace,
+        actor=actor,
+        target=report.target if report.target else target,
+        payload=payload,
+    )
+
+
+def _try_publish_report_from_log(
+    *,
+    workspace: Path,
+    job_path: Path,
+    log_path: Path,
+    actor: str,
+    target: str,
+) -> bool:
+    """Publish a complete report already emitted before a Codex transport failure.
+
+    Real Codex runs can disconnect after the model has written a valid JSON
+    report into the merged log. Treat that as a completed referee response
+    instead of discarding the review as a crashed job.
+    """
+    try:
+        report = _report_from_log(log_path)
+    except RefereeDecodeError:
+        return False
+    body = _publish_parsed_report(
+        workspace=workspace,
+        actor=actor,
+        target=target,
+        report=report,
+    )
+    update_role_job_file(
+        job_path,
+        status=STATUS_PUBLISHING,
+        detail=f"event_id={body['event_id']} salvaged_from_log",
+        output_event_id=body["event_id"],
+    )
+    sys.stdout.write(f"published {body['event_id']} referee_report\n")
+    return True
+
+
 def _heartbeat_interval_s() -> float:
     raw = os.environ.get("RETHLAS_REFEREE_HEARTBEAT_S")
     if raw:
@@ -156,16 +206,31 @@ def main(argv: list[str] | None = None) -> int:
             cwd=codex_cwd,
         )
     if outcome.timed_out:
+        if _try_publish_report_from_log(
+            workspace=workspace,
+            job_path=job_path,
+            log_path=log_path,
+            actor=args.actor,
+            target=rec.target,
+        ):
+            return 0
         sys.stderr.write("referee: codex timed out\n")
         return 124
     if outcome.exit_code != 0:
+        if _try_publish_report_from_log(
+            workspace=workspace,
+            job_path=job_path,
+            log_path=log_path,
+            actor=args.actor,
+            target=rec.target,
+        ):
+            return 0
         detail = f"codex exit={outcome.exit_code}"
         update_role_job_file(job_path, status=STATUS_CRASHED, detail=detail)
         return outcome.exit_code
 
-    raw = log_path.read_text(encoding="utf-8", errors="replace")
     try:
-        report = parse_referee_report(raw)
+        report = _report_from_log(log_path)
     except RefereeDecodeError as exc:
         _record_rejection(
             workspace=workspace,
@@ -180,13 +245,11 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"referee: rejected: {exc}\n")
         return 3
 
-    report_dict = report.to_dict()
-    payload = report.event_payload(report_hash=event_artifact_hash(report_dict))
-    body = _publish_report(
+    body = _publish_parsed_report(
         workspace=workspace,
         actor=args.actor,
-        target=report.target if report.target else rec.target,
-        payload=payload,
+        target=rec.target,
+        report=report,
     )
     update_role_job_file(
         job_path,

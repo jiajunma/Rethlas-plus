@@ -24,7 +24,8 @@ from pathlib import Path
 
 import pytest
 
-from common.runtime.jobs import JobRecord, write_job_file
+from common.runtime.jobs import JobRecord, STATUS_PUBLISHING, write_job_file
+from common.runtime.jobs_v2 import RoleJobRecord, write_role_job_file
 from coordinator.heartbeat import (
     CoordinatorHeartbeat,
     STATUS_RUNNING,
@@ -152,6 +153,35 @@ def test_active_endpoint_ignores_terminal_jobs(tmp_path: Path) -> None:
         parsed = json.loads(body)
         assert parsed["count"] == 0
         assert parsed["jobs"] == []
+
+
+def test_active_endpoint_separates_dead_phase3_role_jobs(tmp_path: Path) -> None:
+    _init_ws(tmp_path)
+    rec = RoleJobRecord(
+        job_id="learn-20260505T120000.000-deadbeefdeadbeef",
+        kind="learner",
+        mode="learn_source_spans",
+        target="src:toy#spans",
+        context_hash="sha256:" + "a" * 64,
+        dispatch_hash="sha256:" + "a" * 64,
+        pid=99999999,
+        pgid=99999999,
+        started_at="2026-05-05T12:00:00.000Z",
+        updated_at="2026-05-05T12:00:10.000Z",
+        status=STATUS_PUBLISHING,
+        log_path=str(tmp_path / "runtime" / "logs" / "learn.codex.log"),
+        output_event_id="20260505T120010.000-0001-deadbeefdeadbeef",
+    )
+    write_role_job_file(tmp_path / "runtime" / "jobs" / f"{rec.job_id}.json", rec)
+    with _ServerCtx(tmp_path) as ctx:
+        code, _hdrs, body = ctx.get("/api/active")
+        assert code == 200
+        parsed = json.loads(body)
+        assert parsed["count"] == 0
+        assert parsed["jobs"] == []
+        assert parsed["stale_count"] == 1
+        assert parsed["stale_jobs"][0]["job_id"] == rec.job_id
+        assert parsed["stale_jobs"][0]["pid_alive"] is False
 
 
 def test_rebuild_in_progress_returns_503(tmp_path: Path) -> None:

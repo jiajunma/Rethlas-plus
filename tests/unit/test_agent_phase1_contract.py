@@ -166,6 +166,14 @@ def test_init_materializes_agents_into_workspace(tmp_path) -> None:
     ):
         assert marker.exists(), f"materialized agent tree missing {marker}"
 
+    for skill in (
+        learner_dir / ".agents" / "skills" / "rethlas-learner" / "SKILL.md",
+        referee_dir / ".agents" / "skills" / "rethlas-referee" / "SKILL.md",
+    ):
+        text = skill.read_text(encoding="utf-8")
+        assert text.startswith("---\n"), f"{skill} must have Codex skill YAML frontmatter"
+        assert "\n---\n" in text[4:], f"{skill} frontmatter must be closed"
+
     # H22 also requires that runtime-only directories are NOT carried
     # into the workspace copy — they pollute and may leak prior runs.
     for forbidden in (

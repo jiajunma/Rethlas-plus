@@ -145,7 +145,11 @@ def run_codex(
 
     t = threading.Thread(target=watchdog, daemon=True)
     t.start()
-    proc.wait()
+    try:
+        proc.wait()
+    except BaseException:
+        _kill_pgroup(proc)
+        raise
     duration = time.monotonic() - started
     # Give watchdog a moment to finish (it exits on poll).
     t.join(timeout=poll_real * 2)

@@ -7,7 +7,6 @@ from .server import (
     memory_search,
     sanitize_problem_id,
     search_arxiv_theorems,
-    verify_proof_service,
 )
 
 __all__ = [
@@ -19,5 +18,4 @@ __all__ = [
     "memory_search",
     "sanitize_problem_id",
     "search_arxiv_theorems",
-    "verify_proof_service",
 ]

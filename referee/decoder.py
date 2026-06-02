@@ -55,6 +55,65 @@ _CHECKED_CITATION_STATUSES = frozenset(
         "not_applicable",
     }
 )
+_THEOREM_NODE_KINDS = frozenset(
+    {
+        "definition",
+        "external_theorem",
+        "lemma",
+        "theorem",
+        "proposition",
+        "assumption",
+        "conjecture",
+        "corollary",
+        "remark",
+        "bridge_request",
+        "typo",
+    }
+)
+_THEOREM_NODE_EXTRACTION_KINDS = frozenset(
+    {
+        "explicit_environment",
+        "implicit_paragraph",
+        "proof_step",
+        "review_inferred",
+    }
+)
+_THEOREM_NODE_STATUSES = frozenset(
+    {
+        "proved",
+        "conditional",
+        "conjectural",
+        "assumed",
+        "gap",
+        "wrong",
+        "context",
+        "source_claim",
+        "review_only",
+    }
+)
+_THEOREM_EDGE_RELATIONS = frozenset(
+    {
+        "uses",
+        "assumes",
+        "depends_on",
+        "proves",
+        "reduces_to",
+        "needs_bridge",
+        "supports_verdict",
+        "cites",
+        "proves_injectivity",
+        "proves_exhaustivity",
+    }
+)
+_TYPO_FINDING_SEVERITIES = frozenset(
+    {
+        "blocking",
+        "major",
+        "minor",
+        "editorial",
+        "ocr_uncertain",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +133,10 @@ class RefereeReport:
     counterexample_attempts: tuple[dict[str, Any], ...]
     external_reference_checks: tuple[dict[str, Any], ...]
     extraction_quality_checks: tuple[dict[str, Any], ...]
+    theorem_nodes: tuple[dict[str, Any], ...]
+    theorem_dependency_edges: tuple[dict[str, Any], ...]
+    node_location_notes: tuple[dict[str, Any], ...]
+    typo_findings: tuple[dict[str, Any], ...]
     recommended_kb_updates: tuple[dict[str, Any], ...]
     summary: str
 
@@ -121,6 +184,10 @@ class RefereeReport:
             "counterexample_attempts": list(self.counterexample_attempts),
             "external_reference_checks": list(self.external_reference_checks),
             "extraction_quality_checks": list(self.extraction_quality_checks),
+            "theorem_nodes": list(self.theorem_nodes),
+            "theorem_dependency_edges": list(self.theorem_dependency_edges),
+            "node_location_notes": list(self.node_location_notes),
+            "typo_findings": list(self.typo_findings),
             "recommended_kb_updates": list(self.recommended_kb_updates),
             "summary": self.summary,
         }
@@ -172,12 +239,20 @@ def _validate_report(data: dict[str, Any]) -> RefereeReport:
     counterexample_attempts = _optional_list(data, "counterexample_attempts")
     external_reference_checks = _optional_list(data, "external_reference_checks")
     extraction_quality_checks = _optional_list(data, "extraction_quality_checks")
+    theorem_nodes = _optional_list(data, "theorem_nodes")
+    theorem_dependency_edges = _optional_list(data, "theorem_dependency_edges")
+    node_location_notes = _optional_list(data, "node_location_notes")
+    typo_findings = _optional_list(data, "typo_findings")
     recommended_kb_updates = _optional_list(data, "recommended_kb_updates")
     summary = _optional_str(data, "summary")
 
     _validate_issues(issues)
     _validate_requested_details(requested_details)
     _validate_citation_checks(external_reference_checks)
+    _validate_theorem_nodes(theorem_nodes)
+    _validate_theorem_dependency_edges(theorem_dependency_edges)
+    _validate_node_location_notes(node_location_notes)
+    _validate_typo_findings(typo_findings)
 
     report = RefereeReport(
         review_id=review_id,
@@ -195,6 +270,10 @@ def _validate_report(data: dict[str, Any]) -> RefereeReport:
         counterexample_attempts=tuple(counterexample_attempts),
         external_reference_checks=tuple(external_reference_checks),
         extraction_quality_checks=tuple(extraction_quality_checks),
+        theorem_nodes=tuple(theorem_nodes),
+        theorem_dependency_edges=tuple(theorem_dependency_edges),
+        node_location_notes=tuple(node_location_notes),
+        typo_findings=tuple(typo_findings),
         recommended_kb_updates=tuple(recommended_kb_updates),
         summary=summary,
     )
@@ -285,6 +364,187 @@ def _validate_citation_checks(checks: list[Any]) -> None:
                     REASON_CITATION_EVIDENCE_REQUIRED,
                     "checked citation requires quoted/paraphrased statement summary",
                 )
+
+
+def _validate_theorem_nodes(nodes: list[Any]) -> None:
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise RefereeDecodeError(REASON_SCHEMA, "theorem_nodes[] must be objects")
+        label = node.get("label")
+        if not isinstance(label, str) or not label:
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[] entries must include label"
+            )
+        kind = node.get("kind", "")
+        if not isinstance(kind, str):
+            raise RefereeDecodeError(REASON_SCHEMA, "theorem_nodes[].kind must be a string")
+        if kind and kind not in _THEOREM_NODE_KINDS:
+            raise RefereeDecodeError(
+                REASON_SCHEMA, f"invalid theorem_nodes[].kind {kind!r}"
+            )
+        statement = node.get("statement")
+        if statement is not None and not isinstance(statement, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].statement must be a string"
+            )
+        for text_field in (
+            "source_excerpt",
+            "formula_excerpt",
+            "display_source_excerpt",
+            "display_formula_excerpt",
+            "typesetting_notes",
+        ):
+            value = node.get(text_field)
+            if value is not None and not isinstance(value, str):
+                raise RefereeDecodeError(
+                    REASON_SCHEMA, f"theorem_nodes[].{text_field} must be a string"
+                )
+        status = node.get("status")
+        if status is not None and not isinstance(status, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].status must be a string"
+            )
+        if status and status not in _THEOREM_NODE_STATUSES:
+            raise RefereeDecodeError(
+                REASON_SCHEMA, f"invalid theorem_nodes[].status {status!r}"
+            )
+        extraction_kind = node.get("extraction_kind")
+        if extraction_kind is not None and not isinstance(extraction_kind, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].extraction_kind must be a string"
+            )
+        if (
+            extraction_kind
+            and extraction_kind not in _THEOREM_NODE_EXTRACTION_KINDS
+        ):
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                f"invalid theorem_nodes[].extraction_kind {extraction_kind!r}",
+            )
+        source_locator = node.get("source_locator")
+        if source_locator is not None and not isinstance(source_locator, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].source_locator must be a string"
+            )
+        source_note = node.get("source_note")
+        if source_note is not None and not isinstance(source_note, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].source_note must be a string"
+            )
+        if extraction_kind == "implicit_paragraph":
+            if not source_locator:
+                raise RefereeDecodeError(
+                    REASON_SCHEMA,
+                    "implicit paragraph theorem_nodes[] require source_locator",
+                )
+            if not source_note:
+                raise RefereeDecodeError(
+                    REASON_SCHEMA,
+                    "implicit paragraph theorem_nodes[] require source_note",
+                )
+        promotion_confidence = node.get("promotion_confidence")
+        if promotion_confidence is not None and not isinstance(
+            promotion_confidence, (int, float)
+        ):
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                "theorem_nodes[].promotion_confidence must be a number",
+            )
+        if isinstance(promotion_confidence, (int, float)) and not (
+            0.0 <= promotion_confidence <= 1.0
+        ):
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                "theorem_nodes[].promotion_confidence must be between 0 and 1",
+            )
+        overpromotion_risk = node.get("overpromotion_risk")
+        if overpromotion_risk is not None and not isinstance(overpromotion_risk, bool):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].overpromotion_risk must be a boolean"
+            )
+        scope = node.get("scope")
+        if scope is not None and not isinstance(scope, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_nodes[].scope must be a string"
+            )
+        if kind == "external_theorem" and scope not in {"review_only", "kb_candidate"}:
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                "external theorem_nodes[] require scope=review_only or kb_candidate",
+            )
+
+
+def _validate_theorem_dependency_edges(edges: list[Any]) -> None:
+    for edge in edges:
+        if not isinstance(edge, dict):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_dependency_edges[] must be objects"
+            )
+        dependent = edge.get("dependent")
+        dependency = edge.get("dependency")
+        if not isinstance(dependent, str) or not dependent:
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                "theorem_dependency_edges[] entries must include dependent",
+            )
+        if not isinstance(dependency, str) or not dependency:
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                "theorem_dependency_edges[] entries must include dependency",
+            )
+        relation = edge.get("relation")
+        if relation is not None and not isinstance(relation, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "theorem_dependency_edges[].relation must be a string"
+            )
+        if relation and relation not in _THEOREM_EDGE_RELATIONS:
+            raise RefereeDecodeError(
+                REASON_SCHEMA,
+                f"invalid theorem_dependency_edges[].relation {relation!r}",
+            )
+
+
+def _validate_node_location_notes(notes: list[Any]) -> None:
+    for note in notes:
+        if not isinstance(note, dict):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "node_location_notes[] must be objects"
+            )
+        label = note.get("label")
+        if not isinstance(label, str) or not label:
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "node_location_notes[] entries must include label"
+            )
+        locator = note.get("locator")
+        if locator is not None and not isinstance(locator, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "node_location_notes[].locator must be a string"
+            )
+
+
+def _validate_typo_findings(findings: list[Any]) -> None:
+    for finding in findings:
+        if not isinstance(finding, dict):
+            raise RefereeDecodeError(REASON_SCHEMA, "typo_findings[] must be objects")
+        typo_id = finding.get("typo_id") or finding.get("id")
+        if not isinstance(typo_id, str) or not typo_id:
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "typo_findings[] entries must include typo_id"
+            )
+        severity = finding.get("severity")
+        if severity is not None and not isinstance(severity, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "typo_findings[].severity must be a string"
+            )
+        if severity and severity not in _TYPO_FINDING_SEVERITIES:
+            raise RefereeDecodeError(
+                REASON_SCHEMA, f"invalid typo_findings[].severity {severity!r}"
+            )
+        locator = finding.get("locator")
+        if locator is not None and not isinstance(locator, str):
+            raise RefereeDecodeError(
+                REASON_SCHEMA, "typo_findings[].locator must be a string"
+            )
 
 
 def _require_str(data: dict[str, Any], key: str) -> str:

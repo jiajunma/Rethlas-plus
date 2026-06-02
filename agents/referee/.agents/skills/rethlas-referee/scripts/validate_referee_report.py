@@ -21,7 +21,13 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"invalid: {exc.reason}: {exc.detail}\n")
         return 1
     sys.stdout.write(
-        f"ok: {report.review_id} verdict={report.verdict} blocks={report.blocks_acceptance}\n"
+        "ok: "
+        f"{report.review_id} verdict={report.verdict} "
+        f"blocks={report.blocks_acceptance} "
+        f"theorem_nodes={len(report.theorem_nodes)} "
+        f"dependency_edges={len(report.theorem_dependency_edges)} "
+        f"location_notes={len(report.node_location_notes)} "
+        f"typos={len(report.typo_findings)}\n"
     )
     return 0
 

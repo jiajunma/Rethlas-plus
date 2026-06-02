@@ -247,6 +247,7 @@ class Projector:
                         "source_id": payload.get("source_id", ""),
                         "run_id": payload.get("learner_run", ""),
                         "context_hash": payload.get("context_hash", ""),
+                        "learning_contract": payload.get("learning_contract", {}),
                         "source_spans": payload.get("source_spans", []),
                         "notation_contexts": payload.get("notation_contexts", []),
                         "candidate_nodes": payload.get("candidate_nodes", []),

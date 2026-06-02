@@ -1,70 +1,56 @@
+---
+name: rethlas-learner
+description: Learn mathematical facts from supplied source spans into a Rethlas learner_batch_v1 JSON batch with source provenance, proof skeletons, dependencies, notation contexts, bridge requests, and verification requests.
+---
+
 # Rethlas Learner
 
-Use this skill when learning mathematical facts from a source span packet into
-Rethlas candidate node batches.
+Use only the source spans and context packet in the prompt. Do not search or
+read workspace files unless an exact path appears in `allowed_read_paths`.
 
-## Workflow
+Return exactly one raw JSON object with `output_schema: "learner_batch_v1"`.
+Use the prompted `run_id`, `context_hash`, `source_id`, every cited
+`span_id`, and every cited `span_hash` exactly. If the prompt has a non-empty
+`learning_contract`, echo it exactly. Candidate nodes use `kind`, not `type`.
 
-1. Read the context packet and preserve every supplied `span_hash`.
-2. Extract definitions, notation, theorem statements, examples, proof skeletons,
-   proof dependencies, and citation needs only from supplied source spans.
-3. Map each candidate to a descriptive Rethlas label with the correct prefix.
-4. Attach source provenance to every candidate node:
+Every candidate node must include `source_refs` entries with exact `span_id`
+and `span_hash` values from `source_spans`. Every `proof_steps[].source_ref`
+that you include must also carry exact `span_id` and `span_hash`.
 
-```json
-{"span_id": "span:...", "span_hash": "sha256:..."}
-```
+If `notation_context.expected_labels` has one label, emit exactly one
+candidate node with that label. Use canonical notation from
+`notation_context.canonical_symbols` in `statement`, `proof`, and
+`proof_steps`; keep OCR/source variants only in `notation_contexts` or
+`source_note`. Keep neighboring remarks or examples out of a definition
+statement unless the expected label targets them.
 
-5. For every lemma/proposition/theorem, reconstruct the proof logic as far as
-   the source permits:
-   - include `proof` unless the span truly gives statement only;
-   - include `proof_status`;
-   - include `proof_steps` when this helps preserve the source proof structure;
-   - include `depends_on` and `dependency_edges` for source dependencies.
-6. Treat citations inside an already published source as provisional
-   published-source premises during study. Do not block extraction because
-   `[R1]`, `[Z]`, or another reference is not locally available. Reconstruct
-   the cited statement from the local context as accurately as possible and
-   record loose citation details as an issue only when they affect the
-   recovered statement.
-7. Use surrounding paragraphs, notation setup, and proof usage to determine the
-   correct statement. The displayed theorem line alone is often insufficient.
-8. Emit verification requests instead of marking candidates verified.
-9. Emit bridge requests for skipped proof steps instead of invoking generator
-   directly.
-10. Emit issues for ambiguous notation, missing dependencies, low-confidence OCR,
-   or manual transcription needs.
+For every lemma/proposition/theorem candidate, include source-backed `proof`,
+`proof_status`, non-empty `proof_steps`, `depends_on`, and dependency edges when
+the span supplies proof logic. In strict proof-capture mode, a statement-only
+proof node must include `statement_only_reason` and be blocked by a
+`bridge_requests[]` entry with `for_label` or `blocks` naming the candidate, or
+by an `issues[]` entry naming the candidate.
 
-## Required Output
+Definitions require `verification_requests[]` with `kind: "verify_definition"`.
+External theorems require `kind: "verify_external_theorem"` and source/citation
+provenance.
 
-Return one raw JSON object with `output_schema: "learner_batch_v1"`. Do not wrap
-it in markdown.
-
-Definitions require:
-
-```json
-{"target": "def:...", "kind": "verify_definition"}
-```
-
-External theorems require:
-
-```json
-{"target": "ext:...", "kind": "verify_external_theorem"}
-```
-
-Proof-requiring candidates should look like:
+Minimal output shape:
 
 ```json
 {
-  "label": "lem:...",
-  "kind": "lemma",
-  "statement": "...",
-  "proof": "Source-backed proof skeleton...",
-  "proof_status": "proof_sketch_extracted",
-  "proof_steps": [
-    {"step": "Reduce to ...", "source_ref": {"span_id": "span:...", "span_hash": "sha256:..."}}
-  ],
-  "depends_on": ["lem:..."],
-  "source_refs": [{"span_id": "span:...", "span_hash": "sha256:..."}]
+  "output_schema": "learner_batch_v1",
+  "source_id": "src:...",
+  "run_id": "learn_...",
+  "context_hash": "sha256:...",
+  "learning_contract": {},
+  "source_spans": [{"span_id": "span:...", "span_hash": "sha256:..."}],
+  "notation_contexts": [],
+  "candidate_nodes": [],
+  "dependency_edges": [],
+  "bridge_requests": [],
+  "verification_requests": [],
+  "issues": [],
+  "summary": ""
 }
 ```

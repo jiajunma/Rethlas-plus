@@ -148,3 +148,41 @@ def test_referee_role_publishes_report_and_reviews_artifact(
     assert body["type"] == "referee.review_completed"
     assert (tmp_path / "reviews" / "review_toy_001" / "review_completed.json").is_file()
     assert not (tmp_path / "knowledge_base" / "nodes" / "review_toy_001.md").exists()
+
+
+def test_referee_role_salvages_valid_report_from_failed_codex_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_workspace(tmp_path, seed_config=True)
+    monkeypatch.setenv("RETHLAS_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv(
+        "FAKE_CODEX_SCRIPT",
+        json.dumps(
+            {
+                "stdout_lines": [{"text": _referee_json(), "delay_s": 0.0}],
+                "stderr_lines": [{"text": "ERROR: Reconnecting... 1/5", "delay_s": 0.0}],
+                "exit_code": 1,
+            }
+        ),
+    )
+    job_id = _role_job(tmp_path, kind="referee", target="thm:toy", input_packet={"target": "thm:toy"})
+
+    rc = referee_role([
+        job_id,
+        "--codex-argv",
+        " ".join(fake_codex_argv()),
+        "--silent-timeout-s",
+        "5.0",
+        "--actor",
+        "referee:test",
+    ])
+
+    assert rc == 0
+    rec = read_role_job_file(tmp_path / "runtime" / "jobs" / f"{job_id}.json")
+    assert rec is not None and rec.status == STATUS_PUBLISHING
+    assert "salvaged_from_log" in rec.detail
+    events = list((tmp_path / "events").rglob("*.json"))
+    assert len(events) == 1
+    body = json.loads(events[0].read_text(encoding="utf-8"))
+    assert body["type"] == "referee.review_completed"
+    assert body["payload"]["review_id"] == "review_toy_001"

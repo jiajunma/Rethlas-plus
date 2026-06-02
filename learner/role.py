@@ -14,7 +14,12 @@ from common.events.ids import EventIdAllocator
 from common.events.io import atomic_write_event
 from common.runtime.codex_runner import run_codex
 from common.runtime.heartbeat import JobHeartbeat
-from common.runtime.jobs import STATUS_CRASHED, STATUS_PUBLISHING, STATUS_RUNNING
+from common.runtime.jobs import (
+    STATUS_CRASHED,
+    STATUS_PUBLISHING,
+    STATUS_RUNNING,
+    STATUS_TIMED_OUT,
+)
 from common.runtime.jobs_v2 import (
     read_role_job_file,
     update_role_job_file,
@@ -22,6 +27,28 @@ from common.runtime.jobs_v2 import (
 from common.runtime.jsonl import append_jsonl
 from learner.decoder import LearnerDecodeError, parse_learner_batch
 from learner.prompt import compose_prompt
+
+
+def _allowed_read_paths(workspace: Path, rec: object) -> list[Path]:
+    raw_paths = []
+    rec_input = getattr(rec, "input", {})
+    if isinstance(rec_input, dict):
+        raw = rec_input.get("allowed_read_paths", [])
+        if isinstance(raw, list):
+            raw_paths = [p for p in raw if isinstance(p, str) and p.strip()]
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for raw in raw_paths:
+        p = Path(raw)
+        resolved = (workspace / p).resolve() if not p.is_absolute() else p.resolve()
+        try:
+            resolved.relative_to(workspace)
+        except ValueError:
+            continue
+        if resolved not in seen and resolved.exists():
+            seen.add(resolved)
+            out.append(resolved)
+    return out
 
 
 def _utc_now_iso() -> str:
@@ -137,14 +164,20 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         codex_argv = [
             "codex",
-            "--dangerously-bypass-approvals-and-sandbox",
+            "-c",
+            'model_reasoning_effort="low"',
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "read-only",
             "exec",
+            "--ephemeral",
             "-C",
             str(agent_dir),
-            "--add-dir",
-            str(workspace),
-            prompt,
         ]
+        for path in _allowed_read_paths(workspace, rec):
+            codex_argv.extend(["--add-dir", str(path)])
+        codex_argv.append(prompt)
         codex_cwd = agent_dir
 
     with JobHeartbeat(
@@ -156,8 +189,13 @@ def main(argv: list[str] | None = None) -> int:
             silent_timeout_s=args.silent_timeout_s,
             env=env,
             cwd=codex_cwd,
-        )
+    )
     if outcome.timed_out:
+        update_role_job_file(
+            job_path,
+            status=STATUS_TIMED_OUT,
+            detail="codex silent timeout",
+        )
         sys.stderr.write("learner: codex timed out\n")
         return 124
     if outcome.exit_code != 0:
@@ -167,7 +205,9 @@ def main(argv: list[str] | None = None) -> int:
 
     raw = log_path.read_text(encoding="utf-8", errors="replace")
     try:
-        batch = parse_learner_batch(raw)
+        contract = rec.input.get("learning_contract")
+        expected_contract = contract if isinstance(contract, dict) else None
+        batch = parse_learner_batch(raw, expected_learning_contract=expected_contract)
     except LearnerDecodeError as exc:
         source_id = str(rec.input.get("source_id", ""))
         _record_rejection(

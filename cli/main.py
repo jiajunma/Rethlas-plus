@@ -59,7 +59,8 @@ SUBCOMMANDS: dict[str, str] = {
     "verifier": "run a verifier attempt against the workspace (M7)",
     "learner": "run a learner source-ingestion attempt (Phase 3)",
     "referee": "run a referee review attempt (Phase 3)",
-    "review": "list or show Phase 3 referee review artifacts",
+    "bridge-repair": "create Phase 3 bridge-repair overlays",
+    "review": "list, show, graph, or typo-inspect Phase 3 referee review artifacts",
 }
 
 
@@ -156,12 +157,72 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--silent-timeout-s", type=float, default=1800.0)
     sp.add_argument("--actor", default="referee:cli")
 
+    # bridge-repair (Phase 3 — study graph overlay)
+    sp = sub.add_parser(
+        "bridge-repair",
+        help=SUBCOMMANDS["bridge-repair"],
+        description=SUBCOMMANDS["bridge-repair"],
+    )
+    sp.add_argument("--auto", action="store_true", help="apply conservative built-in repairs")
+    sp.add_argument(
+        "--alias",
+        dest="aliases",
+        action="append",
+        default=[],
+        metavar="FROM=TO",
+        help="redirect one label to a canonical label",
+    )
+    sp.add_argument(
+        "--close-resolved",
+        action="store_true",
+        help="close bridge requests whose blocked nodes now have extracted source proofs",
+    )
+    sp.add_argument(
+        "--materialize-plan",
+        action="store_true",
+        help="record repair-plan items for still-open bridge requests",
+    )
+    sp.add_argument(
+        "--enqueue-plans",
+        action="store_true",
+        help="enqueue active bridge materialization plans for Phase 3 learner repair",
+    )
+    sp.add_argument(
+        "--max-enqueue",
+        type=int,
+        default=None,
+        help="maximum bridge repair learner items to enqueue",
+    )
+    sp.add_argument("--dry-run", action="store_true")
+    sp.add_argument("--actor", default="bridge-repair:cli")
+
     # review (Phase 3 — read-only review artifacts)
     sp = sub.add_parser("review", help=SUBCOMMANDS["review"], description=SUBCOMMANDS["review"])
     review_sub = sp.add_subparsers(dest="review_command", metavar="<review-command>")
     review_sub.add_parser("list", help="list review artifacts")
     rsp = review_sub.add_parser("show", help="show one review artifact as JSON")
     rsp.add_argument("review_id")
+    rsp = review_sub.add_parser("graph", help="show theorem graph from one review")
+    rsp.add_argument("review_id")
+    rsp.add_argument(
+        "--format",
+        choices=("text", "json", "mermaid", "dot"),
+        default="text",
+        help="graph output format (default: text)",
+    )
+    rsp = review_sub.add_parser("typos", help="show typo findings from one review")
+    rsp.add_argument("review_id")
+    repair_sub = review_sub.add_parser(
+        "repair",
+        help="create or list source-node repair overlays for review theorem graphs",
+    )
+    repair_actions = repair_sub.add_subparsers(dest="repair_action", metavar="<repair-action>")
+    rsp = repair_actions.add_parser("run", help="repair review theorem-node display fields")
+    rsp.add_argument("review_id")
+    rsp.add_argument("--label", dest="labels", action="append", default=[])
+    rsp.add_argument("--all-needs-repair", action="store_true")
+    rsp.add_argument("--actor", default="review-repair:cli")
+    repair_actions.add_parser("list", help="list review repair overlays")
 
     # supervise (M8)
     sp = sub.add_parser(
@@ -282,6 +343,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "referee":
         from referee.cli import run_referee
         return run_referee(ws, args)
+
+    if args.command == "bridge-repair":
+        _validate_actor(args.actor)
+        from cli.bridge_repair import run_bridge_repair
+        return run_bridge_repair(ws, args)
 
     if args.command == "review":
         from cli.review import run_review

@@ -510,6 +510,11 @@ Phase 3 dashboard views should include:
 - manual review queue: low-confidence formulas, bad OCR, missing references;
 - provenance view: click a node and see source page, bbox, extracted text, and
   review history.
+- review graph view: show `theorem_nodes`, including remarks and implicit
+  paragraph nodes, together with dependency edges and node location notes.
+- repair overlay view: show the active display repair separately from the raw
+  referee evidence, with repair version count, active repair id, superseded
+  repair ids, `needs_visual_check` counts, and a history endpoint per review.
 
 This should reuse the Phase 2 lazy graph expansion pattern: a source expands to
 spans, spans expand to learned nodes/reviews, nodes expand to proof/search
@@ -526,6 +531,8 @@ rethlas learner run --source src:... [--section ...] [--max-nodes N]
 rethlas referee run --target thm:... | --source src:... | --review-workspace reviews/...
 rethlas review list [--status open|closed|awaiting_author_details]
 rethlas review show review_...
+rethlas review graph review_...
+rethlas review typos review_...
 rethlas review request-details review_...
 rethlas review accept-update review_... --issue issue_...
 ```
@@ -968,6 +975,10 @@ valuable, but not infallible.
 - use TeX structure when available while preserving PDF locator evidence;
 - extract definitions, notation conventions, assumptions, theorem statements,
   lemmas, examples, remarks, and proof skeletons;
+- make a prose paragraph pass and promote implicit definitions, notation,
+  assumptions, unnamed lemmas, criteria, equivalences, reductions, and
+  constructions into candidate nodes when they are durable mathematical
+  content;
 - respect span extraction confidence and request visual/manual review for
   low-confidence OCR or formula regions;
 - normalize notation into Rethlas node style while preserving the original
@@ -1321,10 +1332,48 @@ Review reports should include:
   "counterexample_attempts": [],
   "external_reference_checks": [],
   "extraction_quality_checks": [],
+  "theorem_nodes": [],
+  "theorem_dependency_edges": [],
+  "node_location_notes": [],
+  "typo_findings": [],
   "recommended_kb_updates": [],
   "summary": "..."
 }
 ```
+
+Review graph policy:
+
+- `theorem_nodes` labels should be stable across reruns and combine source id,
+  kind, and locator/title information.
+- Allowed node statuses are `proved`, `conditional`, `conjectural`, `assumed`,
+  `gap`, `wrong`, `context`, `source_claim`, and `review_only`.
+- `remark` is a first-class review graph node kind.
+- Explicit theorem/proposition/lemma/conjecture/assumption/definition nodes
+  must preserve the source statement in `source_excerpt`, including hypotheses
+  and displayed formulas. `statement` may be a compact referee summary, but it
+  must not replace the formula-bearing source text. Use `formula_excerpt` for
+  the relevant displayed formula block(s) when present. These are provenance
+  fields. If PDF/OCR extraction needs display cleanup, add optional
+  `display_source_excerpt`, `display_formula_excerpt`, and `typesetting_notes`
+  without overwriting the raw source evidence.
+- Display cleanup is a separate repair layer. Use `$rethlas-node-typesetting`
+  when formulas or PDF line breaks are hard to read. The repair pass may write
+  `reviews/_repairs/repair_*.json` overlays with `output_schema:
+  "source_node_repair_v1"`, `version`, `supersedes`, `node_repairs`,
+  `display_render_mode`, `formula_display_render_mode`, and
+  `needs_visual_check`. The dashboard must apply only the latest overlay for a
+  review/kind scope, but keep older overlays visible through repair history.
+- Ordinary prose paragraphs should become nodes when they function as implicit
+  definitions, notation conventions, assumptions, unnamed lemmas, criteria,
+  equivalences, reductions, constructions, or theorem-like claims. Mark them
+  with `extraction_kind: "implicit_paragraph"` and require `source_locator` and
+  `source_note`.
+- Allowed dependency relations are `uses`, `assumes`, `depends_on`, `proves`,
+  `reduces_to`, `needs_bridge`, `supports_verdict`, `cites`,
+  `proves_injectivity`, and `proves_exhaustivity`.
+- Review graph nodes and edges remain review artifacts. They do not enter the
+  formal KB unless a separate librarian/admission workflow accepts a proposed
+  update.
 
 ## Generator and Verifier Use
 
@@ -1468,6 +1517,10 @@ Required context packet:
 Prompt discipline:
 
 - Work span-by-span; do not summarize an entire book chapter into one output.
+- Scan ordinary prose, not only explicit theorem/definition environments.
+  Paragraph-derived mathematical content should carry
+  `extraction_kind: "implicit_paragraph"` plus a page/section/paragraph
+  `source_locator` or explanatory `source_note`.
 - Keep original notation and normalized notation side by side when ambiguity is
   possible.
 - Distinguish `source_claim`, `normalized_claim`, and `generated_bridge`.
