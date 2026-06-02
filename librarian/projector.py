@@ -33,7 +33,7 @@ from typing import Any
 from common.events.io import event_sha256
 from common.events.schema import SchemaError, validate_event_schema
 from common.kb.hashing import DepRef, statement_hash, verification_hash
-from common.kb.kuzu_backend import KuzuBackend, RawNodeRow, _bfs_path
+from common.kb.markdown_backend import MarkdownBackend, RawNodeRow, _bfs_path
 from common.kb.types import (
     AppliedEvent,
     ApplyOutcome,
@@ -88,9 +88,9 @@ class ApplyResult:
 
 
 class Projector:
-    """Apply events to :class:`KuzuBackend`, one at a time, transactionally."""
+    """Apply events to :class:`MarkdownBackend`, one at a time, transactionally."""
 
-    def __init__(self, backend: KuzuBackend) -> None:
+    def __init__(self, backend: MarkdownBackend) -> None:
         self._kb = backend
 
     # ---- public entry --------------------------------------------
@@ -599,11 +599,7 @@ class Projector:
         # batch could land a real cycle (e.g. KB has b->c; batch revises
         # c to ref new a, and a refs existing b — closing c->a->b->c).
         adjacency: dict[str, list[str]] = {}
-        res = self._kb._conn.execute(
-            "MATCH (u:Node)-[:DependsOn]->(v:Node) RETURN u.label, v.label"
-        )
-        while res.has_next():
-            src, dst = res.get_next()
+        for src, dst in self._kb.all_dependency_edges():
             adjacency.setdefault(src, []).append(dst)
         if existing_target is not None:
             adjacency.pop(target, None)

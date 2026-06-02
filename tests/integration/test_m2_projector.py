@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from common.kb.kuzu_backend import KuzuBackend
+from common.kb.markdown_backend import MarkdownBackend
 from common.kb.types import ApplyOutcome
 from librarian.projector import (
     REASON_CYCLE,
@@ -74,21 +74,21 @@ def _node_added(
 
 
 @pytest.fixture
-def kb(tmp_path: Path) -> KuzuBackend:
-    backend = KuzuBackend(tmp_path / "dag.kz")
+def kb(tmp_path: Path) -> MarkdownBackend:
+    backend = MarkdownBackend(tmp_path / "nodes")
     yield backend
     backend.close()
 
 
 @pytest.fixture
-def projector(kb: KuzuBackend) -> Projector:
+def projector(kb: MarkdownBackend) -> Projector:
     return Projector(kb)
 
 
 # ---------------------------------------------------------------------------
 # Happy-path: user.node_added -> node exists at pass_count=0 (definition).
 # ---------------------------------------------------------------------------
-def test_user_node_added_definition(projector: Projector, kb: KuzuBackend) -> None:
+def test_user_node_added_definition(projector: Projector, kb: MarkdownBackend) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="def:primary_object",
@@ -104,7 +104,7 @@ def test_user_node_added_definition(projector: Projector, kb: KuzuBackend) -> No
     assert node.repair_count == 0
 
 
-def test_user_node_added_lemma_with_proof(projector: Projector, kb: KuzuBackend) -> None:
+def test_user_node_added_lemma_with_proof(projector: Projector, kb: MarkdownBackend) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="lem:trivial",
@@ -119,7 +119,7 @@ def test_user_node_added_lemma_with_proof(projector: Projector, kb: KuzuBackend)
 
 
 def test_user_node_added_lemma_without_proof_goes_to_neg_one(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -134,7 +134,7 @@ def test_user_node_added_lemma_without_proof_goes_to_neg_one(
     assert node.pass_count == -1
 
 
-def test_user_node_added_label_conflict(projector: Projector, kb: KuzuBackend) -> None:
+def test_user_node_added_label_conflict(projector: Projector, kb: MarkdownBackend) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="def:x",
@@ -159,7 +159,7 @@ def test_user_node_added_label_conflict(projector: Projector, kb: KuzuBackend) -
 # ---------------------------------------------------------------------------
 # Idempotent re-apply.
 # ---------------------------------------------------------------------------
-def test_re_apply_same_event_is_noop(projector: Projector, kb: KuzuBackend) -> None:
+def test_re_apply_same_event_is_noop(projector: Projector, kb: MarkdownBackend) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="def:x",
@@ -175,7 +175,7 @@ def test_re_apply_same_event_is_noop(projector: Projector, kb: KuzuBackend) -> N
 
 
 def test_re_apply_with_tampered_bytes_raises(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -217,7 +217,7 @@ def _revise(
 
 
 def test_node_revised_updates_and_resets_counts(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -249,7 +249,7 @@ def test_node_revised_updates_and_resets_counts(
 
 
 def test_node_revised_cascades_to_dependents(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """ARCHITECTURE §5.4 + PHASE1 M11 #4: when an upstream node's
     statement_hash changes, every transitive dependent has its
@@ -318,7 +318,7 @@ def test_node_revised_cascades_to_dependents(
 
 
 def test_node_revised_kind_mutation_rejected(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -356,7 +356,7 @@ def _hint(
 
 
 def test_hint_attached_appends_user_section(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -381,7 +381,7 @@ def test_hint_attached_appends_user_section(
 
 
 def test_hint_attached_uses_event_body_ts(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """The repair_hint section is timestamped from event body ``ts``,
     not the literal placeholder ``"user"`` or any payload-internal ts."""
@@ -413,7 +413,7 @@ def test_hint_attached_uses_event_body_ts(
 
 
 def test_hint_attached_before_verifier_survives_subsequent_merge(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """User hint attached on a node with empty repair_hint must survive a
     later verifier verdict's ``_merge_verifier_section`` pass.
@@ -470,7 +470,7 @@ def test_hint_attached_before_verifier_survives_subsequent_merge(
     )
 
 
-def test_hint_target_missing(projector: Projector, kb: KuzuBackend) -> None:
+def test_hint_target_missing(projector: Projector, kb: MarkdownBackend) -> None:
     body, raw = _hint(
         eid="20260425T120005.000-0001-abc0123456789abd",
         target="lem:does_not_exist",
@@ -481,7 +481,7 @@ def test_hint_target_missing(projector: Projector, kb: KuzuBackend) -> None:
     assert r.reason == REASON_HINT_TARGET_MISSING
 
 
-def test_hint_target_unreachable(projector: Projector, kb: KuzuBackend) -> None:
+def test_hint_target_unreachable(projector: Projector, kb: MarkdownBackend) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
         target="lem:done",
@@ -535,7 +535,7 @@ def _verdict(
 
 
 def test_verifier_accepted_increments_pass_count(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -562,7 +562,7 @@ def test_verifier_accepted_increments_pass_count(
 
 
 def test_verifier_gap_resets_to_minus_one(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -590,7 +590,7 @@ def test_verifier_gap_resets_to_minus_one(
 
 
 def test_verifier_gap_on_definition_keeps_pass_count_at_zero(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """§5.4.1 bugfix regression: rejecting a definition must reset
     pass_count to its initial_count (= 0 for axioms), not to -1.
@@ -629,7 +629,7 @@ def test_verifier_gap_on_definition_keeps_pass_count_at_zero(
 
 
 def test_verifier_gap_on_generator_introduced_axiom_resets_to_minus_one(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """Generator-introduced helper definitions that the verifier rejects
     must reset to ``pass_count = -1`` so they re-enter the generator
@@ -701,7 +701,7 @@ def test_verifier_gap_on_generator_introduced_axiom_resets_to_minus_one(
 
 
 def test_user_introduced_definition_keeps_provenance_across_revision(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """Revisions must not transfer provenance: a user revising a
     generator-introduced helper must not strip its generator
@@ -742,7 +742,7 @@ def test_user_introduced_definition_keeps_provenance_across_revision(
 
 
 def test_verifier_hash_mismatch_rejected(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body1, raw1 = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -772,7 +772,7 @@ def test_verifier_hash_mismatch_rejected(
 # unresolved reference via ``external_reference_checks[]``.
 # ---------------------------------------------------------------------------
 def test_self_reference_rejected_as_cycle(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     body, raw = _node_added(
         eid="20260425T120000.000-0001-abc0123456789abc",
@@ -787,7 +787,7 @@ def test_self_reference_rejected_as_cycle(
 
 
 def test_ref_missing_admitted_with_dangling_dep(
-    projector: Projector, kb: KuzuBackend
+    projector: Projector, kb: MarkdownBackend
 ) -> None:
     """H29: post-boundary the projector no longer rejects ``node_added``
     events whose body references labels that aren't in KB yet. The Node
@@ -806,16 +806,17 @@ def test_ref_missing_admitted_with_dangling_dep(
     assert r.status is ApplyOutcome.APPLIED
     row = kb.node_by_label("lem:x")
     assert row is not None
-    # Cypher's MATCH-CREATE pattern in `_set_dependencies` silently
-    # skips the dangling edge — no `DependsOn` lands in the graph.
-    # The verifier flags the unresolved reference content-side.
-    assert kb.dependencies_of("lem:x") == []
+    # §13 (markdown KB): unlike the old Kuzu MATCH-CREATE (which silently
+    # dropped edges to non-existent nodes), the declared ref is retained in
+    # the node's `depends_on` frontmatter even though `lem:ghost` does not yet
+    # exist. The verifier flags it as `missing_from_nodes` content-side.
+    assert kb.dependencies_of("lem:x") == ["lem:ghost"]
 
 
 # ---------------------------------------------------------------------------
 # Cycle.
 # ---------------------------------------------------------------------------
-def test_cycle_rejected(projector: Projector, kb: KuzuBackend) -> None:
+def test_cycle_rejected(projector: Projector, kb: MarkdownBackend) -> None:
     for i, (tgt, stmt) in enumerate(
         [
             ("lem:a", r"leaf"),
