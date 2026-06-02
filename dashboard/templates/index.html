@@ -2871,7 +2871,7 @@ async function refresh() {
       stat("dashboard", pill(dashboardHb.liveness ?? "down")),
       stat("loop_seq", overview.coordinator.data?.loop_seq ?? 0),
       stat("idle_reason", overview.coordinator.data?.idle_reason_code || "—"),
-    ].join(""));
+    ].join("");
   } else {
     const studyOk = studyKbReady(studyKb);
     healthHtml = [
@@ -2880,7 +2880,7 @@ async function refresh() {
       stat("dashboard", pill(dashboardHb.liveness ?? "down")),
       stat("legacy Kuzu kb", `<span class="pill degraded">unavailable</span>`),
       stat("phase 3 study kb", studyOk ? pill("healthy") : `<code>${escapeHtml(studyKb.__error || "unavailable")}</code>`),
-    ].join(""));
+    ].join("");
   }
   setSectionHtml("health", healthHtml);
   const kb = document.getElementById("kb");
