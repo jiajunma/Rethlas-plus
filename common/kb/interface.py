@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from common.kb.kuzu_backend import KuzuBackend, RawNodeRow
+from common.kb.markdown_backend import MarkdownBackend, RawNodeRow
 from common.kb.types import AppliedEvent
 
 
@@ -37,7 +37,7 @@ class KBReader(Protocol):
 class LibrarianReader:
     """In-process KBReader used by the librarian itself."""
 
-    def __init__(self, backend: KuzuBackend) -> None:
+    def __init__(self, backend: MarkdownBackend) -> None:
         self._backend = backend
 
     def applied_event(self, event_id: str) -> AppliedEvent | None:

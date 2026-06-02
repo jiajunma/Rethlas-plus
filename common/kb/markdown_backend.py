@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from common.kb.markdown_reader import read_nodes_dir
 from common.kb.types import AppliedEvent, ApplyOutcome, Node, NodeKind
 from librarian.renderer import node_filename, write_node_file
 
@@ -111,9 +110,12 @@ class MarkdownBackend:
         # Labels written since the last commit, flushed to markdown on commit.
         self._dirty: set[str] = set()
         self._snapshot: tuple[dict[str, Node], dict[str, AppliedEvent], set[str]] | None = None
-        # Load the math projection from any markdown already on disk. Operational
-        # fields default until the librarian replays events/ over this backend.
-        self._nodes.update(read_nodes_dir(self._nodes_dir))
+        # Starts EMPTY by design. events/ is the source of truth; the librarian
+        # rebuilds this in-memory projection by replaying events on startup, and
+        # markdown is the write-only output (written on commit). The backend does
+        # NOT load markdown back as authoritative — that would collide with the
+        # replay (re-applying ``user.node_added`` for a node already on disk).
+        # Workers/humans read the markdown files directly via ``markdown_reader``.
 
     # ---- lifecycle --------------------------------------------------
     def close(self) -> None:
@@ -232,6 +234,10 @@ class MarkdownBackend:
                 }
             )
         return out
+
+    def iter_applied_events(self) -> list[AppliedEvent]:
+        """All AppliedEvent rows (replaces linter's raw Cypher inventory pull)."""
+        return list(self._applied.values())
 
     # ---- Node helpers ----------------------------------------------
     def node_by_label(self, label: str) -> RawNodeRow | None:

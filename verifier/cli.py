@@ -38,46 +38,30 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _read_target_context(ws_root: Path, target: str) -> tuple[dict, str | None]:
-    import kuzu
+    # §13: read the target straight from the markdown KB (no Kuzu). The target
+    # is typically a staged node (pass_count <= 0) awaiting verification — all
+    # nodes live in nodes/*.md, so the reader finds it by label.
+    from common.kb.markdown_reader import read_nodes_dir
 
-    db_path = ws_root / "knowledge_base" / "dag.kz"
-    if not db_path.is_dir() and not db_path.exists():
-        return {}, "knowledge_base/dag.kz does not exist"
-    try:
-        db = kuzu.Database(str(db_path), read_only=True)
-        conn = kuzu.Connection(db)
-    except Exception as exc:  # noqa: BLE001
-        return {}, f"cannot open KB read-only: {exc}"
-    try:
-        res = conn.execute(
-            "MATCH (n:Node {label: $lbl}) RETURN n.kind, n.statement, n.proof, "
-            "n.statement_hash, n.verification_hash",
-            {"lbl": target},
-        )
-        if not res.has_next():
-            return {}, f"label {target!r} not found in KB"
-        row = res.get_next()
-        target_fields = {
-            "target_kind": row[0],
-            "statement": row[1],
-            "proof": row[2] or "",
-            "statement_hash": row[3],
-            "verification_hash": row[4],
-        }
-        dres = conn.execute(
-            "MATCH (n:Node {label: $lbl})-[:DependsOn]->(d:Node) "
-            "RETURN d.label, d.statement_hash",
-            {"lbl": target},
-        )
-        deps: dict[str, str] = {}
-        while dres.has_next():
-            d_label, d_hash = dres.get_next()
-            deps[d_label] = d_hash
-        target_fields["dep_statement_hashes"] = deps
-        return target_fields, None
-    finally:
-        del conn
-        del db
+    nodes_dir = ws_root / "knowledge_base" / "nodes"
+    if not nodes_dir.is_dir():
+        return {}, "knowledge_base/nodes does not exist"
+    nodes = read_nodes_dir(nodes_dir)
+    node = nodes.get(target)
+    if node is None:
+        return {}, f"label {target!r} not found in KB"
+    deps = {
+        dep: (nodes[dep].statement_hash if dep in nodes else "")
+        for dep in node.depends_on
+    }
+    return {
+        "target_kind": node.kind.value,
+        "statement": node.statement,
+        "proof": node.proof or "",
+        "statement_hash": node.statement_hash,
+        "verification_hash": node.verification_hash,
+        "dep_statement_hashes": deps,
+    }, None
 
 
 def run_verifier(workspace: str | None, args: argparse.Namespace) -> int:

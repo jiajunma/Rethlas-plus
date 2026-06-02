@@ -49,7 +49,7 @@ from typing import Any, BinaryIO, Iterable
 from cli.workspace import WorkspacePaths
 from common.events.io import event_sha256, read_event
 from common.events.filenames import parse_filename
-from common.kb.kuzu_backend import KuzuBackend
+from common.kb.markdown_backend import MarkdownBackend
 from common.kb.types import Node, NodeKind
 from common.phase3.artifacts import (
     write_learner_batch_artifact,
@@ -152,7 +152,7 @@ class LibrarianDaemon:
         self.last_rebuild_at: str | None = None
         self.rebuild_in_progress = False
 
-        self.backend: KuzuBackend | None = None
+        self.backend: MarkdownBackend | None = None
         self.projector: Projector | None = None
         self._query_server: LibrarianQueryServer | None = None
         self._kb_lock = threading.RLock()
@@ -284,7 +284,7 @@ class LibrarianDaemon:
         self._heartbeat_thread.start()
 
         try:
-            self.backend = KuzuBackend(self.ws.dag_kz)
+            self.backend = MarkdownBackend(self.ws.nodes_dir)
             self.projector = Projector(self.backend)
             self._query_server = LibrarianQueryServer(
                 self.ws.librarian_socket, self._dispatch_query
@@ -391,7 +391,7 @@ class LibrarianDaemon:
         with self._kb_lock:
             for label in self.backend.node_labels():
                 row = self.backend.node_by_label(label)
-                if row is None or row.pass_count < 1:
+                if row is None:  # §13: render ALL nodes (staged + verified)
                     continue
                 node = _row_to_node(row, deps=self.backend.dependencies_of(label))
                 try:
@@ -429,7 +429,7 @@ class LibrarianDaemon:
         with self._kb_lock:
             for label in self.backend.node_labels():
                 row = self.backend.node_by_label(label)
-                if row is None or row.pass_count < 1:
+                if row is None:  # §13: render ALL nodes (staged + verified)
                     continue
                 node = _row_to_node(row, deps=self.backend.dependencies_of(label))
                 try:
@@ -545,20 +545,13 @@ class LibrarianDaemon:
                 # Could be a brand-new dep that never made it to KB —
                 # nothing to render.
                 continue
+            # §13: the markdown KB holds ALL nodes (staged + verified), so
+            # every affected node is rendered regardless of pass_count.
+            node = _row_to_node(row, deps=self.backend.dependencies_of(lbl))
             try:
-                fname = node_filename(_row_to_node(row, deps=[]))
+                write_node_file(self.ws.nodes_dir, node)
             except ValueError:
                 continue
-            target_path = self.ws.nodes_dir / fname
-            if row.pass_count >= 1:
-                node = _row_to_node(row, deps=self.backend.dependencies_of(lbl))
-                write_node_file(self.ws.nodes_dir, node)
-            else:
-                # Verified -> not verified: delete the rendered file.
-                try:
-                    target_path.unlink()
-                except FileNotFoundError:
-                    pass
 
     # ------------------------------------------------------------------
     # Steady-state loop

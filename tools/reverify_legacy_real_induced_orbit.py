@@ -290,40 +290,35 @@ def verify_once(workspace: Path, label: str) -> dict[str, Any]:
 
 
 def read_workspace_node_snapshot(workspace: Path) -> list[dict[str, Any]]:
-    import kuzu
+    # §13: no Kuzu. Rebuild the projection (math + operational fields) by
+    # replaying events into a throwaway MarkdownBackend in a scratch dir.
+    import tempfile
 
-    db_path = workspace / "knowledge_base" / "dag.kz"
-    db = kuzu.Database(str(db_path), read_only=True)
-    conn = kuzu.Connection(db)
-    try:
-        res = conn.execute(
-            """
-            MATCH (n:Node)
-            RETURN n.label, n.kind, n.pass_count, n.repair_count,
-                   n.statement_hash, n.verification_hash,
-                   n.verification_report, n.repair_hint
-            ORDER BY n.label
-            """
-        )
+    from common.kb.markdown_backend import MarkdownBackend
+    from librarian.rebuild import rebuild_from_events
+
+    with tempfile.TemporaryDirectory(prefix="rethlas-snap-") as scratch:
+        backend = MarkdownBackend(Path(scratch) / "nodes")
+        rebuild_from_events(backend=backend, events_root=workspace / "events")
         out = []
-        while res.has_next():
-            row = res.get_next()
+        for label in backend.node_labels():
+            row = backend.node_by_label(label)
+            if row is None:
+                continue
             out.append(
                 {
-                    "label": row[0],
-                    "kind": row[1],
-                    "pass_count": int(row[2]),
-                    "repair_count": int(row[3]),
-                    "statement_hash": row[4],
-                    "verification_hash": row[5],
-                    "verification_report": row[6] or "",
-                    "repair_hint": row[7] or "",
+                    "label": row.label,
+                    "kind": row.kind,
+                    "pass_count": int(row.pass_count),
+                    "repair_count": int(row.repair_count),
+                    "statement_hash": row.statement_hash,
+                    "verification_hash": row.verification_hash,
+                    "verification_report": row.verification_report or "",
+                    "repair_hint": row.repair_hint or "",
                 }
             )
+        out.sort(key=lambda d: d["label"])
         return out
-    finally:
-        del conn
-        del db
 
 
 def write_run_summary(workspace: Path, summary: dict[str, Any]) -> None:

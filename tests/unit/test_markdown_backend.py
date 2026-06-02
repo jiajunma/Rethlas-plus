@@ -49,16 +49,26 @@ def test_create_read_and_commit_writes_markdown(tmp_path: Path) -> None:
     assert (nodes_dir / "def_x.md").exists()
 
 
-def test_reload_from_markdown_recovers_math(tmp_path: Path) -> None:
+def test_starts_empty_markdown_is_write_only(tmp_path: Path) -> None:
+    """events/ is the source of truth; markdown is a write-only projection.
+
+    A fresh backend does NOT auto-load markdown (that would collide with event
+    replay). The committed file exists on disk and is readable via the reader;
+    the backend itself is repopulated by replaying events, not by reading it.
+    """
+    from common.kb.markdown_reader import read_node_file
+
     nodes_dir = tmp_path / "nodes"
     kb = MarkdownBackend(nodes_dir)
     kb.begin()
     kb.create_node(_node("lem:foo", pass_count=2))
     kb.commit()
+    assert (nodes_dir / "lem_foo.md").exists()
+    assert read_node_file(nodes_dir / "lem_foo.md").pass_count == 2
 
-    fresh = MarkdownBackend(nodes_dir)  # cold start reads markdown
-    row = fresh.node_by_label("lem:foo")
-    assert row is not None and row.pass_count == 2 and row.statement == "A statement."
+    fresh = MarkdownBackend(nodes_dir)        # cold start is EMPTY by design
+    assert fresh.node_by_label("lem:foo") is None
+    assert fresh.node_labels() == []
 
 
 def test_rollback_discards_writes(tmp_path: Path) -> None:

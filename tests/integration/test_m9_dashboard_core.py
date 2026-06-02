@@ -162,7 +162,7 @@ def test_theorems_status_vocabulary(tmp_path: Path) -> None:
     # Bump def:x to pass_count=1 so theorems can be "needs_verification";
     # bump thm:t2 to pass_count=3 so it's "done".
     import kuzu
-    db = kuzu.Database(str(tmp_path / "knowledge_base" / "dag.kz"))
+    db = kuzu.Database(str(tmp_path / "knowledge_base" / "nodes"))
     conn = kuzu.Connection(db)
     try:
         conn.execute("MATCH (n:Node {label: 'def:x'}) SET n.pass_count = 1")
@@ -248,7 +248,7 @@ def test_node_detail_surfaces_latest_verifier_verdict_and_report(
         "--actor", "user:alice",
     )
     # Read verification_hash via the live librarian's QUERY socket so we
-    # don't have to spawn a parallel KuzuBackend (Kuzu's file lock isn't
+    # don't have to spawn a parallel MarkdownBackend (Kuzu's file lock isn't
     # always released in time when both processes share dag.kz).
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=20.0)

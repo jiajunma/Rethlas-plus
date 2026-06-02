@@ -108,22 +108,40 @@ def run_linter_on_workspace(
             "may be benign"
         )
 
-    db_path = ws.dag_kz
     a = check_a_event_integrity(ws.events)
 
-    if db_path.exists():
-        from common.kb.kuzu_backend import KuzuBackend
-        backend = KuzuBackend(str(db_path))
-        try:
-            b = check_b_kb_structural(backend)
-            c = check_c_pass_count(ws.events, backend)
-            d = check_d_repair_count(ws.events, backend)
-            e = check_e_nodes_render(backend, ws.nodes_dir, repair=repair_nodes)
-            f = check_f_inventory(ws.events, backend)
-        finally:
-            backend.close()
+    if ws.events.is_dir() and any(ws.events.rglob("*.json")):
+        import tempfile
+        from pathlib import Path as _Path
+
+        from common.kb.markdown_backend import MarkdownBackend
+        from librarian.rebuild import rebuild_from_events
+
+        # §13: no Kuzu. Rebuild the authoritative projection by replaying
+        # events into a throwaway MarkdownBackend (scratch dir, so its commits
+        # never touch the real nodes/), then audit. check_e compares that
+        # authoritative state against the on-disk nodes/.
+        # §13 (no Kuzu): there is no persistent projection that can drift from
+        # events, so the old B/C/D/F drift audits are vacuous (the replay state
+        # equals the events-derived expectation by construction). The meaningful
+        # audits are A (event integrity) and E (on-disk nodes/*.md vs the
+        # canonical render of the replay — which also covers pass_count, since
+        # it is rendered into the file).
+        e: list = []
+        with tempfile.TemporaryDirectory(prefix="rethlas-linter-") as scratch:
+            backend = MarkdownBackend(_Path(scratch) / "nodes")
+            try:
+                rebuild_from_events(backend=backend, events_root=ws.events)
+            except Exception:
+                # Corrupt/malformed events break the replay; category A already
+                # reports the integrity violation, and a canonical render cannot
+                # be computed from corrupt truth — so E is simply empty here.
+                pass
+            else:
+                e = check_e_nodes_render(backend, ws.nodes_dir, repair=repair_nodes)
+        b = c = d = f = []
     else:
-        # No projection yet → categories B–F have nothing to audit.
+        # No events yet → categories B–F + E have nothing to audit.
         b = c = d = e = f = []
 
     report = LinterReport(a=a, b=b, c=c, d=d, e=e, f=f)

@@ -69,12 +69,31 @@ def write_heartbeat(path: Path, hb: LibrarianHeartbeat) -> None:
 
     The rename is atomic; we do not fsync — this is observability state,
     not durable truth (§6.5 last paragraph).
+
+    The temp file uses a **unique** name (pid + thread id). The librarian
+    writes heartbeats from both a background pulse thread and the main loop;
+    a shared ``.tmp`` name would let one writer's ``os.replace`` consume the
+    temp another writer is about to rename, producing a spurious ``ENOENT``
+    (seen once the projection backend became fast enough to fire several
+    heartbeats back-to-back at startup).
     """
+    import tempfile
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
     body = json.dumps(hb.to_dict(), sort_keys=True, ensure_ascii=False) + "\n"
-    tmp.write_text(body, encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def read_heartbeat(path: Path) -> dict | None:

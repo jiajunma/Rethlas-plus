@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from common.kb.hashing import statement_hash, verification_hash
-from common.kb.kuzu_backend import KuzuBackend
+from common.kb.markdown_backend import MarkdownBackend
 from common.kb.types import Node, NodeKind
 from coordinator.heartbeat import IDLE_USER_BLOCKED
 from coordinator.main import _KBSnapshot, _decide_idle_reason, _search_branch_stuck_targets
@@ -20,7 +20,7 @@ from coordinator.precheck import CandidateInput
 
 def test_induced_orbit_toy_stuck_branch_is_not_dispatched_again(tmp_path: Path) -> None:
     (tmp_path / "knowledge_base").mkdir(parents=True)
-    kb = KuzuBackend(tmp_path / "knowledge_base" / "dag.kz")
+    kb = MarkdownBackend(tmp_path / "knowledge_base" / "nodes")
     try:
         statement = (
             "For the induced-orbit toy problem, the maximal real induced "
@@ -112,7 +112,7 @@ def test_induced_orbit_toy_stuck_branch_is_not_dispatched_again(tmp_path: Path) 
 
 def test_induced_orbit_toy_generic_background_helper_is_guarded(tmp_path: Path) -> None:
     (tmp_path / "knowledge_base").mkdir(parents=True)
-    kb = KuzuBackend(tmp_path / "knowledge_base" / "dag.kz")
+    kb = MarkdownBackend(tmp_path / "knowledge_base" / "nodes")
     try:
         statement = (
             "Let K be a field, let X be a smooth K-variety of dimension n, "

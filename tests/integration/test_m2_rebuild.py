@@ -11,7 +11,7 @@ import pytest
 
 from common.events.filenames import format_filename
 from common.events.io import atomic_write_event
-from common.kb.kuzu_backend import KuzuBackend
+from common.kb.markdown_backend import MarkdownBackend
 from librarian.rebuild import rebuild_from_events
 
 
@@ -114,7 +114,7 @@ def test_rebuild_produces_full_projection(tmp_path: Path) -> None:
     events = tmp_path / "events"
     _seed_three_events(events)
 
-    backend = KuzuBackend(tmp_path / "dag.kz")
+    backend = MarkdownBackend(tmp_path / "nodes")
     try:
         trail = rebuild_from_events(backend=backend, events_root=events)
         assert [x[1] for x in trail] == ["applied"] * 3
@@ -131,7 +131,7 @@ def test_rebuild_wipes_stale_state(tmp_path: Path) -> None:
     events = tmp_path / "events"
     _seed_three_events(events)
     # Pre-populate the DB with a spurious node. rebuild must clear it.
-    backend = KuzuBackend(tmp_path / "dag.kz")
+    backend = MarkdownBackend(tmp_path / "nodes")
     try:
         from common.kb.types import Node, NodeKind
 
@@ -171,7 +171,7 @@ def test_rebuild_order_independent_of_filesystem_iter(tmp_path: Path) -> None:
         p.touch()
         time.sleep(0.001)
 
-    backend = KuzuBackend(tmp_path / "dag.kz")
+    backend = MarkdownBackend(tmp_path / "nodes")
     try:
         trail = rebuild_from_events(backend=backend, events_root=events)
         ordered_paths = [t[0] for t in trail]
@@ -184,7 +184,7 @@ def test_rebuild_order_independent_of_filesystem_iter(tmp_path: Path) -> None:
 def test_two_rebuilds_produce_same_labels(tmp_path: Path) -> None:
     events = tmp_path / "events"
     _seed_three_events(events)
-    backend = KuzuBackend(tmp_path / "dag.kz")
+    backend = MarkdownBackend(tmp_path / "nodes")
     try:
         rebuild_from_events(backend=backend, events_root=events)
         labels1 = backend.node_labels()
@@ -208,7 +208,7 @@ def test_applied_event_sha256_matches_file_bytes(tmp_path: Path) -> None:
     events = tmp_path / "events"
     paths = _seed_three_events(events)
 
-    backend = KuzuBackend(tmp_path / "dag.kz")
+    backend = MarkdownBackend(tmp_path / "nodes")
     try:
         rebuild_from_events(backend=backend, events_root=events)
         for p in paths:
@@ -227,7 +227,7 @@ def test_merkle_cascade_updates_dependents(tmp_path: Path) -> None:
     events = tmp_path / "events"
     _seed_three_events(events)
 
-    backend = KuzuBackend(tmp_path / "dag.kz")
+    backend = MarkdownBackend(tmp_path / "nodes")
     try:
         rebuild_from_events(backend=backend, events_root=events)
         before_lem = backend.node_by_label("lem:foo").statement_hash

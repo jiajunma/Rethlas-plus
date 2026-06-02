@@ -38,7 +38,7 @@ from common.kb.types import (
 from librarian.renderer import node_filename, render_node
 
 if TYPE_CHECKING:
-    from common.kb.kuzu_backend import KuzuBackend, RawNodeRow
+    from common.kb.markdown_backend import MarkdownBackend, RawNodeRow
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ def _walk(obj: Any, prefix: str = "") -> Iterator[tuple[str, Any]]:
 # ---------------------------------------------------------------------------
 # Category B — KB structural.
 # ---------------------------------------------------------------------------
-def check_b_kb_structural(backend: "KuzuBackend") -> list[Violation]:
+def check_b_kb_structural(backend: "MarkdownBackend") -> list[Violation]:
     """B. Cycles, label uniqueness, label-prefix ↔ kind, kind-appropriate fields."""
     out: list[Violation] = []
     labels = backend.node_labels()
@@ -381,7 +381,7 @@ def _statement_changing_iso_ms(events_dir: Path, label: str) -> str | None:
     return most_recent
 
 
-def check_c_pass_count(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
+def check_c_pass_count(events_dir: Path, backend: "MarkdownBackend") -> list[Violation]:
     """C. Audit ``pass_count`` against §5.5.1 replay.
 
     Mirrors category D's filtering: only verifier facts whose target is
@@ -459,7 +459,7 @@ def _audit_pass_count(
     return tail_accepted
 
 
-def check_d_repair_count(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
+def check_d_repair_count(events_dir: Path, backend: "MarkdownBackend") -> list[Violation]:
     """D. Audit ``repair_count`` against §5.5.1 replay."""
     out: list[Violation] = []
     facts = _replay_verifier_facts(events_dir)
@@ -501,7 +501,7 @@ def check_d_repair_count(events_dir: Path, backend: "KuzuBackend") -> list[Viola
 # Category E — nodes/ ↔ Kuzu rendering.
 # ---------------------------------------------------------------------------
 def check_e_nodes_render(
-    backend: "KuzuBackend",
+    backend: "MarkdownBackend",
     nodes_dir: Path,
     *,
     repair: bool = False,
@@ -520,7 +520,7 @@ def check_e_nodes_render(
     expected_label_by_filename: dict[str, str] = {}
     for label in backend.node_labels():
         row = backend.node_by_label(label)
-        if row is None or row.pass_count < 1:
+        if row is None:  # §13: nodes/ holds ALL nodes (staged + verified)
             continue
         try:
             kind = NodeKind(row.kind)
@@ -587,7 +587,7 @@ def check_e_nodes_render(
 # ---------------------------------------------------------------------------
 # Category F — events/ ↔ AppliedEvent inventory.
 # ---------------------------------------------------------------------------
-def check_f_inventory(events_dir: Path, backend: "KuzuBackend") -> list[Violation]:
+def check_f_inventory(events_dir: Path, backend: "MarkdownBackend") -> list[Violation]:
     """F. ``events/`` SHA-256 vs ``AppliedEvent.event_sha256`` and missing files."""
     out: list[Violation] = []
 
@@ -605,13 +605,9 @@ def check_f_inventory(events_dir: Path, backend: "KuzuBackend") -> list[Violatio
         file_by_event_id[eid] = f
         sha_by_event_id[eid] = event_sha256(raw)
 
-    # All AppliedEvent rows.
-    res = backend._conn.execute(
-        "MATCH (a:AppliedEvent) RETURN a.event_id, a.event_sha256, a.status"
-    )
-    while res.has_next():
-        row = res.get_next()
-        eid, stored_sha, status = row[0], row[1], row[2]
+    # All AppliedEvent rows (in-memory ledger; §13 — no Kuzu).
+    for ev in backend.iter_applied_events():
+        eid, stored_sha, status = ev.event_id, ev.event_sha256, ev.status.value
         path = file_by_event_id.get(eid)
         if path is None:
             out.append(

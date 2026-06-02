@@ -110,20 +110,11 @@ def test_replay_skips_already_decided_events(tmp_path: Path) -> None:
         assert hb2["events_apply_failed_total"] == 0
         assert hb2["projection_backlog"] == 0
 
-    # After both runs: open a read-only Kuzu connection and assert the
-    # AppliedEvent count equals the number of event files on disk.
-    import kuzu
-    db = kuzu.Database(str(tmp_path / "knowledge_base" / "dag.kz"), read_only=True)
-    conn = kuzu.Connection(db)
-    try:
-        res = conn.execute("MATCH (a:AppliedEvent) RETURN count(*)")
-        assert res.has_next()
-        count = int(res.get_next()[0])
-    finally:
-        del conn
-        del db
-    files = list((tmp_path / "events").rglob("*.json"))
-    assert count == len(files), (count, len(files))
+    # §13 (no Kuzu): the AppliedEvent ledger is in-memory and rebuilt by
+    # replaying events/ on each startup, so there is no persistent store to
+    # inspect after the process exits. The stable ``events_applied_total == 2``
+    # across both runs above is the observable idempotency signal: the second
+    # run replays the same two events and lands the same projected state.
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +179,9 @@ def test_apply_command_renders_node_md(tmp_path: Path) -> None:
     _init_workspace(tmp_path)
     with librarian(tmp_path) as lp:
         lp.wait_for_phase(PHASE_READY, timeout=15.0)
-        # Add an axiom (definition) — pass_count starts at 0, so no
-        # nodes/*.md is rendered.
+        # Add an axiom (definition). §13: the markdown KB holds ALL nodes
+        # (staged + verified), so the librarian renders def_x.md on apply
+        # regardless of pass_count.
         _publish_user_event(
             tmp_path, "add-node", "--label", "def:x", "--kind", "definition",
             "--statement", "Define X.", "--actor", "user:alice",
@@ -198,8 +190,8 @@ def test_apply_command_renders_node_md(tmp_path: Path) -> None:
         body = json.loads(events[-1].read_text(encoding="utf-8"))
         lp.send({"cmd": "APPLY", "event_id": body["event_id"], "path": str(events[-1])})
         assert lp.recv()["reply"] == "APPLIED"
-        # No render for unverified node.
-        assert not (tmp_path / "knowledge_base" / "nodes" / "def_x.md").exists()
+        # §13: every applied node is rendered to markdown (no pass_count filter).
+        assert (tmp_path / "knowledge_base" / "nodes" / "def_x.md").exists()
 
 
 def test_ping_replies_pong(tmp_path: Path) -> None:

@@ -116,16 +116,11 @@ def test_unregistered_actor_at_replay_marks_degraded(tmp_path: Path) -> None:
         assert hb["status"] == STATUS_DEGRADED, hb
         assert "corruption" in hb["last_error"].lower() or "rogue" in hb["last_error"].lower()
         assert hb["startup_phase"] == PHASE_REPLAYING
-        import kuzu
-        db = kuzu.Database(str(tmp_path / "knowledge_base" / "dag.kz"), read_only=True)
-        conn = kuzu.Connection(db)
-        try:
-            res = conn.execute("MATCH (n:Node) RETURN count(*)")
-            assert res.has_next()
-            assert int(res.get_next()[0]) == 0
-        finally:
-            del conn
-            del db
+        # §13: no Kuzu. The halt occurred during replay before any node was
+        # projected, so no markdown node file should have been rendered.
+        from common.kb.markdown_reader import read_nodes_dir
+
+        assert read_nodes_dir(tmp_path / "knowledge_base" / "nodes") == {}
 
 
 def test_cross_batch_cycle_marks_apply_failed(tmp_path: Path) -> None:

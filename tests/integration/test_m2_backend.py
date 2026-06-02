@@ -6,32 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from common.kb.kuzu_backend import KuzuBackend
+from common.kb.markdown_backend import MarkdownBackend
 
 
-def _backend(tmp_path: Path) -> KuzuBackend:
-    return KuzuBackend(tmp_path / "dag.kz")
+def _backend(tmp_path: Path) -> MarkdownBackend:
+    return MarkdownBackend(tmp_path / "nodes")
 
 
-def test_schema_init_creates_all_tables(tmp_path: Path) -> None:
-    be = _backend(tmp_path)
-    try:
-        tables = set(be.table_names())
-        assert {"Node", "DependsOn", "ProjectionState", "AppliedEvent"}.issubset(tables)
-    finally:
-        be.close()
 
 
-def test_schema_init_idempotent(tmp_path: Path) -> None:
-    """Opening the same DB twice re-runs DDL without error."""
-    be1 = _backend(tmp_path)
-    be1.close()
-    be2 = _backend(tmp_path)
-    try:
-        tables = set(be2.table_names())
-        assert {"Node", "DependsOn", "ProjectionState", "AppliedEvent"}.issubset(tables)
-    finally:
-        be2.close()
 
 
 def test_applied_event_round_trip(tmp_path: Path) -> None:

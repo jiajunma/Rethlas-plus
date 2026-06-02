@@ -26,7 +26,7 @@ from typing import Iterator
 
 from common.events.filenames import parse_filename
 from common.events.io import read_event
-from common.kb.kuzu_backend import KuzuBackend
+from common.kb.markdown_backend import MarkdownBackend
 from common.kb.types import Node, NodeKind
 from librarian.projector import Projector
 from librarian.renderer import node_filename, write_node_file
@@ -48,7 +48,7 @@ def _sort_key(path: Path) -> tuple[str, int, str]:
 
 def rebuild_from_events(
     *,
-    backend: KuzuBackend,
+    backend: MarkdownBackend,
     events_root: Path,
     nodes_dir: Path | None = None,
 ) -> list[tuple[Path, str, str | None]]:
@@ -75,8 +75,8 @@ def rebuild_from_events(
     return trail
 
 
-def render_published_nodes(backend: KuzuBackend, nodes_dir: Path) -> int:
-    """Re-render every Kuzu node with ``pass_count >= 1`` into ``nodes_dir``.
+def render_published_nodes(backend: MarkdownBackend, nodes_dir: Path) -> int:
+    """Re-render every node into ``nodes_dir`` (§13: all nodes, staged + verified).
 
     Returns the number of files written. Idempotent — calling twice on
     an unchanged backend produces byte-identical output.
@@ -85,7 +85,7 @@ def render_published_nodes(backend: KuzuBackend, nodes_dir: Path) -> int:
     count = 0
     for label in backend.node_labels():
         row = backend.node_by_label(label)
-        if row is None or row.pass_count < 1:
+        if row is None:
             continue
         deps = backend.dependencies_of(label)
         node = Node(

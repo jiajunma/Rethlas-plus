@@ -96,10 +96,10 @@ def run_rebuild(workspace: str | None) -> int:
                 entry.unlink()
         ws.nodes_dir.mkdir(parents=True, exist_ok=True)
 
-        from common.kb.kuzu_backend import KuzuBackend
+        from common.kb.markdown_backend import MarkdownBackend
         from librarian.rebuild import rebuild_from_events
 
-        backend = KuzuBackend(ws.dag_kz)
+        backend = MarkdownBackend(ws.nodes_dir)
         try:
             trail = rebuild_from_events(
                 backend=backend,

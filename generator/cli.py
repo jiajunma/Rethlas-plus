@@ -73,51 +73,37 @@ def _read_target_context(ws_root: Path, target: str) -> tuple[dict, str | None, 
 
     On error returns ``({}, None, "<message>")``.
     """
-    import kuzu  # local import — CLI runs in the user process, Kuzu is fine here
+    # §13: math from the markdown KB (no Kuzu). The operational fields
+    # repair_hint / repair_count / verification_report live in the librarian's
+    # in-memory projection, NOT markdown (decision 乙); the coordinator injects
+    # them into the dispatched job (§13.4). This standalone CLI path defaults
+    # them empty — fresh-mode generation needs only the math; repair-mode hints
+    # arrive via the coordinator, not by reading the KB directly.
+    from common.kb.markdown_reader import read_nodes_dir
 
-    db_path = ws_root / "knowledge_base" / "dag.kz"
-    if not db_path.is_dir() and not db_path.exists():
-        return {}, None, "knowledge_base/dag.kz does not exist (run rethlas supervise first)"
-    try:
-        db = kuzu.Database(str(db_path), read_only=True)
-        conn = kuzu.Connection(db)
-    except Exception as exc:  # noqa: BLE001
-        return {}, None, f"cannot open KB read-only: {exc}"
-    try:
-        res = conn.execute(
-            "MATCH (n:Node {label: $lbl}) RETURN n.kind, n.statement, n.proof, "
-            "n.statement_hash, n.verification_hash, n.repair_hint, n.repair_count, "
-            "n.verification_report",
-            {"lbl": target},
-        )
-        if not res.has_next():
-            return {}, None, f"label {target!r} not found in KB"
-        row = res.get_next()
-        target_fields = {
-            "target_kind": row[0],
-            "statement": row[1],
-            "proof": row[2] or "",
-            "statement_hash": row[3],
-            "verification_hash": row[4],
-            "repair_hint": row[5] or "",
-            "repair_count": int(row[6]) if row[6] is not None else 0,
-            "verification_report": row[7] or "",
-        }
-        # Dep statement hashes.
-        dres = conn.execute(
-            "MATCH (n:Node {label: $lbl})-[:DependsOn]->(d:Node) "
-            "RETURN d.label, d.statement_hash",
-            {"lbl": target},
-        )
-        deps: dict[str, str] = {}
-        while dres.has_next():
-            d_label, d_hash = dres.get_next()
-            deps[d_label] = d_hash
-        target_fields["dep_statement_hashes"] = deps
-        return target_fields, target_fields["verification_hash"], None
-    finally:
-        del conn
-        del db
+    nodes_dir = ws_root / "knowledge_base" / "nodes"
+    if not nodes_dir.is_dir():
+        return {}, None, "knowledge_base/nodes does not exist (run rethlas supervise first)"
+    nodes = read_nodes_dir(nodes_dir)
+    node = nodes.get(target)
+    if node is None:
+        return {}, None, f"label {target!r} not found in KB"
+    deps = {
+        dep: (nodes[dep].statement_hash if dep in nodes else "")
+        for dep in node.depends_on
+    }
+    target_fields = {
+        "target_kind": node.kind.value,
+        "statement": node.statement,
+        "proof": node.proof or "",
+        "statement_hash": node.statement_hash,
+        "verification_hash": node.verification_hash,
+        "repair_hint": "",
+        "repair_count": 0,
+        "verification_report": "",
+        "dep_statement_hashes": deps,
+    }
+    return target_fields, target_fields["verification_hash"], None
 
 
 def run_generator(workspace: str | None, args: argparse.Namespace) -> int:

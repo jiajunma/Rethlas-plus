@@ -51,8 +51,7 @@ _WORKSPACE_DIRS: Final[tuple[str, ...]] = (
 )
 
 _WORKSPACE_GITIGNORE: Final[str] = """\
-# Rethlas — derived / runtime state.
-/knowledge_base/dag.kz/
+# Rethlas — derived / runtime state (events/ is the committed truth).
 /knowledge_base/nodes/
 /runtime/
 """
@@ -75,10 +74,6 @@ class WorkspacePaths:
     @property
     def knowledge_base(self) -> Path:
         return self.root / "knowledge_base"
-
-    @property
-    def dag_kz(self) -> Path:
-        return self.knowledge_base / "dag.kz"
 
     @property
     def nodes_dir(self) -> Path:
